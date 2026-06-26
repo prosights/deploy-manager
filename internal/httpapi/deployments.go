@@ -1,0 +1,297 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"deploy-manager/internal/db"
+	"deploy-manager/internal/deployments"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+const (
+	defaultDeploymentHistoryLimit int32 = 100
+	maxDeploymentHistoryLimit     int32 = 500
+)
+
+func (s Server) listDeployments(w http.ResponseWriter, r *http.Request) {
+	limit, err := deploymentHistoryLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	deployments, err := s.queries.ListDeployments(r.Context(), limit)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deployments)
+}
+
+func deploymentHistoryLimit(value string) (int32, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return defaultDeploymentHistoryLimit, nil
+	}
+	limit, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || limit < 1 {
+		return 0, validationError("deployment history limit must be a positive integer")
+	}
+	if limit > int64(maxDeploymentHistoryLimit) {
+		return maxDeploymentHistoryLimit, nil
+	}
+	return int32(limit), nil
+}
+
+func (s Server) createDeployment(w http.ResponseWriter, r *http.Request) {
+	var input db.CreateDeploymentParams
+	if err := readJSON(w, r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	input, err := normalizeCreateDeployment(input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	deployment, err := s.queries.CreateDeployment(r.Context(), input)
+	if err != nil {
+		writeError(w, createDeploymentError(err))
+		return
+	}
+	if err := enqueueDeployment(r.Context(), s.queue, s.queries, deployment); err != nil {
+		s.audit(r, "deployment.queue_failed", "deployment", uuidString(deployment.ID), uuidString(deployment.ApplicationID), deploymentQueueFailureMetadata(deployment, err))
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "deployment.queue", "deployment", uuidString(deployment.ID), uuidString(deployment.ApplicationID), deploymentQueueMetadata(deployment))
+	writeJSON(w, http.StatusAccepted, deployment)
+}
+
+func createDeploymentError(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return notFoundError("application not found")
+	}
+	return err
+}
+
+func (s Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
+	deploymentID, err := parseUUIDParam(r, "deploymentID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	deployment, err := s.queries.CancelQueuedDeployment(r.Context(), deploymentID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, validationError("only queued deployments can be cancelled"))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "deployment.cancel", "deployment", uuidString(deployment.ID), uuidString(deployment.ApplicationID), deploymentCancelMetadata(deployment, auditActor(r)))
+	writeJSON(w, http.StatusOK, deployment)
+}
+
+func (s Server) retryDeployment(w http.ResponseWriter, r *http.Request) {
+	deploymentID, err := parseUUIDParam(r, "deploymentID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	source, err := s.queries.GetDeployment(r.Context(), deploymentID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, notFoundError("deployment not found"))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+
+	input, err := retryDeploymentInput(source, auditActor(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy); err != nil {
+		writeError(w, err)
+		return
+	}
+	deployment, err := s.queries.CreateDeployment(r.Context(), input)
+	if err != nil {
+		writeError(w, createDeploymentError(err))
+		return
+	}
+	if err := enqueueDeployment(r.Context(), s.queue, s.queries, deployment); err != nil {
+		s.audit(r, "deployment.retry_queue_failed", "deployment", uuidString(deployment.ID), uuidString(deployment.ApplicationID), deploymentRetryFailureMetadata(source, deployment, err))
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "deployment.retry", "deployment", uuidString(deployment.ID), uuidString(deployment.ApplicationID), deploymentRetryMetadata(source, deployment))
+	writeJSON(w, http.StatusAccepted, deployment)
+}
+
+type deploymentStatusUpdater interface {
+	UpdateDeploymentStatus(context.Context, db.UpdateDeploymentStatusParams) (db.Deployment, error)
+}
+
+func enqueueDeployment(ctx context.Context, queue DeploymentQueue, updater deploymentStatusUpdater, deployment db.Deployment) error {
+	if err := queue.Enqueue(ctx, deployment); err != nil {
+		return markDeploymentEnqueueFailed(ctx, updater, deployment, err)
+	}
+	return nil
+}
+
+func markDeploymentEnqueueFailed(ctx context.Context, updater deploymentStatusUpdater, deployment db.Deployment, cause error) error {
+	_, updateErr := updater.UpdateDeploymentStatus(ctx, db.UpdateDeploymentStatusParams{
+		ID:     deployment.ID,
+		Status: "failed",
+	})
+	if updateErr != nil {
+		return fmt.Errorf("enqueue deployment: %w; mark failed: %v", cause, updateErr)
+	}
+	return fmt.Errorf("enqueue deployment: %w", cause)
+}
+
+func deploymentCancelMetadata(deployment db.Deployment, actor string) map[string]any {
+	metadata := map[string]any{"status": deployment.Status}
+	actor = auditIdentityField(actor, "")
+	if actor != "" {
+		metadata["actor"] = actor
+	}
+	return metadata
+}
+
+func deploymentQueueMetadata(deployment db.Deployment) map[string]any {
+	metadata := map[string]any{
+		"strategy": deployment.Strategy,
+		"trigger":  deployment.Trigger,
+	}
+	if deployment.CommitSha.Valid {
+		metadata["commit_sha"] = deployment.CommitSha.String
+	}
+	if deployment.Actor.Valid {
+		metadata["actor"] = deployment.Actor.String
+	}
+	return metadata
+}
+
+func deploymentQueueFailureMetadata(deployment db.Deployment, cause error) map[string]any {
+	metadata := deploymentQueueMetadata(deployment)
+	metadata["status"] = "failed"
+	metadata["error"] = errorString(cause)
+	return metadata
+}
+
+func retryDeploymentInput(source db.Deployment, actor string) (db.CreateDeploymentParams, error) {
+	if source.Status != "failed" && source.Status != "cancelled" {
+		return db.CreateDeploymentParams{}, validationError("only failed or cancelled deployments can be retried")
+	}
+	return normalizeCreateDeployment(db.CreateDeploymentParams{
+		ApplicationID: source.ApplicationID,
+		Trigger:       "retry",
+		Strategy:      source.Strategy,
+		CommitSha:     source.CommitSha,
+		Actor:         blankStringAsText(actor),
+	})
+}
+
+func (s Server) validateDeploymentTarget(ctx context.Context, applicationID pgtype.UUID, strategy string) error {
+	if strategy != "blue_green" {
+		return nil
+	}
+	application, err := s.queries.GetApplication(ctx, applicationID)
+	if err != nil {
+		return createDeploymentError(err)
+	}
+	return validateBlueGreenDeploymentTarget(application)
+}
+
+func validateBlueGreenDeploymentTarget(application db.Application) error {
+	if !application.HealthCheckUrl.Valid || !strings.Contains(application.HealthCheckUrl.String, "{color}") {
+		return validationError("blue_green deployments require a health_check_url with {color}")
+	}
+	if err := validateHealthCheckURL(application.HealthCheckUrl.String); err != nil {
+		return validationError(err.Error())
+	}
+	return nil
+}
+
+func deploymentRetryMetadata(source db.Deployment, deployment db.Deployment) map[string]any {
+	metadata := deploymentQueueMetadata(deployment)
+	metadata["source_deployment_id"] = uuidString(source.ID)
+	metadata["source_status"] = source.Status
+	return metadata
+}
+
+func deploymentRetryFailureMetadata(source db.Deployment, deployment db.Deployment, cause error) map[string]any {
+	metadata := deploymentRetryMetadata(source, deployment)
+	metadata["status"] = "failed"
+	metadata["error"] = errorString(cause)
+	return metadata
+}
+
+func normalizeCreateDeployment(input db.CreateDeploymentParams) (db.CreateDeploymentParams, error) {
+	input.Trigger = strings.TrimSpace(input.Trigger)
+	input.Strategy = strings.TrimSpace(input.Strategy)
+	input.CommitSha.String = strings.TrimSpace(input.CommitSha.String)
+	input.Actor.String = strings.TrimSpace(input.Actor.String)
+
+	if !input.ApplicationID.Valid {
+		return input, validationError("application_id is required")
+	}
+	if input.Trigger == "" {
+		input.Trigger = "manual"
+	}
+	if !validDeploymentTrigger(input.Trigger) {
+		return input, validationError("deployment trigger must be manual, github_push, connector_sync, or retry")
+	}
+	if input.Strategy == "" {
+		input.Strategy = "rolling"
+	}
+	if !validDeploymentStrategy(input.Strategy) {
+		return input, validationError("deployment strategy must be rolling or blue_green")
+	}
+	input.CommitSha = blankTextAsNull(input.CommitSha)
+	if input.CommitSha.Valid && !deployments.ValidCommitSHA(input.CommitSha.String) {
+		return input, validationError("commit_sha must be a 7 to 40 character hexadecimal SHA")
+	}
+	input.Actor = blankTextAsNull(input.Actor)
+	if input.Actor.Valid && strings.ContainsAny(input.Actor.String, "\r\n\t") {
+		return input, validationError("actor cannot contain control characters")
+	}
+	return input, nil
+}
+
+func validDeploymentTrigger(trigger string) bool {
+	switch trigger {
+	case "manual", "github_push", "connector_sync", "retry":
+		return true
+	default:
+		return false
+	}
+}
+
+func validDeploymentStrategy(strategy string) bool {
+	switch strategy {
+	case "rolling", "blue_green":
+		return true
+	default:
+		return false
+	}
+}

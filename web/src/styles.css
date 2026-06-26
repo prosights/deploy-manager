@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --color-background: #101010;
+  --color-surface: #181818;
+  --color-panel: #202020;
+  --color-border: #242424;
+  --color-ink: #ffffff;
+  --color-muted: #a3a3a3;
+  --color-accent: #0980fd;
+  --color-accent-fg: #ffffff;
+  --color-accent-text: #0980fd;
+  --color-accent-soft: #0753ab;
+  --color-success: oklch(0.72 0.16 150);
+  --color-warning: #0980fd;
+  --color-danger: oklch(0.68 0.2 25);
+  --color-base: #101010;
+  --color-coollabs: #0980fd;
+  --color-coollabs-50: #eff7ff;
+  --color-coollabs-100: #45a0ff;
+  --color-coollabs-200: #0666d4;
+  --color-coollabs-300: #0753ab;
+  --color-coolgray-100: #181818;
+  --color-coolgray-200: #202020;
+  --color-coolgray-300: #242424;
+  --color-coolgray-400: #282828;
+  --color-coolgray-500: #323232;
+}
+
+html.light {
+  --color-background: #ffffff;
+  --color-surface: #f8f9fa;
+  --color-panel: #f0f1f3;
+  --color-border: #e2e4e8;
+  --color-ink: #1a1a1a;
+  --color-muted: #6b7280;
+  --color-accent-fg: #ffffff;
+  --color-base: #ffffff;
+  --color-coolgray-100: #f8f9fa;
+  --color-coolgray-200: #f0f1f3;
+  --color-coolgray-300: #e2e4e8;
+  --color-coolgray-400: #d4d6db;
+  --color-coolgray-500: #c4c7cc;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+.logo-mark {
+  border-radius: 4px;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+html.light .logo-mark {
+  background: transparent;
+  padding: 0;
+}

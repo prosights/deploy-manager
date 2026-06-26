@@ -1,24 +1,36 @@
 {
-    "name": "coolify",
-    "private": true,
-    "type": "module",
-    "scripts": {
-        "dev": "vite",
-        "build": "vite build"
-    },
-    "devDependencies": {
-        "@tailwindcss/postcss": "4.1.18",
-        "laravel-vite-plugin": "2.0.1",
-        "postcss": "8.5.15",
-        "tailwind-scrollbar": "4.0.2",
-        "tailwindcss": "4.1.18",
-        "vite": "7.3.2"
-    },
-    "dependencies": {
-        "@tailwindcss/forms": "0.5.10",
-        "@tailwindcss/typography": "0.5.16",
-        "@xterm/addon-fit": "0.10.0",
-        "@xterm/xterm": "5.5.0",
-        "playwright": "^1.58.2"
-    }
+  "name": "deploy-manager",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "lint": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/react-query": "^5.95.1",
+    "@tanstack/react-router": "^1.141.1",
+    "@vitejs/plugin-react": "^5.1.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^4.1.18",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.1",
+    "@types/node": "^25.0.2",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^27.3.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.5",
+    "vitest": "^4.0.16"
+  }
 }
