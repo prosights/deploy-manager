@@ -13,6 +13,7 @@ import (
 	"deploy-manager/internal/notifications"
 	proxypkg "deploy-manager/internal/proxy"
 	"deploy-manager/internal/sshutil"
+	"deploy-manager/internal/stringutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -22,6 +23,7 @@ type Runner struct {
 	queries runnerQueries
 	logs    *LogBus
 	runtime RuntimeVariableSource
+	signer  sshutil.SignerSource
 
 	notifier notifications.Notifier
 }
@@ -34,13 +36,18 @@ const (
 type runnerQueries interface {
 	AppendAuditEvent(context.Context, db.AppendAuditEventParams) (db.AuditEvent, error)
 	AppendDeploymentLog(context.Context, db.AppendDeploymentLogParams) (db.DeploymentLog, error)
+	ActivateDeploymentSlot(context.Context, db.ActivateDeploymentSlotParams) ([]db.ApplicationDeploymentSlot, error)
 	GetDeploymentTarget(context.Context, pgtype.UUID) (db.GetDeploymentTargetRow, error)
+	GetActiveDeploymentSlot(context.Context, db.GetActiveDeploymentSlotParams) (db.ApplicationDeploymentSlot, error)
+	GetStandbyDeploymentSlot(context.Context, db.GetStandbyDeploymentSlotParams) (db.ApplicationDeploymentSlot, error)
 	ListProxyRouteTargetsForApplication(context.Context, db.ListProxyRouteTargetsForApplicationParams) ([]db.ListProxyRouteTargetsForApplicationRow, error)
 	MarkProxyRouteApplied(context.Context, pgtype.UUID) (db.ProxyRoute, error)
 	MarkProxyRouteFailed(context.Context, pgtype.UUID) (db.ProxyRoute, error)
 	StartQueuedDeployment(context.Context, pgtype.UUID) (db.Deployment, error)
 	UpdateApplicationStatus(context.Context, db.UpdateApplicationStatusParams) (db.Application, error)
 	UpdateDeploymentStatus(context.Context, db.UpdateDeploymentStatusParams) (db.Deployment, error)
+	UpdateProxyRouteUpstream(context.Context, db.UpdateProxyRouteUpstreamParams) (db.ProxyRoute, error)
+	UpsertDeploymentSlot(context.Context, db.UpsertDeploymentSlotParams) (db.ApplicationDeploymentSlot, error)
 }
 
 type RuntimeVariableSource interface {
@@ -51,7 +58,7 @@ func NewRunner(queries runnerQueries, logs *LogBus, notifier notifications.Notif
 	if notifier == nil {
 		notifier = notifications.Noop{}
 	}
-	return Runner{queries: queries, logs: logs, notifier: notifier, runtime: runtime}
+	return Runner{queries: queries, logs: logs, notifier: notifier, runtime: runtime, signer: sshutil.FileSigner{}}
 }
 
 func (r Runner) Run(ctx context.Context, deployment db.Deployment) {
@@ -81,7 +88,7 @@ func (r Runner) Run(ctx context.Context, deployment db.Deployment) {
 	_, _ = r.queries.UpdateApplicationStatus(ctx, db.UpdateApplicationStatusParams{
 		ID:      target.ApplicationID,
 		Status:  "deploying",
-		Version: target.CommitSha,
+		Version: deploymentVersion(target),
 	})
 
 	if err := r.deploy(ctx, deployment, target); err != nil {
@@ -111,7 +118,7 @@ func (r Runner) complete(ctx context.Context, deployment db.Deployment, target d
 	_, _ = r.queries.UpdateApplicationStatus(ctx, db.UpdateApplicationStatusParams{
 		ID:      target.ApplicationID,
 		Status:  "healthy",
-		Version: target.CommitSha,
+		Version: deploymentVersion(target),
 	})
 	r.append(ctx, deployment, "system", "Deployment completed")
 	r.audit(ctx, completed, target, "deployment.succeeded", map[string]any{"status": "succeeded"})
@@ -163,7 +170,16 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 		return fmt.Errorf("server %s has no ssh key path configured", target.ServerName)
 	}
 
-	signer, err := sshutil.LoadSigner(target.SshKeyPath.String)
+	signerSource := r.signer
+	if signerSource == nil {
+		signerSource = sshutil.FileSigner{}
+	}
+	signer, err := signerSource.Signer(ctx, sshutil.ServerRef{
+		Host:    target.Hostname,
+		Port:    target.SshPort,
+		User:    target.SshUser,
+		KeyPath: target.SshKeyPath.String,
+	})
 	if err != nil {
 		return fmt.Errorf("load ssh key: %w", err)
 	}
@@ -171,6 +187,9 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 	client := sshutil.NewClient(target.Hostname, target.SshPort, target.SshUser, signer)
 	r.append(ctx, deployment, "system", fmt.Sprintf("Connecting to %s@%s", target.SshUser, target.Hostname))
 	r.append(ctx, deployment, "system", fmt.Sprintf("Strategy: %s", target.Strategy))
+	if deployment.Trigger == "rollback" {
+		return r.rollback(ctx, deployment, target, client)
+	}
 
 	var variables []connectors.RuntimeVariable
 	if r.runtime != nil {
@@ -182,7 +201,11 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 		r.append(ctx, deployment, "system", fmt.Sprintf("Runtime variables synced: %d", validRuntimeVariableCount(variables)))
 	}
 
-	steps, err := remoteSteps(target, variables)
+	targetColor, err := r.nextDeploymentColor(ctx, target)
+	if err != nil {
+		return err
+	}
+	steps, err := remoteSteps(target, variables, remoteStepOptions{targetColor: targetColor})
 	if err != nil {
 		return err
 	}
@@ -196,8 +219,22 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 			return fmt.Errorf("%s: %w", step.label, err)
 		}
 	}
-	if err := r.applyProxyRoutes(ctx, deployment, target, client); err != nil {
+	if target.Strategy == "blue_green" && deploymentImageRef(target) != "" {
+		if err := r.upsertSlot(ctx, deployment, target, targetColor, "standby"); err != nil {
+			return err
+		}
+	}
+	if err := r.applyProxyRoutes(ctx, deployment, target, client, targetColor); err != nil {
 		return err
+	}
+	if target.Strategy == "blue_green" && deploymentImageRef(target) != "" {
+		if _, err := r.queries.ActivateDeploymentSlot(ctx, db.ActivateDeploymentSlotParams{
+			ApplicationID: target.ApplicationID,
+			ServerID:      target.ServerID,
+			Color:         targetColor,
+		}); err != nil {
+			return fmt.Errorf("mark active deployment slot: %w", err)
+		}
 	}
 
 	return nil
@@ -207,7 +244,102 @@ type remoteRunner interface {
 	Run(context.Context, string) (string, error)
 }
 
-func (r Runner) applyProxyRoutes(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow, client remoteRunner) error {
+func (r Runner) rollback(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow, client remoteRunner) error {
+	slot, err := r.queries.GetStandbyDeploymentSlot(ctx, db.GetStandbyDeploymentSlotParams{
+		ApplicationID: target.ApplicationID,
+		ServerID:      target.ServerID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("no standby blue-green slot is available for rollback")
+		}
+		return fmt.Errorf("load rollback slot: %w", err)
+	}
+	r.append(ctx, deployment, "system", "Rolling back traffic to "+slot.Color)
+	if err := r.checkColorHealth(ctx, target, client, slot.Color); err != nil {
+		return err
+	}
+	if err := r.applyProxyRoutes(ctx, deployment, target, client, slot.Color); err != nil {
+		return err
+	}
+	if _, err := r.queries.ActivateDeploymentSlot(ctx, db.ActivateDeploymentSlotParams{
+		ApplicationID: target.ApplicationID,
+		ServerID:      target.ServerID,
+		Color:         slot.Color,
+	}); err != nil {
+		return fmt.Errorf("mark rollback slot active: %w", err)
+	}
+	return nil
+}
+
+func (r Runner) nextDeploymentColor(ctx context.Context, target db.GetDeploymentTargetRow) (string, error) {
+	if target.Strategy != "blue_green" {
+		return "", nil
+	}
+	slot, err := r.queries.GetActiveDeploymentSlot(ctx, db.GetActiveDeploymentSlotParams{
+		ApplicationID: target.ApplicationID,
+		ServerID:      target.ServerID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "blue", nil
+		}
+		return "", fmt.Errorf("load active deployment slot: %w", err)
+	}
+	if slot.Color == "blue" {
+		return "green", nil
+	}
+	return "blue", nil
+}
+
+func (r Runner) upsertSlot(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow, color string, status string) error {
+	_, err := r.queries.UpsertDeploymentSlot(ctx, db.UpsertDeploymentSlotParams{
+		ApplicationID: target.ApplicationID,
+		ServerID:      target.ServerID,
+		Color:         color,
+		DeploymentID:  deployment.ID,
+		ImageRef:      deploymentImageRef(target),
+		ImageDigest:   target.ImageDigest,
+		Status:        status,
+	})
+	if err != nil {
+		return fmt.Errorf("record deployment slot: %w", err)
+	}
+	return nil
+}
+
+func (r Runner) checkColorHealth(ctx context.Context, target db.GetDeploymentTargetRow, client remoteRunner, color string) error {
+	if target.Strategy != "blue_green" {
+		return nil
+	}
+	healthCheckURL := strings.TrimSpace(target.HealthCheckUrl.String)
+	if !target.HealthCheckUrl.Valid || healthCheckURL == "" {
+		return fmt.Errorf("blue_green deployments require a health_check_url")
+	}
+	command := fmt.Sprintf("curl -fsS --retry 3 --retry-delay 1 %s >/dev/null", shellQuoteColorURL(healthCheckURL, color))
+	if output, err := client.Run(ctx, command); err != nil {
+		if strings.TrimSpace(output) != "" {
+			return fmt.Errorf("rollback health check failed: %w: %s", err, strings.TrimSpace(output))
+		}
+		return fmt.Errorf("rollback health check failed: %w", err)
+	}
+	return nil
+}
+
+func shellQuoteColorURL(healthCheckURL string, color string) string {
+	healthCheckURL = strings.ReplaceAll(healthCheckURL, "{color}", color)
+	healthCheckURL = strings.ReplaceAll(healthCheckURL, "{port}", colorPort(color))
+	return stringutil.ShellQuote(healthCheckURL)
+}
+
+func colorPort(color string) string {
+	if color == "green" {
+		return "3102"
+	}
+	return "3101"
+}
+
+func (r Runner) applyProxyRoutes(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow, client remoteRunner, color string) error {
 	if target.ProxyType == "none" {
 		return nil
 	}
@@ -219,14 +351,27 @@ func (r Runner) applyProxyRoutes(ctx context.Context, deployment db.Deployment, 
 		return fmt.Errorf("load proxy routes: %w", err)
 	}
 	for _, route := range routes {
-		if err := r.applyProxyRoute(ctx, deployment, route, client); err != nil {
+		if err := r.applyProxyRoute(ctx, deployment, route, client, color); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r Runner) applyProxyRoute(ctx context.Context, deployment db.Deployment, route db.ListProxyRouteTargetsForApplicationRow, client remoteRunner) error {
+func (r Runner) applyProxyRoute(ctx context.Context, deployment db.Deployment, route db.ListProxyRouteTargetsForApplicationRow, client remoteRunner, color string) error {
+	upstream, err := proxyRouteUpstream(route, color)
+	if err != nil {
+		_, _ = r.queries.MarkProxyRouteFailed(ctx, route.ID)
+		return fmt.Errorf("select proxy upstream %s: %w", route.Domain, err)
+	}
+	if upstream != route.UpstreamUrl {
+		updated, err := r.queries.UpdateProxyRouteUpstream(ctx, db.UpdateProxyRouteUpstreamParams{ID: route.ID, UpstreamUrl: upstream})
+		if err != nil {
+			_, _ = r.queries.MarkProxyRouteFailed(ctx, route.ID)
+			return fmt.Errorf("update proxy upstream %s: %w", route.Domain, err)
+		}
+		route.UpstreamUrl = updated.UpstreamUrl
+	}
 	command, err := proxypkg.BuildCommand(proxypkg.Target{
 		Domain:     route.Domain,
 		Upstream:   route.UpstreamUrl,
@@ -253,12 +398,38 @@ func (r Runner) applyProxyRoute(ctx context.Context, deployment db.Deployment, r
 	return nil
 }
 
+func proxyRouteUpstream(route db.ListProxyRouteTargetsForApplicationRow, color string) (string, error) {
+	switch color {
+	case "blue":
+		if route.BlueUpstreamUrl.Valid && strings.TrimSpace(route.BlueUpstreamUrl.String) != "" {
+			return strings.TrimSpace(route.BlueUpstreamUrl.String), nil
+		}
+	case "green":
+		if route.GreenUpstreamUrl.Valid && strings.TrimSpace(route.GreenUpstreamUrl.String) != "" {
+			return strings.TrimSpace(route.GreenUpstreamUrl.String), nil
+		}
+	case "":
+		return route.UpstreamUrl, nil
+	}
+	return "", fmt.Errorf("%s_upstream_url is required", color)
+}
+
 func runtimeScope(target db.GetDeploymentTargetRow) connectors.RuntimeVariableScope {
 	return connectors.RuntimeVariableScope{
 		ApplicationName: target.ApplicationName,
 		Project:         strings.TrimSpace(target.DopplerProject.String),
 		Config:          strings.TrimSpace(target.DopplerConfig.String),
 	}
+}
+
+func deploymentVersion(target db.GetDeploymentTargetRow) pgtype.Text {
+	if target.ImageDigest.Valid && strings.TrimSpace(target.ImageDigest.String) != "" {
+		return pgtype.Text{String: strings.TrimSpace(target.ImageDigest.String), Valid: true}
+	}
+	if target.ImageRef.Valid && strings.TrimSpace(target.ImageRef.String) != "" {
+		return pgtype.Text{String: strings.TrimSpace(target.ImageRef.String), Valid: true}
+	}
+	return target.CommitSha
 }
 
 func (r Runner) fail(ctx context.Context, deployment db.Deployment, label string, err error) db.Deployment {

@@ -46,12 +46,16 @@ type GitHubWebhookConfig struct {
 	Secret string
 }
 
+type AuthConfig struct {
+	Token string
+}
+
 type ReadinessCheck struct {
 	Name  string
 	Check func(context.Context) error
 }
 
-func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs *deployments.LogBus, proxyApplier ProxyApplier, github GitHubWebhookConfig, sources map[string]connectors.Connector, staticDir string, readiness ...ReadinessCheck) http.Handler {
+func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs *deployments.LogBus, proxyApplier ProxyApplier, github GitHubWebhookConfig, sources map[string]connectors.Connector, staticDir string, auth AuthConfig, readiness ...ReadinessCheck) http.Handler {
 	server := Server{queries: queries, tx: tx, ready: readiness, queue: queue, logs: logs, proxy: proxyApplier, github: github, sources: sources, static: staticDir}
 
 	r := chi.NewRouter()
@@ -61,37 +65,49 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 	r.Use(middleware.Compress(5))
 
 	r.Route("/api", func(r chi.Router) {
+		// Unauthenticated endpoints: liveness/readiness probes and the GitHub
+		// webhook, which authenticates itself with an HMAC signature.
 		r.Get("/healthz", server.health)
 		r.Get("/readyz", server.readyz)
-		r.Get("/settings", server.settings)
-		r.Patch("/settings", server.updateSettings)
-		r.Get("/audit-events", server.listAuditEvents)
-		r.Get("/projects", server.listProjects)
-		r.Post("/projects", server.createProject)
-		r.Get("/environments", server.listEnvironments)
-		r.Post("/environments", server.createEnvironment)
-		r.Get("/servers", server.listServers)
-		r.Post("/servers", server.createServer)
-		r.Post("/servers/{serverID}/check", server.checkServer)
-		r.Get("/applications", server.listApplications)
-		r.Post("/applications", server.createApplication)
-		r.Get("/deployments", server.listDeployments)
-		r.Post("/deployments", server.createDeployment)
-		r.Post("/deployments/{deploymentID}/cancel", server.cancelDeployment)
-		r.Post("/deployments/{deploymentID}/retry", server.retryDeployment)
-		r.Get("/deployments/{deploymentID}/logs", server.listDeploymentLogs)
-		r.Get("/deployments/{deploymentID}/events", server.streamDeploymentLogs)
-		r.Get("/credentials", server.listCredentials)
-		r.Post("/credentials/inventory", server.upsertCredentialInventory)
-		r.Post("/object-storage/inventory", server.upsertObjectStorageInventory)
-		r.Get("/credentials/{credentialID}", server.credentialDetail)
-		r.Get("/connectors", server.listConnectors)
-		r.Post("/connectors", server.upsertConnector)
-		r.Post("/connectors/{connectorID}/sync", server.syncConnector)
-		r.Get("/proxy-routes", server.listProxyRoutes)
-		r.Post("/proxy-routes", server.createProxyRoute)
-		r.Post("/proxy-routes/{routeID}/apply", server.applyProxyRoute)
 		r.Post("/webhooks/github", server.githubWebhook)
+
+		r.Group(func(r chi.Router) {
+			if auth.Token != "" {
+				r.Use(requireAuth(auth.Token))
+			}
+			r.Get("/settings", server.settings)
+			r.Patch("/settings", server.updateSettings)
+			r.Get("/audit-events", server.listAuditEvents)
+			r.Get("/projects", server.listProjects)
+			r.Post("/projects", server.createProject)
+			r.Patch("/projects/{projectID}/registry", server.updateProjectRegistry)
+			r.Get("/environments", server.listEnvironments)
+			r.Post("/environments", server.createEnvironment)
+			r.Get("/servers", server.listServers)
+			r.Post("/servers", server.createServer)
+			r.Post("/servers/{serverID}/check", server.checkServer)
+			r.Get("/applications", server.listApplications)
+			r.Post("/applications", server.createApplication)
+			r.Post("/applications/{applicationID}/rollback", server.rollbackApplication)
+			r.Get("/deployments", server.listDeployments)
+			r.Post("/deployments", server.createDeployment)
+			r.Post("/deployments/{deploymentID}/cancel", server.cancelDeployment)
+			r.Post("/deployments/{deploymentID}/retry", server.retryDeployment)
+			r.Get("/deployments/{deploymentID}/logs", server.listDeploymentLogs)
+			r.Get("/deployments/{deploymentID}/events", server.streamDeploymentLogs)
+			r.Get("/credentials", server.listCredentials)
+			r.Post("/credentials/inventory", server.upsertCredentialInventory)
+			r.Post("/object-storage/inventory", server.upsertObjectStorageInventory)
+			r.Get("/credentials/{credentialID}", server.credentialDetail)
+			r.Get("/connectors", server.listConnectors)
+			r.Post("/connectors", server.upsertConnector)
+			r.Post("/connectors/{connectorID}/sync", server.syncConnector)
+			r.Get("/container-registries", server.listContainerRegistries)
+			r.Post("/container-registries", server.upsertContainerRegistry)
+			r.Get("/proxy-routes", server.listProxyRoutes)
+			r.Post("/proxy-routes", server.createProxyRoute)
+			r.Post("/proxy-routes/{routeID}/apply", server.applyProxyRoute)
+		})
 	})
 
 	r.NotFound(server.notFound)

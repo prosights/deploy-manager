@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,8 @@ const (
 	defaultDeploymentHistoryLimit int32 = 100
 	maxDeploymentHistoryLimit     int32 = 500
 )
+
+var imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 func (s Server) listDeployments(w http.ResponseWriter, r *http.Request) {
 	limit, err := deploymentHistoryLimit(r.URL.Query().Get("limit"))
@@ -146,6 +149,63 @@ func (s Server) retryDeployment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, deployment)
 }
 
+func (s Server) rollbackApplication(w http.ResponseWriter, r *http.Request) {
+	applicationID, err := parseUUIDParam(r, "applicationID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	application, err := s.queries.GetApplication(r.Context(), applicationID)
+	if err != nil {
+		writeError(w, createDeploymentError(err))
+		return
+	}
+	slot, err := s.queries.GetStandbyDeploymentSlot(r.Context(), db.GetStandbyDeploymentSlotParams{
+		ApplicationID: application.ID,
+		ServerID:      application.ServerID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, validationError("no standby blue-green slot is available for rollback"))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	input, err := normalizeCreateDeployment(db.CreateDeploymentParams{
+		ApplicationID: application.ID,
+		Trigger:       "rollback",
+		Strategy:      "blue_green",
+		ImageRef:      pgtype.Text{String: slot.ImageRef, Valid: true},
+		ImageDigest:   slot.ImageDigest,
+		Actor:         blankStringAsText(auditActor(r)),
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy); err != nil {
+		writeError(w, err)
+		return
+	}
+	deployment, err := s.queries.CreateDeployment(r.Context(), input)
+	if err != nil {
+		writeError(w, createDeploymentError(err))
+		return
+	}
+	if err := enqueueDeployment(r.Context(), s.queue, s.queries, deployment); err != nil {
+		s.audit(r, "deployment.rollback_queue_failed", "deployment", uuidString(deployment.ID), uuidString(deployment.ApplicationID), deploymentQueueFailureMetadata(deployment, err))
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "deployment.rollback", "deployment", uuidString(deployment.ID), application.Name, map[string]any{
+		"application_id": uuidString(application.ID),
+		"target_color":   slot.Color,
+		"image_ref":      slot.ImageRef,
+	})
+	writeJSON(w, http.StatusAccepted, deployment)
+}
+
 type deploymentStatusUpdater interface {
 	UpdateDeploymentStatus(context.Context, db.UpdateDeploymentStatusParams) (db.Deployment, error)
 }
@@ -207,6 +267,8 @@ func retryDeploymentInput(source db.Deployment, actor string) (db.CreateDeployme
 		Trigger:       "retry",
 		Strategy:      source.Strategy,
 		CommitSha:     source.CommitSha,
+		ImageRef:      source.ImageRef,
+		ImageDigest:   source.ImageDigest,
 		Actor:         blankStringAsText(actor),
 	})
 }
@@ -259,7 +321,7 @@ func normalizeCreateDeployment(input db.CreateDeploymentParams) (db.CreateDeploy
 		input.Trigger = "manual"
 	}
 	if !validDeploymentTrigger(input.Trigger) {
-		return input, validationError("deployment trigger must be manual, github_push, connector_sync, or retry")
+		return input, validationError("deployment trigger must be manual, github_push, connector_sync, retry, or rollback")
 	}
 	if input.Strategy == "" {
 		input.Strategy = "rolling"
@@ -271,6 +333,14 @@ func normalizeCreateDeployment(input db.CreateDeploymentParams) (db.CreateDeploy
 	if input.CommitSha.Valid && !deployments.ValidCommitSHA(input.CommitSha.String) {
 		return input, validationError("commit_sha must be a 7 to 40 character hexadecimal SHA")
 	}
+	input.ImageRef = blankTextAsNull(input.ImageRef)
+	if input.ImageRef.Valid && !validImageRef(input.ImageRef.String) {
+		return input, validationError("image_ref must be a non-empty image reference without whitespace or control characters")
+	}
+	input.ImageDigest = blankTextAsNull(input.ImageDigest)
+	if input.ImageDigest.Valid && !imageDigestPattern.MatchString(input.ImageDigest.String) {
+		return input, validationError("image_digest must be a sha256 digest")
+	}
 	input.Actor = blankTextAsNull(input.Actor)
 	if input.Actor.Valid && strings.ContainsAny(input.Actor.String, "\r\n\t") {
 		return input, validationError("actor cannot contain control characters")
@@ -280,11 +350,19 @@ func normalizeCreateDeployment(input db.CreateDeploymentParams) (db.CreateDeploy
 
 func validDeploymentTrigger(trigger string) bool {
 	switch trigger {
-	case "manual", "github_push", "connector_sync", "retry":
+	case "manual", "github_push", "connector_sync", "retry", "rollback":
 		return true
 	default:
 		return false
 	}
+}
+
+func validImageRef(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 512 {
+		return false
+	}
+	return !strings.ContainsAny(value, " \n\r\t")
 }
 
 func validDeploymentStrategy(strategy string) bool {

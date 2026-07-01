@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Badge } from '../../components/ui/badge'
 import { Panel } from '../../components/ui/panel'
 import type { DeploymentLog } from '../../lib/api'
+import { withAccessToken } from '../../lib/api'
 import { deploymentLogsQuery } from '../../lib/queries'
 
 type DeploymentSummary = {
@@ -14,6 +15,7 @@ type DeploymentSummary = {
 
 export function useDeploymentLogs(deploymentID: string | undefined) {
   const [streamedLogs, setStreamedLogs] = useState<DeploymentLog[]>([])
+  const [live, setLive] = useState(false)
   const history = useQuery({
     ...deploymentLogsQuery(deploymentID ?? ''),
     enabled: Boolean(deploymentID),
@@ -22,6 +24,7 @@ export function useDeploymentLogs(deploymentID: string | undefined) {
   useEffect(() => {
     if (!deploymentID) {
       setStreamedLogs([])
+      setLive(false)
       return
     }
     if (typeof EventSource === 'undefined') {
@@ -29,7 +32,16 @@ export function useDeploymentLogs(deploymentID: string | undefined) {
     }
 
     setStreamedLogs([])
-    const events = new EventSource(`/api/deployments/${deploymentID}/events`)
+    setLive(true)
+    const events = new EventSource(withAccessToken(`/api/deployments/${deploymentID}/events`))
+    events.addEventListener('open', () => setLive(true))
+    events.addEventListener('error', () => {
+      // EventSource auto-reconnects unless the connection is permanently closed.
+      // Only mark the stream as not-live once it reaches the CLOSED state.
+      if (events.readyState === EventSource.CLOSED) {
+        setLive(false)
+      }
+    })
     events.addEventListener('log', (event) => {
       let entry: DeploymentLog
       try {
@@ -37,23 +49,31 @@ export function useDeploymentLogs(deploymentID: string | undefined) {
       } catch {
         return
       }
-      setStreamedLogs((state) => [...state.slice(-399), entry])
+      setStreamedLogs((state) => [...state.slice(-(maxLogLines - 1)), entry])
     })
-    return () => events.close()
+    return () => {
+      events.close()
+      setLive(false)
+    }
   }, [deploymentID])
 
-  return useMemo(
+  const logs = useMemo(
     () => mergeLogs(history.data ?? [], streamedLogs),
     [history.data, streamedLogs],
   )
+  return { logs, live }
 }
+
+const maxLogLines = 500
 
 export function DeploymentLogsPanel({
   deployment,
   logs,
+  live = false,
 }: {
   deployment: DeploymentSummary | undefined
   logs: DeploymentLog[]
+  live?: boolean
 }) {
   return (
     <Panel title="Deployment logs">
@@ -68,9 +88,9 @@ export function DeploymentLogsPanel({
               </div>
               <div className="mt-1 text-xs text-muted">{deployment.server_name ?? 'server'} / {deployment.id}</div>
             </div>
-            <Badge tone="accent">
+            <Badge tone={live ? 'accent' : 'neutral'}>
               <Radio className="mr-1 size-3" />
-              live stream
+              {live ? 'live stream' : 'disconnected'}
             </Badge>
           </div>
           <div className="max-h-[420px] overflow-auto bg-background p-4 font-mono text-xs leading-6">
@@ -90,15 +110,24 @@ export function DeploymentLogsPanel({
 
 function mergeLogs(history: DeploymentLog[], streamed: DeploymentLog[]) {
   const logs: DeploymentLog[] = []
-  const seen = new Set<number>()
+  const seenIDs = new Set<number>()
+  const seenContent = new Set<string>()
   for (const entry of [...history, ...streamed]) {
     if (entry.id) {
-      if (seen.has(entry.id)) {
+      if (seenIDs.has(entry.id)) {
         continue
       }
-      seen.add(entry.id)
+      seenIDs.add(entry.id)
+    } else {
+      // Live entries may arrive without an id and can also appear in the final
+      // history refetch. De-dupe those by a stable content key.
+      const key = `${entry.created_at ?? ''}|${entry.stream}|${entry.message}`
+      if (seenContent.has(key)) {
+        continue
+      }
+      seenContent.add(key)
     }
     logs.push(entry)
   }
-  return logs.slice(-500)
+  return logs.slice(-maxLogLines)
 }

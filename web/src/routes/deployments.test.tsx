@@ -32,8 +32,11 @@ const queryData = vi.hoisted(() => ({
       project_id: 'project_1',
       project_name: 'Billing',
       project_slug: 'billing',
+      default_registry_id: null,
+      default_registry_name: null,
     },
   ],
+  registries: [],
 }))
 
 class MockEventSource {
@@ -120,6 +123,10 @@ vi.mock('../lib/queries', () => ({
         finished_at: '2026-06-23T00:00:02Z',
       },
     ],
+  },
+  containerRegistriesQuery: {
+    queryKey: ['container-registries'],
+    queryFn: async () => queryData.registries,
   },
   deploymentLogsQuery: () => ({
     queryKey: ['deployments', 'deployment_1', 'logs'],
@@ -345,7 +352,7 @@ describe('DeploymentsRoute', () => {
     )
 
     await waitFor(() => {
-      expect(useDeploymentSelection.getState().selectedDeploymentID).toBe('deployment_1')
+      expect(useDeploymentSelection.getState().selectedDeploymentID).toBe('')
     })
   })
 
@@ -359,6 +366,7 @@ describe('DeploymentsRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findAllByRole('button', { name: /inspect/i }).then((buttons) => buttons[0]))
     await screen.findByText('live stream')
     await waitFor(() => {
       expect(MockEventSource.instances).toHaveLength(1)
@@ -379,6 +387,7 @@ describe('DeploymentsRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findAllByRole('button', { name: /inspect/i }).then((buttons) => buttons[0]))
     await waitFor(() => {
       expect(MockEventSource.instances).toHaveLength(1)
     })

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -42,19 +43,25 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
-	status := http.StatusInternalServerError
 	var validation validationError
 	if errors.As(err, &validation) {
-		status = http.StatusBadRequest
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 	var notFound notFoundError
 	if errors.As(err, &notFound) {
-		status = http.StatusNotFound
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
 	}
 	if isRequestBodyTooLarge(err) {
-		status = http.StatusBadRequest
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
-	writeJSON(w, status, map[string]string{"error": err.Error()})
+	// Unexpected errors (database failures, pgx errors, etc.) must not leak
+	// internal details to the client. Log the real error server-side and
+	// return a generic message.
+	slog.Error("request failed", "error", err)
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 }
 
 func writeSSE(w http.ResponseWriter, event string, payload any) {

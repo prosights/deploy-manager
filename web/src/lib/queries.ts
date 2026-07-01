@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import { api, listDeploymentLogs, type Application, type AuditEvent, type ConnectorAccount, type Credential, type CredentialDetail, type Deployment, type DeploymentLog, type Environment, type InstanceSettings, type Project, type ProxyRoute, type Server } from './api'
+import { api, listDeploymentLogs, type Application, type AuditEvent, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type Environment, type InstanceSettings, type Project, type ProxyRoute, type Server } from './api'
 
 export const settingsQuery = queryOptions({
   queryKey: ['settings'],
@@ -8,7 +8,7 @@ export const settingsQuery = queryOptions({
 
 export const auditEventsQuery = queryOptions({
   queryKey: ['audit-events'],
-  queryFn: ({ signal }) => api<AuditEvent[]>('/api/audit-events?limit=500', { signal }),
+  queryFn: ({ signal }) => api<AuditEvent[]>('/api/audit-events?limit=100', { signal }),
 })
 
 export const serversQuery = queryOptions({
@@ -58,6 +58,11 @@ export function credentialDetailQuery(credentialID: string) {
 export const connectorsQuery = queryOptions({
   queryKey: ['connectors'],
   queryFn: ({ signal }) => api<ConnectorAccount[]>('/api/connectors', { signal }),
+})
+
+export const containerRegistriesQuery = queryOptions({
+  queryKey: ['container-registries'],
+  queryFn: ({ signal }) => api<ContainerRegistry[]>('/api/container-registries', { signal }),
 })
 
 export const proxyRoutesQuery = queryOptions({

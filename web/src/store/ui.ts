@@ -1,6 +1,13 @@
 import { create } from 'zustand'
 
-type Theme = 'dark' | 'light' | 'system'
+export type Theme = 'dark' | 'light' | 'system'
+
+const themeOrder: Theme[] = ['light', 'dark', 'system']
+
+export function nextTheme(current: Theme): Theme {
+  const index = themeOrder.indexOf(current)
+  return themeOrder[(index + 1) % themeOrder.length]
+}
 
 type UiState = {
   sidebarCollapsed: boolean
@@ -23,10 +30,16 @@ function getInitialTheme(): Theme {
   return 'light'
 }
 
+function prefersLight(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-color-scheme: light)').matches
+}
+
 function applyTheme(theme: Theme, persist = false) {
   const root = document.documentElement
   const resolved = theme === 'system'
-    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    ? (prefersLight() ? 'light' : 'dark')
     : theme
 
   root.classList.toggle('light', resolved === 'light')
@@ -52,10 +65,11 @@ export const useUiStore = create<UiState>((set) => ({
   },
 }))
 
-if (getInitialTheme() === 'system') {
+// Always track the OS preference so that switching to 'system' at any time
+// (not just on initial load) keeps the resolved theme in sync.
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
   window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
-    const current = useUiStore.getState().theme
-    if (current === 'system') {
+    if (useUiStore.getState().theme === 'system') {
       applyTheme('system')
     }
   })

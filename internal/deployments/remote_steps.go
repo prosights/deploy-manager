@@ -18,15 +18,24 @@ type remoteStep struct {
 	command string
 }
 
+type remoteStepOptions struct {
+	targetColor string
+	imageRef    string
+}
+
 const (
 	maxRuntimeVariableValueLength = 8192
 	maxRuntimeEnvFileLength       = 65536
 	maxComposeProjectSlugLength   = 48
 )
 
-func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.RuntimeVariable) ([]remoteStep, error) {
+func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.RuntimeVariable, options ...remoteStepOptions) ([]remoteStep, error) {
 	if err := validateRemoteTarget(target); err != nil {
 		return nil, err
+	}
+	stepOptions := resolveRemoteStepOptions(target, options)
+	if stepOptions.imageRef != "" {
+		variables = appendArtifactVariables(variables, stepOptions)
 	}
 
 	remoteDir := stringutil.ShellQuote(target.RemoteDirectory)
@@ -69,7 +78,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	}
 
 	if target.Strategy == "blue_green" {
-		steps = append(steps, blueGreenSteps(target)...)
+		steps = append(steps, blueGreenSteps(target, stepOptions)...)
 	} else {
 		project := stringutil.ShellQuote(projectSlug(target.ApplicationName))
 		steps = append(steps,
@@ -86,6 +95,27 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	}
 
 	return steps, nil
+}
+
+func resolveRemoteStepOptions(target db.GetDeploymentTargetRow, options []remoteStepOptions) remoteStepOptions {
+	if len(options) > 0 {
+		resolved := options[0]
+		if resolved.imageRef == "" {
+			resolved.imageRef = deploymentImageRef(target)
+		}
+		return resolved
+	}
+	return remoteStepOptions{imageRef: deploymentImageRef(target)}
+}
+
+func appendArtifactVariables(variables []connectors.RuntimeVariable, options remoteStepOptions) []connectors.RuntimeVariable {
+	next := make([]connectors.RuntimeVariable, 0, len(variables)+2)
+	next = append(next, variables...)
+	next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_IMAGE", Value: options.imageRef})
+	if options.targetColor != "" {
+		next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_COLOR", Value: options.targetColor})
+	}
+	return next
 }
 
 func validateRemoteTarget(target db.GetDeploymentTargetRow) error {
@@ -191,41 +221,50 @@ func ValidateGitRefName(value string) error {
 	return nil
 }
 
-func blueGreenSteps(target db.GetDeploymentTargetRow) []remoteStep {
+func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions) []remoteStep {
 	remoteDir := stringutil.ShellQuote(target.RemoteDirectory)
 	composePath := stringutil.ShellQuote(target.ComposePath)
 	project := stringutil.ShellQuote(projectSlug(target.ApplicationName))
+	targetColor := stringutil.ShellQuote(defaultTargetColor(options.targetColor))
 
 	steps := []remoteStep{
 		{
 			label:   "Selecting blue-green target",
-			command: fmt.Sprintf("cd %s && active=$(cat .deploy-manager-active-color 2>/dev/null || echo blue) && if [ \"$active\" = \"blue\" ]; then echo green; else echo blue; fi > .deploy-manager-next-color", remoteDir),
+			command: fmt.Sprintf("cd %s && printf %%s %s > .deploy-manager-next-color", remoteDir, targetColor),
 		},
 		composeConfigStep(remoteDir, composePath),
 		{
 			label:   "Pulling next color images",
-			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color docker compose -f %s pull", remoteDir, project, composePath),
+			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s pull", remoteDir, colorPortCommand(), project, composePath),
 		},
 		{
 			label:   "Starting next color stack",
-			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color docker compose -f %s up -d --remove-orphans", remoteDir, project, composePath),
+			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s up -d --remove-orphans", remoteDir, colorPortCommand(), project, composePath),
 		},
 	}
 	steps = append(steps, remoteStep{
 		label:   "Checking next color health",
-		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && url=$(printf %%s %s | sed \"s/{color}/$color/g\") && curl -fsS --retry 10 --retry-delay 2 \"$url\" >/dev/null", remoteDir, stringutil.ShellQuote(target.HealthCheckUrl.String)),
+		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 \"$url\" >/dev/null", remoteDir, colorPortCommand(), stringutil.ShellQuote(target.HealthCheckUrl.String)),
 	})
 	steps = append(steps,
 		remoteStep{
 			label:   "Promoting next color",
 			command: fmt.Sprintf("cd %s && cat .deploy-manager-next-color > .deploy-manager-active-color", remoteDir),
 		},
-		remoteStep{
-			label:   "Stopping previous color stack",
-			command: fmt.Sprintf("cd %s && active=$(cat .deploy-manager-active-color) && if [ \"$active\" = \"blue\" ]; then old=green; else old=blue; fi && COMPOSE_PROJECT_NAME=%s-$old DEPLOY_COLOR=$old docker compose -f %s down --remove-orphans || true", remoteDir, project, composePath),
-		},
 	)
 	return steps
+}
+
+func colorPortCommand() string {
+	return "if [ \"$color\" = \"blue\" ]; then printf %s \"${BLUE_DEPLOY_PORT:-3101}\"; else printf %s \"${GREEN_DEPLOY_PORT:-3102}\"; fi"
+}
+
+func defaultTargetColor(color string) string {
+	color = strings.TrimSpace(color)
+	if color == "green" {
+		return "green"
+	}
+	return "blue"
 }
 
 func composeConfigStep(remoteDir string, composePath string) remoteStep {
@@ -339,6 +378,13 @@ func deploymentCommit(target db.GetDeploymentTargetRow) string {
 		return ""
 	}
 	return target.CommitSha.String
+}
+
+func deploymentImageRef(target db.GetDeploymentTargetRow) string {
+	if !target.ImageRef.Valid {
+		return ""
+	}
+	return strings.TrimSpace(target.ImageRef.String)
 }
 
 func quoteEnvValue(value string) string {

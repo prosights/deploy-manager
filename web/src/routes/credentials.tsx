@@ -30,7 +30,7 @@ export function CredentialsRoute() {
     credential.status,
   ])), [credentials, searchQuery])
   const selectedCredential = useMemo(
-    () => visibleCredentials.find((credential) => credential.id === (selectedID || visibleCredentials[0]?.id)),
+    () => visibleCredentials.find((credential) => credential.id === selectedID),
     [selectedID, visibleCredentials],
   )
   const detail = useQuery({
@@ -75,6 +75,11 @@ export function CredentialsRoute() {
         onSubmit={submitInventory}
       />
       <CredentialList credentials={visibleCredentials} onInspect={setSelectedID} />
+      {!selectedCredential && visibleCredentials.length > 0 && (
+        <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
+          Select a credential to inspect permissions and usage.
+        </div>
+      )}
       {selectedCredential && (
         <CredentialInventoryPanels credential={selectedCredential} detail={detail.data} />
       )}

@@ -233,7 +233,7 @@ func TestApplyProxyRoutesRunsLinkedApplicationRoutes(t *testing.T) {
 		ApplicationID: applicationID,
 		ServerID:      serverID,
 		ProxyType:     "caddy",
-	}, remote)
+	}, remote, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestApplyProxyRoutesMarksRouteFailedWhenCommandFails(t *testing.T) {
 		ApplicationID: applicationID,
 		ServerID:      serverID,
 		ProxyType:     "caddy",
-	}, remote)
+	}, remote, "")
 	if err == nil {
 		t.Fatal("expected proxy command failure")
 	}
@@ -280,20 +280,58 @@ func TestApplyProxyRoutesMarksRouteFailedWhenCommandFails(t *testing.T) {
 	}
 }
 
+func TestApplyProxyRoutesUsesColorSpecificUpstream(t *testing.T) {
+	applicationID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	serverID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+	routeID := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
+	queries := &fakeRunnerQueries{
+		proxyRoutes: []db.ListProxyRouteTargetsForApplicationRow{{
+			ID:               routeID,
+			ApplicationID:    applicationID,
+			ServerID:         serverID,
+			Domain:           "app.example.com",
+			UpstreamUrl:      "http://127.0.0.1:3000",
+			BlueUpstreamUrl:  pgtype.Text{String: "http://127.0.0.1:3101", Valid: true},
+			GreenUpstreamUrl: pgtype.Text{String: "http://127.0.0.1:3102", Valid: true},
+			TlsEnabled:       true,
+			ProxyType:        "caddy",
+		}},
+	}
+	remote := &fakeRemoteRunner{}
+	runner := NewRunner(queries, NewLogBus(nil), nil, nil)
+
+	err := runner.applyProxyRoutes(context.Background(), db.Deployment{}, db.GetDeploymentTargetRow{
+		ApplicationID: applicationID,
+		ServerID:      serverID,
+		ProxyType:     "caddy",
+	}, remote, "green")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(queries.updatedProxyUpstreams) != 1 || queries.updatedProxyUpstreams[0] != "http://127.0.0.1:3102" {
+		t.Fatalf("expected green upstream update, got %+v", queries.updatedProxyUpstreams)
+	}
+	if len(remote.commands) != 1 || !strings.Contains(remote.commands[0], "reverse_proxy http://127.0.0.1:3102") {
+		t.Fatalf("expected caddy proxy command to use green upstream, got %+v", remote.commands)
+	}
+}
+
 type fakeRunnerQueries struct {
-	startErr            error
-	startAttempts       int
-	startDeployment     db.Deployment
-	targetLoads         int
-	deploymentStatusErr error
-	deploymentStatuses  []string
-	applicationStatuses []db.UpdateApplicationStatusParams
-	logs                []db.AppendDeploymentLogParams
-	auditEvents         []db.AppendAuditEventParams
-	target              db.GetDeploymentTargetRow
-	proxyRoutes         []db.ListProxyRouteTargetsForApplicationRow
-	appliedProxyRoutes  []pgtype.UUID
-	failedProxyRoutes   []pgtype.UUID
+	startErr              error
+	startAttempts         int
+	startDeployment       db.Deployment
+	targetLoads           int
+	deploymentStatusErr   error
+	deploymentStatuses    []string
+	applicationStatuses   []db.UpdateApplicationStatusParams
+	logs                  []db.AppendDeploymentLogParams
+	auditEvents           []db.AppendAuditEventParams
+	target                db.GetDeploymentTargetRow
+	proxyRoutes           []db.ListProxyRouteTargetsForApplicationRow
+	appliedProxyRoutes    []pgtype.UUID
+	failedProxyRoutes     []pgtype.UUID
+	updatedProxyUpstreams []string
 }
 
 func (q *fakeRunnerQueries) AppendAuditEvent(_ context.Context, params db.AppendAuditEventParams) (db.AuditEvent, error) {
@@ -310,9 +348,21 @@ func (q *fakeRunnerQueries) AppendDeploymentLog(_ context.Context, params db.App
 	}, nil
 }
 
+func (q *fakeRunnerQueries) ActivateDeploymentSlot(context.Context, db.ActivateDeploymentSlotParams) ([]db.ApplicationDeploymentSlot, error) {
+	return nil, nil
+}
+
 func (q *fakeRunnerQueries) GetDeploymentTarget(context.Context, pgtype.UUID) (db.GetDeploymentTargetRow, error) {
 	q.targetLoads++
 	return q.target, nil
+}
+
+func (q *fakeRunnerQueries) GetActiveDeploymentSlot(context.Context, db.GetActiveDeploymentSlotParams) (db.ApplicationDeploymentSlot, error) {
+	return db.ApplicationDeploymentSlot{}, pgx.ErrNoRows
+}
+
+func (q *fakeRunnerQueries) GetStandbyDeploymentSlot(context.Context, db.GetStandbyDeploymentSlotParams) (db.ApplicationDeploymentSlot, error) {
+	return db.ApplicationDeploymentSlot{}, pgx.ErrNoRows
 }
 
 func (q *fakeRunnerQueries) ListProxyRouteTargetsForApplication(context.Context, db.ListProxyRouteTargetsForApplicationParams) ([]db.ListProxyRouteTargetsForApplicationRow, error) {
@@ -351,6 +401,15 @@ func (q *fakeRunnerQueries) UpdateDeploymentStatus(_ context.Context, params db.
 		return db.Deployment{}, q.deploymentStatusErr
 	}
 	return db.Deployment{ID: params.ID, Status: params.Status}, nil
+}
+
+func (q *fakeRunnerQueries) UpdateProxyRouteUpstream(_ context.Context, params db.UpdateProxyRouteUpstreamParams) (db.ProxyRoute, error) {
+	q.updatedProxyUpstreams = append(q.updatedProxyUpstreams, params.UpstreamUrl)
+	return db.ProxyRoute{ID: params.ID, UpstreamUrl: params.UpstreamUrl}, nil
+}
+
+func (q *fakeRunnerQueries) UpsertDeploymentSlot(context.Context, db.UpsertDeploymentSlotParams) (db.ApplicationDeploymentSlot, error) {
+	return db.ApplicationDeploymentSlot{}, nil
 }
 
 type fakeRemoteRunner struct {

@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { defaultProxyForm, ProxyRouteForm, ProxyRouteList } from '../features/proxy/components'
@@ -10,9 +10,9 @@ import { useUiStore } from '../store/ui'
 
 export function ProxyRoute() {
   const queryClient = useQueryClient()
-  const { data: routes } = useSuspenseQuery(proxyRoutesQuery)
-  const { data: servers } = useSuspenseQuery(serversQuery)
-  const { data: applications } = useSuspenseQuery(applicationsQuery)
+  const [{ data: routes }, { data: servers }, { data: applications }] = useSuspenseQueries({
+    queries: [proxyRoutesQuery, serversQuery, applicationsQuery],
+  })
   const searchQuery = useUiStore((state) => state.searchQuery)
   const defaultServerID = servers[0]?.id ?? ''
   const [form, setForm] = useState(defaultProxyForm(defaultServerID))
@@ -36,6 +36,8 @@ export function ProxyRoute() {
       application_id: form.application_id || undefined,
       domain: form.domain.trim().toLowerCase(),
       upstream_url: form.upstream_url.trim(),
+      blue_upstream_url: optionalTrimmed(form.blue_upstream_url),
+      green_upstream_url: optionalTrimmed(form.green_upstream_url),
       tls_enabled: form.tls_enabled,
     }),
     onSuccess: async () => {
@@ -66,6 +68,8 @@ export function ProxyRoute() {
     try {
       validateDomain(form.domain)
       validateProxyUpstream(form.upstream_url)
+      validateOptionalProxyUpstream(form.blue_upstream_url)
+      validateOptionalProxyUpstream(form.green_upstream_url)
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Proxy route is invalid.')
       return
@@ -120,4 +124,16 @@ function validateProxyUpstream(value: string): void {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Upstream URL must use http or https.')
   }
+}
+
+function optionalTrimmed(value: string): string | undefined {
+  const trimmed = value.trim()
+  return trimmed ? trimmed : undefined
+}
+
+function validateOptionalProxyUpstream(value: string): void {
+  if (!value.trim()) {
+    return
+  }
+  validateProxyUpstream(value)
 }

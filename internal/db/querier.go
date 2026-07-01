@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	ActivateDeploymentSlot(ctx context.Context, arg ActivateDeploymentSlotParams) ([]ApplicationDeploymentSlot, error)
 	AppendAuditEvent(ctx context.Context, arg AppendAuditEventParams) (AuditEvent, error)
 	AppendDeploymentLog(ctx context.Context, arg AppendDeploymentLogParams) (DeploymentLog, error)
 	CancelQueuedDeployment(ctx context.Context, id pgtype.UUID) (Deployment, error)
@@ -24,8 +25,10 @@ type Querier interface {
 	DeleteCredentialPermissions(ctx context.Context, credentialID pgtype.UUID) error
 	DeleteCredentialUsages(ctx context.Context, credentialID pgtype.UUID) error
 	FailRunningDeploymentsForRecovery(ctx context.Context) ([]FailRunningDeploymentsForRecoveryRow, error)
+	GetActiveDeploymentSlot(ctx context.Context, arg GetActiveDeploymentSlotParams) (ApplicationDeploymentSlot, error)
 	GetApplication(ctx context.Context, id pgtype.UUID) (Application, error)
 	GetConnectorAccount(ctx context.Context, id pgtype.UUID) (ConnectorAccount, error)
+	GetContainerRegistry(ctx context.Context, id pgtype.UUID) (ContainerRegistry, error)
 	GetCredential(ctx context.Context, id pgtype.UUID) (Credential, error)
 	GetCredentialWithCounts(ctx context.Context, id pgtype.UUID) (GetCredentialWithCountsRow, error)
 	GetDeployment(ctx context.Context, id pgtype.UUID) (Deployment, error)
@@ -35,10 +38,12 @@ type Querier interface {
 	GetProject(ctx context.Context, id pgtype.UUID) (Project, error)
 	GetProxyRouteTarget(ctx context.Context, id pgtype.UUID) (GetProxyRouteTargetRow, error)
 	GetServer(ctx context.Context, id pgtype.UUID) (Server, error)
+	GetStandbyDeploymentSlot(ctx context.Context, arg GetStandbyDeploymentSlotParams) (ApplicationDeploymentSlot, error)
 	ListApplications(ctx context.Context) ([]ListApplicationsRow, error)
 	ListApplicationsForGitHubPush(ctx context.Context, arg ListApplicationsForGitHubPushParams) ([]ListApplicationsForGitHubPushRow, error)
 	ListAuditEvents(ctx context.Context, limit int32) ([]AuditEvent, error)
 	ListConnectorAccounts(ctx context.Context) ([]ConnectorAccount, error)
+	ListContainerRegistries(ctx context.Context) ([]ContainerRegistry, error)
 	ListCredentialPermissions(ctx context.Context, credentialID pgtype.UUID) ([]CredentialPermission, error)
 	ListCredentialUsages(ctx context.Context, credentialID pgtype.UUID) ([]CredentialUsage, error)
 	ListCredentials(ctx context.Context) ([]ListCredentialsRow, error)
@@ -46,7 +51,7 @@ type Querier interface {
 	ListDeployments(ctx context.Context, limit int32) ([]ListDeploymentsRow, error)
 	ListEnvironments(ctx context.Context) ([]ListEnvironmentsRow, error)
 	ListEnvironmentsForProject(ctx context.Context, projectID pgtype.UUID) ([]Environment, error)
-	ListProjects(ctx context.Context) ([]Project, error)
+	ListProjects(ctx context.Context) ([]ListProjectsRow, error)
 	ListProxyRouteTargetsForApplication(ctx context.Context, arg ListProxyRouteTargetsForApplicationParams) ([]ListProxyRouteTargetsForApplicationRow, error)
 	ListProxyRoutes(ctx context.Context) ([]ListProxyRoutesRow, error)
 	ListQueuedDeploymentsForRecovery(ctx context.Context, limit int32) ([]Deployment, error)
@@ -59,11 +64,15 @@ type Querier interface {
 	UpdateApplicationStatus(ctx context.Context, arg UpdateApplicationStatusParams) (Application, error)
 	UpdateDeploymentStatus(ctx context.Context, arg UpdateDeploymentStatusParams) (Deployment, error)
 	UpdateInstanceSettings(ctx context.Context, arg UpdateInstanceSettingsParams) (InstanceSetting, error)
+	UpdateProjectRegistry(ctx context.Context, arg UpdateProjectRegistryParams) (Project, error)
+	UpdateProxyRouteUpstream(ctx context.Context, arg UpdateProxyRouteUpstreamParams) (ProxyRoute, error)
 	UpdateServerHealth(ctx context.Context, arg UpdateServerHealthParams) (Server, error)
 	UpsertConnectorAccount(ctx context.Context, arg UpsertConnectorAccountParams) (ConnectorAccount, error)
+	UpsertContainerRegistry(ctx context.Context, arg UpsertContainerRegistryParams) (ContainerRegistry, error)
 	UpsertCredential(ctx context.Context, arg UpsertCredentialParams) (Credential, error)
 	UpsertCredentialPermission(ctx context.Context, arg UpsertCredentialPermissionParams) (CredentialPermission, error)
 	UpsertCredentialUsage(ctx context.Context, arg UpsertCredentialUsageParams) (CredentialUsage, error)
+	UpsertDeploymentSlot(ctx context.Context, arg UpsertDeploymentSlotParams) (ApplicationDeploymentSlot, error)
 }
 
 var _ Querier = (*Queries)(nil)

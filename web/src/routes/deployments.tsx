@@ -1,25 +1,33 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
 import { DeploymentList, DeploymentQueuePanel } from '../features/deployments/components'
 import { DeploymentLogsPanel, useDeploymentLogs } from '../features/deployments/logs'
-import { cancelDeployment, createDeployment, retryDeployment, type CreateDeploymentInput } from '../lib/api'
-import { applicationsQuery, deploymentsQuery } from '../lib/queries'
+import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, type ContainerRegistry, type CreateDeploymentInput } from '../lib/api'
+import { applicationsQuery, containerRegistriesQuery, deploymentsQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
 import { useDeploymentSelection } from '../store/deployments'
 import { useUiStore } from '../store/ui'
 
+const manualRegistryID = '__manual__'
+
 export function DeploymentsRoute() {
   const queryClient = useQueryClient()
-  const { data: deployments } = useSuspenseQuery(deploymentsQuery)
-  const { data: applications } = useSuspenseQuery(applicationsQuery)
+  const [{ data: deployments }, { data: applications }, { data: registries }] = useSuspenseQueries({
+    queries: [deploymentsQuery, applicationsQuery, containerRegistriesQuery],
+  })
   const searchQuery = useUiStore((state) => state.searchQuery)
   const selectedDeploymentID = useDeploymentSelection((state) => state.selectedDeploymentID)
   const setSelectedDeploymentID = useDeploymentSelection((state) => state.setSelectedDeploymentID)
   const [applicationID, setApplicationID] = useState(applications[0]?.id ?? '')
   const [strategy, setStrategy] = useState<'rolling' | 'blue_green'>('rolling')
   const [commitSha, setCommitSha] = useState('')
+  const [imageRef, setImageRef] = useState('')
+  const [registryOverrideID, setRegistryOverrideID] = useState<string | null>(null)
+  const [imageName, setImageName] = useState('')
+  const [imageTag, setImageTag] = useState('')
+  const [imageDigest, setImageDigest] = useState('')
   const [actor, setActor] = useState('')
   const [formError, setFormError] = useState<string>()
   const visibleDeployments = deployments.filter((deployment) => matchesSearch(searchQuery, [
@@ -37,17 +45,27 @@ export function DeploymentsRoute() {
     [applications, applicationID],
   )
   const selectedDeployment = useMemo(
-    () => visibleDeployments.find((deployment) => deployment.id === selectedDeploymentID) ?? visibleDeployments[0],
+    () => visibleDeployments.find((deployment) => deployment.id === selectedDeploymentID),
     [visibleDeployments, selectedDeploymentID],
   )
   const selectedDeploymentIDForLogs = selectedDeployment?.id
-  const logs = useDeploymentLogs(selectedDeploymentIDForLogs)
+  const effectiveRegistryID = registryOverrideID ?? target?.default_registry_id ?? manualRegistryID
+  const selectedRegistry = useMemo(
+    () => {
+      if (effectiveRegistryID === manualRegistryID) {
+        return undefined
+      }
+      return registries.find((registry) => registry.id === effectiveRegistryID)
+    },
+    [effectiveRegistryID, registries],
+  )
+  const { logs, live } = useDeploymentLogs(selectedDeploymentIDForLogs)
   const deploy = useMutation({
     mutationFn: () => {
       if (!target) {
         throw new Error('No application target is available')
       }
-      return createDeployment(deploymentInput(target.id, strategy, commitSha, actor))
+      return createDeployment(deploymentInput(target.id, strategy, commitSha, imageRef, selectedRegistry, imageName, imageTag, imageDigest, actor))
     },
     onSuccess: async () => {
       setFormError(undefined)
@@ -66,14 +84,25 @@ export function DeploymentsRoute() {
       await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
     },
   })
+  const rollback = useMutation({
+    mutationFn: () => {
+      if (!target) {
+        throw new Error('No application target is available')
+      }
+      return rollbackApplication(target.id)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
+    },
+  })
 
   useEffect(() => {
     if (!visibleDeployments.length && selectedDeploymentID) {
       setSelectedDeploymentID('')
       return
     }
-    if (visibleDeployments[0] && !visibleDeployments.some((deployment) => deployment.id === selectedDeploymentID)) {
-      setSelectedDeploymentID(visibleDeployments[0].id)
+    if (selectedDeploymentID && !visibleDeployments.some((deployment) => deployment.id === selectedDeploymentID)) {
+      setSelectedDeploymentID('')
     }
   }, [selectedDeploymentID, setSelectedDeploymentID, visibleDeployments])
 
@@ -88,16 +117,33 @@ export function DeploymentsRoute() {
         target={target}
         strategy={strategy}
         commitSha={commitSha}
+        imageRef={imageRef}
+        imageName={imageName}
+        imageTag={imageTag}
+        selectedRegistry={selectedRegistry}
+        registries={registries}
+        imageDigest={imageDigest}
         actor={actor}
         isQueueing={deploy.isPending}
-        onApplicationChange={setApplicationID}
+        isRollingBack={rollback.isPending}
+        onApplicationChange={(nextApplicationID) => {
+          setApplicationID(nextApplicationID)
+          setRegistryOverrideID(null)
+        }}
         onStrategyChange={setStrategy}
         onCommitShaChange={setCommitSha}
+        onImageRefChange={setImageRef}
+        onRegistryChange={(value) => setRegistryOverrideID(value || manualRegistryID)}
+        onImageNameChange={setImageName}
+        onImageTagChange={setImageTag}
+        onImageDigestChange={setImageDigest}
         onActorChange={setActor}
         onQueue={() => {
           setFormError(undefined)
           try {
             validateCommitSha(commitSha)
+            validateRegistryImage(selectedRegistry, imageName, imageTag, imageRef)
+            validateImageDigest(imageDigest)
             validateDeploymentActor(actor)
           } catch (error) {
             setFormError(error instanceof Error ? error.message : 'Deployment request is invalid.')
@@ -105,6 +151,7 @@ export function DeploymentsRoute() {
           }
           deploy.mutate()
         }}
+        onRollback={() => rollback.mutate()}
       />
       {!target && (
         <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
@@ -123,7 +170,8 @@ export function DeploymentsRoute() {
       />
       {cancel.error && <BlockError message={cancel.error.message} />}
       {retry.error && <BlockError message={retry.error.message} />}
-      <DeploymentLogsPanel deployment={selectedDeployment} logs={logs} />
+      {rollback.error && <BlockError message={rollback.error.message} />}
+      <DeploymentLogsPanel deployment={selectedDeployment} logs={logs} live={live} />
     </div>
   )
 }
@@ -132,6 +180,11 @@ function deploymentInput(
   applicationID: string,
   strategy: 'rolling' | 'blue_green',
   commitSha: string,
+  imageRef: string,
+  registry: ContainerRegistry | undefined,
+  imageName: string,
+  imageTag: string,
+  imageDigest: string,
   actor: string,
 ): CreateDeploymentInput {
   return {
@@ -139,6 +192,8 @@ function deploymentInput(
     trigger: 'manual',
     strategy,
     commit_sha: optionalTrimmed(commitSha),
+    image_ref: registry ? resolvedImageRef(registry, imageName, imageTag) : optionalTrimmed(imageRef),
+    image_digest: optionalTrimmed(imageDigest),
     actor: optionalTrimmed(actor),
   }
 }
@@ -155,6 +210,53 @@ function validateCommitSha(value: string): void {
   }
   if (!/^[0-9A-Fa-f]{7,40}$/.test(commitSha)) {
     throw new Error('Commit SHA must be 7 to 40 hexadecimal characters.')
+  }
+}
+
+function validateRegistryImage(registry: ContainerRegistry | undefined, imageName: string, imageTag: string, manualRef: string): void {
+  if (!registry) {
+    validateImageRef(manualRef)
+    return
+  }
+  const image = cleanImagePath(imageName || registry.default_image)
+  if (!image || !imageTag.trim()) {
+    throw new Error('Image and tag are required when using a registry.')
+  }
+  validateImageRef(resolvedImageRef(registry, imageName, imageTag))
+}
+
+function validateImageRef(value: string | undefined): void {
+  if (!value) {
+    return
+  }
+  const imageRef = value.trim()
+  if (!imageRef) {
+    return
+  }
+  if (imageRef.length > 512 || /\s/.test(imageRef)) {
+    throw new Error('Image ref must be 512 characters or fewer and cannot contain whitespace.')
+  }
+}
+
+function resolvedImageRef(registry: ContainerRegistry, imageName: string, imageTag: string): string {
+  return `${registryBasePath(registry)}/${cleanImagePath(imageName || registry.default_image)}:${imageTag.trim()}`
+}
+
+function registryBasePath(registry: ContainerRegistry): string {
+  return [registry.registry_host, registry.namespace, registry.repository].map(cleanImagePath).filter(Boolean).join('/')
+}
+
+function cleanImagePath(value: string): string {
+  return value.trim().replace(/^\/+|\/+$/g, '')
+}
+
+function validateImageDigest(value: string): void {
+  const imageDigest = value.trim()
+  if (!imageDigest) {
+    return
+  }
+  if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest)) {
+    throw new Error('Image digest must be a sha256 digest.')
   }
 }
 

@@ -1,9 +1,17 @@
 import type { ErrorComponentProps } from '@tanstack/react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, RotateCcw } from 'lucide-react'
 import { Button } from './ui/button'
 import { Panel } from './ui/panel'
 
 export function AppError({ error, reset }: ErrorComponentProps) {
+  const queryClient = useQueryClient()
+
+  function retry() {
+    queryClient.resetQueries()
+    reset()
+  }
+
   return (
     <main className="min-h-screen bg-background p-6 text-ink">
       <div className="mx-auto flex min-h-[calc(100vh-3rem)] max-w-2xl items-center">
@@ -23,7 +31,7 @@ export function AppError({ error, reset }: ErrorComponentProps) {
             <pre className="max-h-40 overflow-auto rounded-md border bg-panel p-3 text-xs text-muted">
               {errorMessage(error)}
             </pre>
-            <Button variant="primary" onClick={reset}>
+            <Button variant="primary" onClick={retry}>
               <RotateCcw className="size-4" />
               Retry
             </Button>

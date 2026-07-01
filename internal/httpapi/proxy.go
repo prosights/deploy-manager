@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	proxypkg "deploy-manager/internal/proxy"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func (s Server) listProxyRoutes(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +30,8 @@ func (s Server) createProxyRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	input.Domain = strings.TrimSpace(input.Domain)
 	input.UpstreamUrl = strings.TrimSpace(input.UpstreamUrl)
+	input.BlueUpstreamUrl.String = strings.TrimSpace(input.BlueUpstreamUrl.String)
+	input.GreenUpstreamUrl.String = strings.TrimSpace(input.GreenUpstreamUrl.String)
 	if input.ApplicationID.Valid {
 		application, err := s.queries.GetApplication(r.Context(), input.ApplicationID)
 		if err != nil {
@@ -55,6 +59,14 @@ func (s Server) createProxyRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, validationError(err.Error()))
 		return
 	}
+	if err := validateOptionalProxyUpstream(input.BlueUpstreamUrl, server.ProxyType); err != nil {
+		writeError(w, validationError("blue_"+err.Error()))
+		return
+	}
+	if err := validateOptionalProxyUpstream(input.GreenUpstreamUrl, server.ProxyType); err != nil {
+		writeError(w, validationError("green_"+err.Error()))
+		return
+	}
 
 	route, err := s.queries.CreateProxyRoute(r.Context(), input)
 	if err != nil {
@@ -74,7 +86,21 @@ func normalizeCreateProxyRoute(input db.CreateProxyRouteParams, application *db.
 	}
 	input.Domain = strings.ToLower(strings.TrimSpace(input.Domain))
 	input.UpstreamUrl = strings.TrimSpace(input.UpstreamUrl)
+	input.BlueUpstreamUrl = blankTextAsNull(input.BlueUpstreamUrl)
+	input.GreenUpstreamUrl = blankTextAsNull(input.GreenUpstreamUrl)
 	return input
+}
+
+func validateOptionalProxyUpstream(value pgtype.Text, proxyType string) error {
+	if !value.Valid {
+		return nil
+	}
+	return proxypkg.ValidateTarget(proxypkg.Target{
+		Domain:     "upstream-check.example",
+		Upstream:   value.String,
+		TLSEnabled: false,
+		ProxyType:  proxyType,
+	})
 }
 
 func proxyLookupError(err error, message string) error {
@@ -95,7 +121,9 @@ func (s Server) applyProxyRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	route, err := s.proxy.Apply(r.Context(), routeID)
+	applyCtx, cancel := context.WithTimeout(r.Context(), serverCheckTimeout)
+	defer cancel()
+	route, err := s.proxy.Apply(applyCtx, routeID)
 	if err != nil {
 		s.audit(r, "proxy_route.apply_failed", "proxy_route", uuidString(routeID), uuidString(routeID), proxyApplyFailureMetadata(err))
 		writeError(w, err)

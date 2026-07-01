@@ -31,10 +31,12 @@ services:
     build: .
     environment:
       HTTP_ADDR: ":8080"
+      HOME: /home/deploy
       DATABASE_URL: postgres://deploy:deploy@postgres:5432/deploy_manager?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       STATIC_DIR: web/dist
       SSH_KNOWN_HOSTS_PATH: /app/known_hosts
+      API_TOKEN: "${API_TOKEN:-}"
       GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET:-}"
       DOPPLER_PROJECT: "${DOPPLER_PROJECT:-}"
       DOPPLER_CONFIG: "${DOPPLER_CONFIG:-}"
@@ -46,6 +48,10 @@ services:
       RESEND_TO_EMAIL: "${RESEND_TO_EMAIL:-}"
     ports:
       - "${APP_PORT:-8080}:8080"
+    volumes:
+      # The container runs as the unprivileged "deploy" user whose home is
+      # /home/deploy, so SSH keys must be mounted there (not /root/.ssh).
+      - ~/.ssh:/home/deploy/.ssh:ro
     depends_on:
       postgres:
         condition: service_healthy

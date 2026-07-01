@@ -60,15 +60,17 @@ WHERE id = $1
 RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
 
 -- name: ListProjects :many
-SELECT id, name, slug, description, created_at, updated_at
-FROM projects
-ORDER BY name;
+SELECT p.id, p.name, p.slug, p.description, p.created_at, p.updated_at, p.default_registry_id,
+       cr.name AS default_registry_name
+FROM projects p
+LEFT JOIN container_registries cr ON cr.id = p.default_registry_id
+ORDER BY p.name;
 
 -- name: CreateProjectWithDefaultEnvironments :one
 WITH created_project AS (
     INSERT INTO projects (name, slug, description)
     VALUES ($1, $2, $3)
-    RETURNING id, name, slug, description, created_at, updated_at
+    RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
 ),
 created_environments AS (
     INSERT INTO environments (project_id, name, slug, kind, is_ephemeral)
@@ -77,13 +79,20 @@ created_environments AS (
     SELECT id, 'Development', 'development', 'development', false FROM created_project
     RETURNING id
 )
-SELECT id, name, slug, description, created_at, updated_at
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id
 FROM created_project;
 
 -- name: GetProject :one
-SELECT id, name, slug, description, created_at, updated_at
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id
 FROM projects
 WHERE id = $1;
+
+-- name: UpdateProjectRegistry :one
+UPDATE projects
+SET default_registry_id = sqlc.narg(default_registry_id)::uuid,
+    updated_at = now()
+WHERE id = sqlc.arg(id)::uuid
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id;
 
 -- name: ListEnvironments :many
 SELECT e.id, e.project_id, e.name, e.slug, e.kind, e.is_ephemeral, e.pull_request_number, e.branch, e.expires_at, e.created_at, e.updated_at,
@@ -110,7 +119,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, project_id, name, slug, kind, is_ephemeral, pull_request_number, branch, expires_at, created_at, updated_at;
 
 -- name: ListApplications :many
-SELECT a.id, a.environment_id, a.server_id, a.name, a.repository_url, a.branch, a.compose_path, a.remote_directory, a.domain, a.health_check_url, a.doppler_project, a.doppler_config, a.status, a.current_version, a.target_version, a.created_at, a.updated_at,
+SELECT a.id, a.environment_id, a.server_id, a.name, a.repository_url, a.branch, a.compose_path, a.remote_directory, a.domain, a.health_check_url, a.doppler_project, a.doppler_config, a.status, a.current_version, a.target_version, a.created_at, a.updated_at, a.github_auto_deploy,
        s.name AS server_name,
        e.name AS environment_name,
        e.slug AS environment_slug,
@@ -118,28 +127,32 @@ SELECT a.id, a.environment_id, a.server_id, a.name, a.repository_url, a.branch, 
        e.is_ephemeral AS environment_is_ephemeral,
        p.id AS project_id,
        p.name AS project_name,
-       p.slug AS project_slug
+       p.slug AS project_slug,
+       p.default_registry_id,
+       cr.name AS default_registry_name
 FROM applications a
 JOIN servers s ON s.id = a.server_id
 JOIN environments e ON e.id = a.environment_id
 JOIN projects p ON p.id = e.project_id
+LEFT JOIN container_registries cr ON cr.id = p.default_registry_id
 ORDER BY a.name;
 
 -- name: GetApplication :one
-SELECT id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at
+SELECT id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy
 FROM applications
 WHERE id = $1;
 
 -- name: CreateApplication :one
-INSERT INTO applications (environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at;
+INSERT INTO applications (environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, github_auto_deploy)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy;
 
 -- name: ListApplicationsForGitHubPush :many
 SELECT id, server_id, name, repository_url, branch
 FROM applications
 WHERE branch = $1
   AND repository_url = ANY(sqlc.arg(repository_urls)::text[])
+  AND github_auto_deploy = true
 ORDER BY name;
 
 -- name: UpdateApplicationStatus :one
@@ -156,10 +169,10 @@ SET status = sqlc.arg(status)::text,
     END,
     updated_at = now()
 WHERE id = sqlc.arg(id)::uuid
-RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at;
+RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy;
 
 -- name: ListDeployments :many
-SELECT d.id, d.application_id, d.server_id, d.trigger, d.strategy, d.status, d.commit_sha, d.actor, d.started_at, d.finished_at, d.created_at,
+SELECT d.id, d.application_id, d.server_id, d.trigger, d.strategy, d.status, d.commit_sha, d.actor, d.started_at, d.finished_at, d.created_at, d.image_ref, d.image_digest,
        a.name AS application_name,
        s.name AS server_name
 FROM deployments d
@@ -169,12 +182,12 @@ ORDER BY d.created_at DESC
 LIMIT $1;
 
 -- name: GetDeployment :one
-SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 FROM deployments
 WHERE id = $1;
 
 -- name: ListQueuedDeploymentsForRecovery :many
-SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 FROM deployments
 WHERE status = 'queued'
 ORDER BY created_at
@@ -186,7 +199,7 @@ WITH failed_deployments AS (
     SET status = 'failed',
         finished_at = now()
     WHERE status = 'running'
-    RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+    RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 ),
 failed_applications AS (
     UPDATE applications
@@ -202,6 +215,8 @@ SELECT failed_deployments.id,
        failed_deployments.strategy,
        failed_deployments.status,
        failed_deployments.commit_sha,
+       failed_deployments.image_ref,
+       failed_deployments.image_digest,
        failed_deployments.actor,
        failed_deployments.started_at,
        failed_deployments.finished_at,
@@ -212,6 +227,8 @@ FROM failed_deployments;
 SELECT d.id AS deployment_id,
        d.strategy,
        d.commit_sha,
+       d.image_ref,
+       d.image_digest,
        a.id AS application_id,
        a.name AS application_name,
        a.repository_url,
@@ -235,17 +252,19 @@ JOIN servers s ON s.id = d.server_id
 WHERE d.id = $1;
 
 -- name: CreateDeployment :one
-INSERT INTO deployments (application_id, server_id, trigger, strategy, status, commit_sha, actor)
+INSERT INTO deployments (application_id, server_id, trigger, strategy, status, commit_sha, image_ref, image_digest, actor)
 SELECT applications.id,
        applications.server_id,
        sqlc.arg(trigger)::text,
        sqlc.arg(strategy)::text,
        'queued',
        sqlc.narg(commit_sha)::text,
+       sqlc.narg(image_ref)::text,
+       sqlc.narg(image_digest)::text,
        sqlc.narg(actor)::text
 FROM applications
 WHERE applications.id = sqlc.arg(application_id)::uuid
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at;
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest;
 
 -- name: UpdateDeploymentStatus :one
 UPDATE deployments
@@ -253,7 +272,7 @@ SET status = $2,
     started_at = COALESCE(started_at, CASE WHEN $2 = 'running' THEN now() ELSE started_at END),
     finished_at = CASE WHEN $2 IN ('succeeded', 'failed', 'cancelled') THEN now() ELSE finished_at END
 WHERE id = $1
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at;
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest;
 
 -- name: StartQueuedDeployment :one
 UPDATE deployments
@@ -261,7 +280,7 @@ SET status = 'running',
     started_at = COALESCE(started_at, now())
 WHERE id = $1
   AND status = 'queued'
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at;
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest;
 
 -- name: CancelQueuedDeployment :one
 UPDATE deployments
@@ -269,7 +288,47 @@ SET status = 'cancelled',
     finished_at = now()
 WHERE id = $1
   AND status = 'queued'
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at;
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest;
+
+-- name: GetActiveDeploymentSlot :one
+SELECT id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+FROM application_deployment_slots
+WHERE application_id = $1
+  AND server_id = $2
+  AND status = 'active'
+ORDER BY updated_at DESC
+LIMIT 1;
+
+-- name: GetStandbyDeploymentSlot :one
+SELECT id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+FROM application_deployment_slots
+WHERE application_id = $1
+  AND server_id = $2
+  AND status = 'standby'
+ORDER BY updated_at DESC
+LIMIT 1;
+
+-- name: UpsertDeploymentSlot :one
+INSERT INTO application_deployment_slots (application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 = 'active' THEN now() ELSE NULL END)
+ON CONFLICT (application_id, server_id, color) DO UPDATE
+SET deployment_id = excluded.deployment_id,
+    image_ref = excluded.image_ref,
+    image_digest = excluded.image_digest,
+    status = excluded.status,
+    promoted_at = excluded.promoted_at,
+    updated_at = now()
+RETURNING id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at;
+
+-- name: ActivateDeploymentSlot :many
+UPDATE application_deployment_slots
+SET status = CASE WHEN color = sqlc.arg(color)::text THEN 'active' ELSE 'standby' END,
+    promoted_at = CASE WHEN color = sqlc.arg(color)::text THEN now() ELSE promoted_at END,
+    updated_at = now()
+WHERE application_id = sqlc.arg(application_id)::uuid
+  AND server_id = sqlc.arg(server_id)::uuid
+  AND status IN ('active', 'standby')
+RETURNING id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at;
 
 -- name: ListProxyRoutes :many
 SELECT pr.id,
@@ -282,6 +341,8 @@ SELECT pr.id,
        pr.last_applied_at,
        pr.created_at,
        pr.updated_at,
+       pr.blue_upstream_url,
+       pr.green_upstream_url,
        s.name AS server_name,
        s.proxy_type,
        a.name AS application_name
@@ -291,15 +352,17 @@ LEFT JOIN applications a ON a.id = pr.application_id
 ORDER BY pr.domain;
 
 -- name: CreateProxyRoute :one
-INSERT INTO proxy_routes (server_id, application_id, domain, upstream_url, tls_enabled)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO proxy_routes (server_id, application_id, domain, upstream_url, tls_enabled, blue_upstream_url, green_upstream_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (server_id, domain) DO UPDATE
 SET application_id = excluded.application_id,
     upstream_url = excluded.upstream_url,
     tls_enabled = excluded.tls_enabled,
+    blue_upstream_url = excluded.blue_upstream_url,
+    green_upstream_url = excluded.green_upstream_url,
     status = 'pending',
     updated_at = now()
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at;
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url;
 
 -- name: GetProxyRouteTarget :one
 SELECT pr.id,
@@ -309,6 +372,8 @@ SELECT pr.id,
        pr.upstream_url,
        pr.tls_enabled,
        pr.status,
+       pr.blue_upstream_url,
+       pr.green_upstream_url,
        s.name AS server_name,
        s.hostname,
        s.ssh_user,
@@ -327,6 +392,8 @@ SELECT pr.id,
        pr.upstream_url,
        pr.tls_enabled,
        pr.status,
+       pr.blue_upstream_url,
+       pr.green_upstream_url,
        s.name AS server_name,
        s.hostname,
        s.ssh_user,
@@ -343,13 +410,21 @@ ORDER BY pr.domain;
 UPDATE proxy_routes
 SET status = 'applied', last_applied_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at;
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url;
+
+-- name: UpdateProxyRouteUpstream :one
+UPDATE proxy_routes
+SET upstream_url = $2,
+    status = 'pending',
+    updated_at = now()
+WHERE id = $1
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url;
 
 -- name: MarkProxyRouteFailed :one
 UPDATE proxy_routes
 SET status = 'failed', updated_at = now()
 WHERE id = $1
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at;
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url;
 
 -- name: AppendDeploymentLog :one
 INSERT INTO deployment_logs (deployment_id, stream, message)
@@ -484,6 +559,29 @@ SET last_sync_status = excluded.last_sync_status,
     last_synced_at = now(),
     updated_at = now()
 RETURNING id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at;
+
+-- name: ListContainerRegistries :many
+SELECT id, name, provider, registry_host, namespace, repository, default_image, enabled, created_at, updated_at
+FROM container_registries
+ORDER BY enabled DESC, name;
+
+-- name: GetContainerRegistry :one
+SELECT id, name, provider, registry_host, namespace, repository, default_image, enabled, created_at, updated_at
+FROM container_registries
+WHERE id = $1;
+
+-- name: UpsertContainerRegistry :one
+INSERT INTO container_registries (name, provider, registry_host, namespace, repository, default_image, enabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (name) DO UPDATE
+SET provider = excluded.provider,
+    registry_host = excluded.registry_host,
+    namespace = excluded.namespace,
+    repository = excluded.repository,
+    default_image = excluded.default_image,
+    enabled = excluded.enabled,
+    updated_at = now()
+RETURNING id, name, provider, registry_host, namespace, repository, default_image, enabled, created_at, updated_at;
 
 -- name: ListAuditEvents :many
 SELECT id, actor, action, target_type, target_id, target_name, metadata, created_at

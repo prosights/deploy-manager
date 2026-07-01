@@ -38,11 +38,14 @@ export function ConnectorsRoute() {
 
   function submit() {
     setFormError(undefined)
+    let input: UpsertConnectorInput
     try {
-      save.mutate(connectorInput(form))
+      input = connectorInput(form)
     } catch (error) {
       setFormError(error instanceof Error ? error.message : 'Connector metadata must be valid JSON.')
+      return
     }
+    save.mutate(input)
   }
 
   return (

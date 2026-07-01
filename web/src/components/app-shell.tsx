@@ -1,30 +1,51 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { Boxes, Cable, ChevronLeft, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Moon, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
-import { useSuspenseQuery } from '@tanstack/react-query'
+import { Boxes, Cable, ChevronLeft, Container, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Layers3, Monitor, Moon, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
+import { useSuspenseQueries } from '@tanstack/react-query'
 import type { CSSProperties } from 'react'
-import { useEffect } from 'react'
+import { Suspense, useEffect, useState } from 'react'
+import type { InstanceSettings } from '../lib/api'
 import { environmentsQuery, projectsQuery, settingsQuery } from '../lib/queries'
-import { useUiStore } from '../store/ui'
+import { nextTheme, useUiStore } from '../store/ui'
 import { Button } from './ui/button'
 import { cn } from '../lib/cn'
 
-const nav = [
+const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
   { to: '/', label: 'Overview', icon: Gauge },
   { to: '/projects', label: 'Projects', icon: FolderKanban },
-  { to: '/servers', label: 'Servers', icon: Server },
-  { to: '/applications', label: 'Applications', icon: Boxes },
   { to: '/deployments', label: 'Deployments', icon: Rocket },
+  { to: '/servers', label: 'Servers', icon: Server },
   { to: '/credentials', label: 'Credentials', icon: KeyRound },
   { to: '/connectors', label: 'Connectors', icon: Cable },
-  { to: '/proxy', label: 'Proxy', icon: Route },
   { to: '/audit', label: 'Audit', icon: FileClock },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
+const projectNav: Array<{ hash: string, label: string, icon: typeof Gauge }> = [
+  { hash: 'overview', label: 'Overview', icon: Layers3 },
+  { hash: 'environments', label: 'Environments', icon: GitBranch },
+  { hash: 'targets', label: 'Deploy Targets', icon: Boxes },
+  { hash: 'registry', label: 'Registry', icon: Container },
+  { hash: 'routes', label: 'Proxy Routes', icon: Route },
+  { hash: 'settings', label: 'Settings', icon: Settings },
+]
+
+const defaultSettings: InstanceSettings = {
+  name: 'Deploy Manager',
+  short_name: 'Deploy',
+  meta_description: 'Internal deployment control plane',
+  logo_url: '/branding/prosights/logo.svg',
+  favicon_url: '/branding/prosights/favicon.png',
+  primary_color: '#0980fd',
+  docs_url: '#',
+}
+
 export function AppShell() {
-  const { data: settings } = useSuspenseQuery(settingsQuery)
-  const { data: projects } = useSuspenseQuery(projectsQuery)
-  const { data: environments } = useSuspenseQuery(environmentsQuery)
+  const [settingsResult, projectsResult, environmentsResult] = useSuspenseQueries({
+    queries: [settingsQuery, projectsQuery, environmentsQuery],
+  })
+  const settings: InstanceSettings = settingsResult.data ?? defaultSettings
+  const projects = projectsResult.data
+  const environments = environmentsResult.data
   const location = useLocation()
   const collapsed = useUiStore((state) => state.sidebarCollapsed)
   const searchQuery = useUiStore((state) => state.searchQuery)
@@ -40,6 +61,7 @@ export function AppShell() {
   } as CSSProperties
   const activeProject = projects[0]
   const activeEnvironments = activeProject ? environments.filter((environment) => environment.project_id === activeProject.id) : []
+  const projectSection = activeProject ? projectSectionFromHash(location.hash) : ''
   const contextLabel = activeProject
     ? `${activeProject.slug} / ${activeEnvironments.length} env${activeEnvironments.length === 1 ? '' : 's'}`
     : 'no projects'
@@ -74,17 +96,38 @@ export function AppShell() {
               const active = location.pathname === item.to
               const Icon = item.icon
               return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  className={cn(
-                    'flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
-                    active && 'bg-accent/15 text-accent-text',
-                  )}
-                >
-                  <Icon className="size-4 shrink-0" aria-hidden="true" />
-                  {!collapsed && <span className="truncate">{item.label}</span>}
-                </Link>
+                <div key={item.to}>
+                  <Link
+                    to={item.to}
+                    className={cn(
+                      'flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
+                      active && 'bg-accent/15 text-accent-text',
+                    )}
+                  >
+                    <Icon className="size-4 shrink-0" aria-hidden="true" />
+                    {!collapsed && <span className="truncate">{item.label}</span>}
+                  </Link>
+                {item.to === '/projects' && !collapsed && active && activeProject && (
+                  <div className="ml-6 mt-1 space-y-1 border-l pl-2">
+                    {projectNav.map((projectItem) => {
+                      const ProjectIcon = projectItem.icon
+                      return (
+                        <a
+                          key={projectItem.hash}
+                          href={`/projects#${projectItem.hash}`}
+                          className={cn(
+                            'flex h-8 items-center gap-2 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
+                            projectSection === projectItem.hash && 'bg-accent/15 text-accent-text',
+                          )}
+                        >
+                          <ProjectIcon className="size-3.5 shrink-0" aria-hidden="true" />
+                          <span className="truncate">{projectItem.label}</span>
+                        </a>
+                      )
+                    })}
+                  </div>
+                )}
+                </div>
               )
             })}
           </nav>
@@ -116,23 +159,43 @@ export function AppShell() {
             <Button
               variant="ghost"
               className="size-9 p-0"
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              aria-label="Toggle theme"
+              onClick={() => setTheme(nextTheme(theme))}
+              aria-label={`Theme: ${theme}. Click to switch.`}
             >
               {theme === 'light'
-                ? <Moon className="size-4" />
-                : <Sun className="size-4" />
+                ? <Sun className="size-4" />
+                : theme === 'dark'
+                  ? <Moon className="size-4" />
+                  : <Monitor className="size-4" />
               }
             </Button>
             <span className="text-sm text-muted">All systems auditable</span>
           </div>
         </header>
         <div className="p-5">
-          <Outlet />
+          <Suspense fallback={<DeferredFallback />}>
+            <Outlet />
+          </Suspense>
         </div>
       </main>
     </div>
   )
+}
+
+function projectSectionFromHash(hash: string): string {
+  const value = hash.replace(/^#/, '')
+  return projectNav.some((item) => item.hash === value) ? value : 'overview'
+}
+
+// ponytail: renders nothing for 150ms so fast suspense resolves invisibly
+function DeferredFallback() {
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    const id = setTimeout(() => setShow(true), 150)
+    return () => clearTimeout(id)
+  }, [])
+  if (!show) return null
+  return <div className="text-sm text-muted">Loading...</div>
 }
 
 function setMetaDescription(content: string) {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"deploy-manager/internal/stringutil"
@@ -56,6 +57,11 @@ func NewClientWithOptions(host string, port int32, user string, signer ssh.Signe
 	}
 }
 
+// maxSSHOutputBytes caps how much combined stdout+stderr we buffer from a
+// remote command. A misbehaving or compromised host could otherwise stream
+// unbounded output and exhaust memory before any downstream truncation runs.
+const maxSSHOutputBytes = 1 << 20
+
 func (c Client) Run(ctx context.Context, command string) (string, error) {
 	sshClient, err := c.connect(ctx)
 	if err != nil {
@@ -69,21 +75,50 @@ func (c Client) Run(ctx context.Context, command string) (string, error) {
 	}
 	defer session.Close()
 
-	done := make(chan struct{})
-	var output []byte
-	var runErr error
+	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
+	session.Stdout = buffer
+	session.Stderr = buffer
+
+	done := make(chan error, 1)
 	go func() {
-		output, runErr = session.CombinedOutput(command)
-		close(done)
+		done <- session.Run(command)
 	}()
 
 	select {
 	case <-ctx.Done():
 		_ = session.Signal(ssh.SIGKILL)
-		return string(output), ctx.Err()
-	case <-done:
-		return string(output), runErr
+		return "", ctx.Err()
+	case runErr := <-done:
+		return buffer.String(), runErr
 	}
+}
+
+// cappedBuffer accumulates output up to limit bytes and silently discards the
+// rest. Writes never fail so the underlying SSH session is not torn down by a
+// short-write error; we simply stop retaining bytes once the cap is reached.
+type cappedBuffer struct {
+	mu    sync.Mutex
+	buf   []byte
+	limit int
+}
+
+func (b *cappedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if remaining := b.limit - len(b.buf); remaining > 0 {
+		if len(p) > remaining {
+			b.buf = append(b.buf, p[:remaining]...)
+		} else {
+			b.buf = append(b.buf, p...)
+		}
+	}
+	return len(p), nil
+}
+
+func (b *cappedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
 }
 
 func (c Client) connect(ctx context.Context) (*ssh.Client, error) {

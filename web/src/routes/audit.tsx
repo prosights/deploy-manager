@@ -1,4 +1,5 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
+import { useMemo } from 'react'
 import { PageHeader } from '../components/page-header'
 import { Badge } from '../components/ui/badge'
 import { Panel } from '../components/ui/panel'
@@ -9,14 +10,8 @@ import { useUiStore } from '../store/ui'
 export function AuditRoute() {
   const { data: events } = useSuspenseQuery(auditEventsQuery)
   const searchQuery = useUiStore((state) => state.searchQuery)
-  const visibleEvents = events.filter((event) => matchesSearch(searchQuery, [
-    event.actor,
-    event.action,
-    event.target_type,
-    event.target_id,
-    event.target_name,
-    event.metadata,
-  ]))
+  const rows = useMemo(() => events.map(auditEventRow), [events])
+  const visibleRows = useMemo(() => rows.filter((row) => matchesSearch(searchQuery, row.searchValues)), [rows, searchQuery])
 
   return (
     <div className="space-y-5">
@@ -34,25 +29,68 @@ export function AuditRoute() {
               </tr>
             </thead>
             <tbody>
-              {visibleEvents.map((event) => (
-                <tr key={event.id} className="border-t">
-                  <td className="px-4 py-3 font-mono text-xs text-muted">{formatTime(event.created_at)}</td>
-                  <td className="px-4 py-3"><Badge tone="accent">{event.action}</Badge></td>
+              {visibleRows.map((row) => (
+                <tr key={row.id} className="border-t">
+                  <td className="px-4 py-3 font-mono text-xs text-muted">{row.createdAt}</td>
+                  <td className="px-4 py-3"><Badge tone="accent">{row.action}</Badge></td>
                   <td className="px-4 py-3">
-                    <div className="font-medium">{event.target_name}</div>
-                    <div className="text-xs text-muted">{event.target_type} / {event.target_id}</div>
+                    <div className="font-medium">{row.targetName}</div>
+                    <div className="text-xs text-muted">{row.targetType} / {row.targetID}</div>
                   </td>
-                  <td className="px-4 py-3 text-muted">{event.actor}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-muted">{formatMetadata(event.metadata)}</td>
+                  <td className="px-4 py-3 text-muted">{row.actor}</td>
+                  <td className="max-w-[520px] truncate px-4 py-3 font-mono text-xs text-muted" title={row.metadata}>{row.metadata}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {visibleEvents.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No audit events match the current search.</div>}
+        {visibleRows.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No audit events match the current search.</div>}
       </Panel>
     </div>
   )
+}
+
+type AuditEventRow = {
+  id: number
+  actor: string
+  action: string
+  targetType: string
+  targetID: string
+  targetName: string
+  metadata: string
+  createdAt: string
+  searchValues: unknown[]
+}
+
+function auditEventRow(event: {
+  id: number
+  actor: string
+  action: string
+  target_type: string
+  target_id: string
+  target_name: string
+  metadata: unknown
+  created_at: string
+}): AuditEventRow {
+  const metadata = formatMetadata(event.metadata)
+  return {
+    id: event.id,
+    actor: event.actor,
+    action: event.action,
+    targetType: event.target_type,
+    targetID: event.target_id,
+    targetName: event.target_name,
+    metadata,
+    createdAt: formatTime(event.created_at),
+    searchValues: [
+      event.actor,
+      event.action,
+      event.target_type,
+      event.target_id,
+      event.target_name,
+      metadata,
+    ],
+  }
 }
 
 function formatTime(value: string) {

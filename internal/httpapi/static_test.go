@@ -136,7 +136,7 @@ func TestUnknownAPIRouteReturnsJSONNotSPA(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/missing", nil)
-	New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, root).ServeHTTP(response, request)
+	New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, root, AuthConfig{}).ServeHTTP(response, request)
 
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", response.Code)
@@ -157,7 +157,7 @@ func TestUnknownAppRouteStillUsesSPAFallback(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/deployments/active", nil)
-	New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, root).ServeHTTP(response, request)
+	New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, root, AuthConfig{}).ServeHTTP(response, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", response.Code)

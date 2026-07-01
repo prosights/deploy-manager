@@ -52,16 +52,20 @@ export type Application = {
   project_id: string
   project_name: string
   project_slug: string
+  default_registry_id: string | null
+  default_registry_name: string | null
 }
 
 export type Deployment = {
   id: string
   application_id: string
   server_id: string
-  trigger: 'manual' | 'github_push' | 'connector_sync' | 'retry'
+  trigger: 'manual' | 'github_push' | 'connector_sync' | 'retry' | 'rollback'
   strategy: 'rolling' | 'blue_green'
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   commit_sha: string | null
+  image_ref: string | null
+  image_digest: string | null
   actor: string | null
   application_name?: string
   server_name?: string
@@ -84,6 +88,8 @@ export type ProxyRoute = {
   application_id: string | null
   domain: string
   upstream_url: string
+  blue_upstream_url: string | null
+  green_upstream_url: string | null
   tls_enabled: boolean
   status: 'pending' | 'applied' | 'failed'
   last_applied_at: string | null
@@ -97,7 +103,32 @@ export type CreateDeploymentInput = {
   trigger?: string
   strategy?: 'rolling' | 'blue_green'
   commit_sha?: string
+  image_ref?: string
+  image_digest?: string
   actor?: string
+}
+
+export type ContainerRegistry = {
+  id: string
+  name: string
+  provider: 'gcp_artifact_registry' | 'docker_hub' | 'ghcr' | 'ecr' | 'custom'
+  registry_host: string
+  namespace: string
+  repository: string
+  default_image: string
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type UpsertContainerRegistryInput = {
+  name: string
+  provider: ContainerRegistry['provider']
+  registry_host: string
+  namespace?: string
+  repository: string
+  default_image?: string
+  enabled: boolean
 }
 
 export type CreateProxyRouteInput = {
@@ -105,6 +136,8 @@ export type CreateProxyRouteInput = {
   application_id?: string
   domain: string
   upstream_url: string
+  blue_upstream_url?: string
+  green_upstream_url?: string
   tls_enabled: boolean
 }
 
@@ -136,6 +169,8 @@ export type Project = {
   name: string
   slug: string
   description: string
+  default_registry_id: string | null
+  default_registry_name?: string | null
   created_at: string
   updated_at: string
 }
@@ -301,9 +336,25 @@ export class ApiError extends Error {
   }
 }
 
+export const apiToken: string = import.meta.env.VITE_API_TOKEN ?? ''
+
+function authHeaders(): Record<string, string> {
+  return apiToken ? { Authorization: `Bearer ${apiToken}` } : {}
+}
+
+// withAccessToken appends the access_token query param used to authenticate
+// EventSource (SSE) connections, which cannot set request headers.
+export function withAccessToken(path: string): string {
+  if (!apiToken) {
+    return path
+  }
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}access_token=${encodeURIComponent(apiToken)}`
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init?.headers },
     ...init,
   })
   if (!response.ok) {
@@ -349,6 +400,26 @@ export function cancelDeployment(deploymentID: string) {
 export function retryDeployment(deploymentID: string) {
   return api<Deployment>(`/api/deployments/${deploymentID}/retry`, {
     method: 'POST',
+  })
+}
+
+export function rollbackApplication(applicationID: string) {
+  return api<Deployment>(`/api/applications/${applicationID}/rollback`, {
+    method: 'POST',
+  })
+}
+
+export function upsertContainerRegistry(input: UpsertContainerRegistryInput) {
+  return api<ContainerRegistry>('/api/container-registries', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateProjectRegistry(projectID: string, defaultRegistryID?: string) {
+  return api<Project>(`/api/projects/${projectID}/registry`, {
+    method: 'PATCH',
+    body: JSON.stringify({ default_registry_id: defaultRegistryID || null }),
   })
 }
 

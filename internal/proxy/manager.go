@@ -16,6 +16,7 @@ const maxRemoteProxyOutputLength = 2048
 
 type Manager struct {
 	queries queries
+	signer  sshutil.SignerSource
 }
 
 type queries interface {
@@ -25,7 +26,7 @@ type queries interface {
 }
 
 func NewManager(queries queries) Manager {
-	return Manager{queries: queries}
+	return Manager{queries: queries, signer: sshutil.FileSigner{}}
 }
 
 func (m Manager) Apply(ctx context.Context, id pgtype.UUID) (db.ProxyRoute, error) {
@@ -47,7 +48,16 @@ func (m Manager) Apply(ctx context.Context, id pgtype.UUID) (db.ProxyRoute, erro
 		return db.ProxyRoute{}, m.markFailed(ctx, id, err)
 	}
 
-	signer, err := sshutil.LoadSigner(target.SshKeyPath.String)
+	signerSource := m.signer
+	if signerSource == nil {
+		signerSource = sshutil.FileSigner{}
+	}
+	signer, err := signerSource.Signer(ctx, sshutil.ServerRef{
+		Host:    target.Hostname,
+		Port:    target.SshPort,
+		User:    target.SshUser,
+		KeyPath: target.SshKeyPath.String,
+	})
 	if err != nil {
 		return db.ProxyRoute{}, m.markFailed(ctx, id, err)
 	}

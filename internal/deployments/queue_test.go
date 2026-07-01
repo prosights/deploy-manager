@@ -331,8 +331,8 @@ func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 	if strings.Index(joined, "config --quiet") > strings.Index(joined, "docker compose -f 'docker-compose.yml' pull") {
 		t.Fatal("expected compose config validation before image pull")
 	}
-	if !strings.Contains(joined, "docker compose -f 'docker-compose.yml' down --remove-orphans || true") {
-		t.Fatal("expected previous color cleanup")
+	if strings.Contains(joined, "down --remove-orphans") {
+		t.Fatal("did not expect previous color cleanup during warm blue-green deployment")
 	}
 }
 

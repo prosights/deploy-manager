@@ -9,23 +9,38 @@ import (
 )
 
 type Application struct {
-	ID              pgtype.UUID        `json:"id"`
-	EnvironmentID   pgtype.UUID        `json:"environment_id"`
-	ServerID        pgtype.UUID        `json:"server_id"`
-	Name            string             `json:"name"`
-	RepositoryUrl   pgtype.Text        `json:"repository_url"`
-	Branch          string             `json:"branch"`
-	ComposePath     string             `json:"compose_path"`
-	RemoteDirectory string             `json:"remote_directory"`
-	Domain          pgtype.Text        `json:"domain"`
-	HealthCheckUrl  pgtype.Text        `json:"health_check_url"`
-	DopplerProject  pgtype.Text        `json:"doppler_project"`
-	DopplerConfig   pgtype.Text        `json:"doppler_config"`
-	Status          string             `json:"status"`
-	CurrentVersion  pgtype.Text        `json:"current_version"`
-	TargetVersion   pgtype.Text        `json:"target_version"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID               pgtype.UUID        `json:"id"`
+	EnvironmentID    pgtype.UUID        `json:"environment_id"`
+	ServerID         pgtype.UUID        `json:"server_id"`
+	Name             string             `json:"name"`
+	RepositoryUrl    pgtype.Text        `json:"repository_url"`
+	Branch           string             `json:"branch"`
+	ComposePath      string             `json:"compose_path"`
+	RemoteDirectory  string             `json:"remote_directory"`
+	Domain           pgtype.Text        `json:"domain"`
+	HealthCheckUrl   pgtype.Text        `json:"health_check_url"`
+	DopplerProject   pgtype.Text        `json:"doppler_project"`
+	DopplerConfig    pgtype.Text        `json:"doppler_config"`
+	Status           string             `json:"status"`
+	CurrentVersion   pgtype.Text        `json:"current_version"`
+	TargetVersion    pgtype.Text        `json:"target_version"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	GithubAutoDeploy bool               `json:"github_auto_deploy"`
+}
+
+type ApplicationDeploymentSlot struct {
+	ID            pgtype.UUID        `json:"id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	ServerID      pgtype.UUID        `json:"server_id"`
+	Color         string             `json:"color"`
+	DeploymentID  pgtype.UUID        `json:"deployment_id"`
+	ImageRef      string             `json:"image_ref"`
+	ImageDigest   pgtype.Text        `json:"image_digest"`
+	Status        string             `json:"status"`
+	PromotedAt    pgtype.Timestamptz `json:"promoted_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type AuditEvent struct {
@@ -50,6 +65,19 @@ type ConnectorAccount struct {
 	LastSyncedAt    pgtype.Timestamptz `json:"last_synced_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ContainerRegistry struct {
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	Provider     string             `json:"provider"`
+	RegistryHost string             `json:"registry_host"`
+	Namespace    string             `json:"namespace"`
+	Repository   string             `json:"repository"`
+	DefaultImage string             `json:"default_image"`
+	Enabled      bool               `json:"enabled"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Credential struct {
@@ -95,6 +123,8 @@ type Deployment struct {
 	StartedAt     pgtype.Timestamptz `json:"started_at"`
 	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ImageRef      pgtype.Text        `json:"image_ref"`
+	ImageDigest   pgtype.Text        `json:"image_digest"`
 }
 
 type DeploymentLog struct {
@@ -133,25 +163,28 @@ type InstanceSetting struct {
 }
 
 type Project struct {
-	ID          pgtype.UUID        `json:"id"`
-	Name        string             `json:"name"`
-	Slug        string             `json:"slug"`
-	Description string             `json:"description"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID                pgtype.UUID        `json:"id"`
+	Name              string             `json:"name"`
+	Slug              string             `json:"slug"`
+	Description       string             `json:"description"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	DefaultRegistryID pgtype.UUID        `json:"default_registry_id"`
 }
 
 type ProxyRoute struct {
-	ID            pgtype.UUID        `json:"id"`
-	ServerID      pgtype.UUID        `json:"server_id"`
-	ApplicationID pgtype.UUID        `json:"application_id"`
-	Domain        string             `json:"domain"`
-	UpstreamUrl   string             `json:"upstream_url"`
-	TlsEnabled    bool               `json:"tls_enabled"`
-	Status        string             `json:"status"`
-	LastAppliedAt pgtype.Timestamptz `json:"last_applied_at"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID               pgtype.UUID        `json:"id"`
+	ServerID         pgtype.UUID        `json:"server_id"`
+	ApplicationID    pgtype.UUID        `json:"application_id"`
+	Domain           string             `json:"domain"`
+	UpstreamUrl      string             `json:"upstream_url"`
+	TlsEnabled       bool               `json:"tls_enabled"`
+	Status           string             `json:"status"`
+	LastAppliedAt    pgtype.Timestamptz `json:"last_applied_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	BlueUpstreamUrl  pgtype.Text        `json:"blue_upstream_url"`
+	GreenUpstreamUrl pgtype.Text        `json:"green_upstream_url"`
 }
 
 type Server struct {

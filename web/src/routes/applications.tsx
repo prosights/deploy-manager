@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
 import { useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { ApplicationCreatePanel, ApplicationList, defaultApplicationForm, type ApplicationFormState } from '../features/applications/components'
@@ -11,9 +11,9 @@ import { useUiStore } from '../store/ui'
 
 export function ApplicationsRoute() {
   const queryClient = useQueryClient()
-  const { data: applications } = useSuspenseQuery(applicationsQuery)
-  const { data: servers } = useSuspenseQuery(serversQuery)
-  const { data: environments } = useSuspenseQuery(environmentsQuery)
+  const [{ data: applications }, { data: servers }, { data: environments }] = useSuspenseQueries({
+    queries: [applicationsQuery, serversQuery, environmentsQuery],
+  })
   const searchQuery = useUiStore((state) => state.searchQuery)
   const [form, setForm] = useState(defaultApplicationForm(servers[0]?.id, environments[0]?.id))
   const [formError, setFormError] = useState<string>()

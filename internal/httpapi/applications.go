@@ -47,13 +47,12 @@ func (s Server) createApplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, applicationLookupError(err, "environment not found"))
 		return
 	}
-
 	application, err := s.queries.CreateApplication(r.Context(), input)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	s.audit(r, "application.create", "application", uuidString(application.ID), application.Name, map[string]any{"environment_id": uuidString(application.EnvironmentID), "server_id": uuidString(application.ServerID), "branch": application.Branch, "doppler_scoped": application.DopplerProject.Valid && application.DopplerConfig.Valid})
+	s.audit(r, "application.create", "application", uuidString(application.ID), application.Name, map[string]any{"environment_id": uuidString(application.EnvironmentID), "server_id": uuidString(application.ServerID), "branch": application.Branch, "doppler_scoped": application.DopplerProject.Valid && application.DopplerConfig.Valid, "github_auto_deploy": application.GithubAutoDeploy})
 	writeJSON(w, http.StatusCreated, application)
 }
 
@@ -174,7 +173,9 @@ func validateHealthCheckURL(value string) error {
 		return validationError("health_check_url cannot contain control characters")
 	}
 
-	parsed, err := url.Parse(strings.ReplaceAll(value, "{color}", "blue"))
+	value = strings.ReplaceAll(value, "{color}", "blue")
+	value = strings.ReplaceAll(value, "{port}", "3101")
+	parsed, err := url.Parse(value)
 	if err != nil {
 		return err
 	}

@@ -42,6 +42,39 @@ func (s Server) createProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, project)
 }
 
+func (s Server) updateProjectRegistry(w http.ResponseWriter, r *http.Request) {
+	projectID, err := parseUUIDParam(r, "projectID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var request updateProjectRegistryRequest
+	if err := readJSON(w, r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+	if request.DefaultRegistryID.Valid {
+		if _, err := s.queries.GetContainerRegistry(r.Context(), request.DefaultRegistryID); err != nil {
+			writeError(w, applicationLookupError(err, "registry not found"))
+			return
+		}
+	}
+	project, err := s.queries.UpdateProjectRegistry(r.Context(), db.UpdateProjectRegistryParams{
+		ID:                projectID,
+		DefaultRegistryID: request.DefaultRegistryID,
+	})
+	if err != nil {
+		writeError(w, applicationLookupError(err, "project not found"))
+		return
+	}
+	s.audit(r, "project.registry_update", "project", uuidString(project.ID), project.Name, map[string]any{"registry_configured": project.DefaultRegistryID.Valid})
+	writeJSON(w, http.StatusOK, project)
+}
+
+type updateProjectRegistryRequest struct {
+	DefaultRegistryID pgtype.UUID `json:"default_registry_id"`
+}
+
 func (s Server) listEnvironments(w http.ResponseWriter, r *http.Request) {
 	environments, err := s.queries.ListEnvironments(r.Context())
 	if err != nil {

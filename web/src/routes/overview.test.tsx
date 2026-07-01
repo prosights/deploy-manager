@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { OverviewRoute } from './overview'
+import { TestRouter } from '../test/router'
 
 vi.mock('../lib/queries', () => ({
   applicationsQuery: {
@@ -104,7 +105,9 @@ describe('OverviewRoute', () => {
 
     render(
       <QueryClientProvider client={client}>
-        <OverviewRoute />
+        <TestRouter>
+          <OverviewRoute />
+        </TestRouter>
       </QueryClientProvider>,
     )
 

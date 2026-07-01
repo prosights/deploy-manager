@@ -87,6 +87,7 @@ describe('CredentialsRoute', () => {
     renderRoute()
 
     expect(await screen.findByText('GitHub deploy key')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /inspect/i }))
     expect(screen.getByText('Permissions')).toBeInTheDocument()
     expect(screen.getByText('Used by')).toBeInTheDocument()
     expect(await screen.findByText('Reference')).toBeInTheDocument()

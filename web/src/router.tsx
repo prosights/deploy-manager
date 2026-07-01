@@ -9,6 +9,7 @@ import { ApplicationsRoute } from './routes/applications'
 import { DeploymentsRoute } from './routes/deployments'
 import { CredentialsRoute } from './routes/credentials'
 import { ConnectorsRoute } from './routes/connectors'
+import { RegistriesRoute } from './routes/registries'
 import { ProxyRoute } from './routes/proxy'
 import { AuditRoute } from './routes/audit'
 import { SettingsRoute } from './routes/settings'
@@ -19,67 +20,19 @@ const rootRoute = createRootRoute({
   notFoundComponent: AppNotFound,
 })
 
-const indexRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/',
-  component: OverviewRoute,
-})
-
-const serversRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/servers',
-  component: ServersRoute,
-})
-
-const projectsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/projects',
-  component: ProjectsRoute,
-})
-
-const applicationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/applications',
-  component: ApplicationsRoute,
-})
-
-const deploymentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/deployments',
-  component: DeploymentsRoute,
-})
-
-const credentialsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/credentials',
-  component: CredentialsRoute,
-})
-
-const connectorsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/connectors',
-  component: ConnectorsRoute,
-})
-
-const proxyRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/proxy',
-  component: ProxyRoute,
-})
-
-const auditRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/audit',
-  component: AuditRoute,
-})
-
-const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/settings',
-  component: SettingsRoute,
-})
-
-const routeTree = rootRoute.addChildren([indexRoute, projectsRoute, serversRoute, applicationsRoute, deploymentsRoute, credentialsRoute, connectorsRoute, proxyRoute, auditRoute, settingsRoute])
+const routeTree = rootRoute.addChildren([
+  createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/projects', component: ProjectsRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/servers', component: ServersRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/applications', component: ApplicationsRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/deployments', component: DeploymentsRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/credentials', component: CredentialsRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/connectors', component: ConnectorsRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/registries', component: RegistriesRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/proxy', component: ProxyRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/audit', component: AuditRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: SettingsRoute }),
+])
 
 export const router = createRouter({ routeTree })
 

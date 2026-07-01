@@ -13,6 +13,8 @@ export type ProxyFormState = {
   application_id: string
   domain: string
   upstream_url: string
+  blue_upstream_url: string
+  green_upstream_url: string
   tls_enabled: boolean
 }
 
@@ -22,6 +24,8 @@ export function defaultProxyForm(serverID = ''): ProxyFormState {
     application_id: '',
     domain: '',
     upstream_url: 'http://127.0.0.1:3000',
+    blue_upstream_url: '',
+    green_upstream_url: '',
     tls_enabled: true,
   }
 }
@@ -82,6 +86,8 @@ export function ProxyRouteForm({
             {isSaving ? 'Saving...' : 'Save'}
           </Button>
         </div>
+        <TextInput label="Blue upstream" value={form.blue_upstream_url} onChange={(blue_upstream_url) => onChange({ blue_upstream_url })} placeholder="http://127.0.0.1:3101" />
+        <TextInput label="Green upstream" value={form.green_upstream_url} onChange={(green_upstream_url) => onChange({ green_upstream_url })} placeholder="http://127.0.0.1:3102" />
       </form>
       {selectedApplication && <div className="border-t px-4 py-3 text-sm text-muted">Linked to {selectedApplication.name} on {selectedApplication.server_name}. Server selection is derived from the application target.</div>}
       {errorMessage && <PanelError message={errorMessage} />}
@@ -117,7 +123,14 @@ export function ProxyRouteList({ routes, isApplying, errorMessage, onApply }: Pr
               <tr key={route.id} className="border-t">
                 <td className="px-4 py-3 font-medium">{route.domain}</td>
                 <td className="px-4 py-3 text-muted">{route.application_name ?? route.server_name} / {route.proxy_type}</td>
-                <td className="px-4 py-3 text-muted">{route.upstream_url}</td>
+                <td className="px-4 py-3 text-muted">
+                  <div>{route.upstream_url}</div>
+                  {(route.blue_upstream_url || route.green_upstream_url) && (
+                    <div className="mt-1 font-mono text-xs text-muted">
+                      blue {route.blue_upstream_url ?? '-'} / green {route.green_upstream_url ?? '-'}
+                    </div>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-muted">{route.tls_enabled ? 'On' : 'Off'}</td>
                 <td className="px-4 py-3">
                   <Badge tone={statusTone(route.status)}>{route.status}</Badge>

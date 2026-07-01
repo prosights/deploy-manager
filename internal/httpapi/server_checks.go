@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"deploy-manager/internal/db"
 	"deploy-manager/internal/dockerx"
@@ -24,11 +25,18 @@ type dockerEngineChecker interface {
 	Check(context.Context, db.Server) (dockerx.EngineStatus, error)
 }
 
-type sshHealthCheck struct{}
+type sshHealthCheck struct {
+	signer sshutil.SignerSource
+}
 
 type dockerEngineCheck struct{}
 
 var errDockerCheckSkipped = errors.New("docker check skipped because ssh failed")
+
+// serverCheckTimeout bounds how long a synchronous connectivity check may tie
+// up a request goroutine and SSH connection, independent of how long the client
+// is willing to wait.
+const serverCheckTimeout = 30 * time.Second
 
 func (s Server) checkServer(w http.ResponseWriter, r *http.Request) {
 	serverID, err := parseUUIDParam(r, "serverID")
@@ -47,7 +55,9 @@ func (s Server) checkServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	check := s.runServerChecks(r.Context(), server)
+	checkCtx, cancel := context.WithTimeout(r.Context(), serverCheckTimeout)
+	defer cancel()
+	check := s.runServerChecks(checkCtx, server)
 
 	updated, updateErr := s.queries.UpdateServerHealth(r.Context(), db.UpdateServerHealthParams{
 		ID:          server.ID,
@@ -129,8 +139,17 @@ func (s Server) dockerEngineChecker() dockerEngineChecker {
 	return dockerEngineCheck{}
 }
 
-func (sshHealthCheck) Check(ctx context.Context, server db.Server) (sshutil.HealthResult, error) {
-	signer, err := sshutil.LoadSigner(server.SshKeyPath.String)
+func (c sshHealthCheck) Check(ctx context.Context, server db.Server) (sshutil.HealthResult, error) {
+	signerSource := c.signer
+	if signerSource == nil {
+		signerSource = sshutil.FileSigner{}
+	}
+	signer, err := signerSource.Signer(ctx, sshutil.ServerRef{
+		Host:    server.Hostname,
+		Port:    server.SshPort,
+		User:    server.SshUser,
+		KeyPath: server.SshKeyPath.String,
+	})
 	if err != nil {
 		return sshutil.HealthResult{}, err
 	}

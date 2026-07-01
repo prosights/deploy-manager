@@ -11,6 +11,55 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const activateDeploymentSlot = `-- name: ActivateDeploymentSlot :many
+UPDATE application_deployment_slots
+SET status = CASE WHEN color = $1::text THEN 'active' ELSE 'standby' END,
+    promoted_at = CASE WHEN color = $1::text THEN now() ELSE promoted_at END,
+    updated_at = now()
+WHERE application_id = $2::uuid
+  AND server_id = $3::uuid
+  AND status IN ('active', 'standby')
+RETURNING id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+`
+
+type ActivateDeploymentSlotParams struct {
+	Color         string      `json:"color"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+}
+
+func (q *Queries) ActivateDeploymentSlot(ctx context.Context, arg ActivateDeploymentSlotParams) ([]ApplicationDeploymentSlot, error) {
+	rows, err := q.db.Query(ctx, activateDeploymentSlot, arg.Color, arg.ApplicationID, arg.ServerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ApplicationDeploymentSlot{}
+	for rows.Next() {
+		var i ApplicationDeploymentSlot
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.ServerID,
+			&i.Color,
+			&i.DeploymentID,
+			&i.ImageRef,
+			&i.ImageDigest,
+			&i.Status,
+			&i.PromotedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const appendAuditEvent = `-- name: AppendAuditEvent :one
 INSERT INTO audit_events (actor, action, target_type, target_id, target_name, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -80,7 +129,7 @@ SET status = 'cancelled',
     finished_at = now()
 WHERE id = $1
   AND status = 'queued'
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 `
 
 func (q *Queries) CancelQueuedDeployment(ctx context.Context, id pgtype.UUID) (Deployment, error) {
@@ -98,28 +147,31 @@ func (q *Queries) CancelQueuedDeployment(ctx context.Context, id pgtype.UUID) (D
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.CreatedAt,
+		&i.ImageRef,
+		&i.ImageDigest,
 	)
 	return i, err
 }
 
 const createApplication = `-- name: CreateApplication :one
-INSERT INTO applications (environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at
+INSERT INTO applications (environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, github_auto_deploy)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy
 `
 
 type CreateApplicationParams struct {
-	EnvironmentID   pgtype.UUID `json:"environment_id"`
-	ServerID        pgtype.UUID `json:"server_id"`
-	Name            string      `json:"name"`
-	RepositoryUrl   pgtype.Text `json:"repository_url"`
-	Branch          string      `json:"branch"`
-	ComposePath     string      `json:"compose_path"`
-	RemoteDirectory string      `json:"remote_directory"`
-	Domain          pgtype.Text `json:"domain"`
-	HealthCheckUrl  pgtype.Text `json:"health_check_url"`
-	DopplerProject  pgtype.Text `json:"doppler_project"`
-	DopplerConfig   pgtype.Text `json:"doppler_config"`
+	EnvironmentID    pgtype.UUID `json:"environment_id"`
+	ServerID         pgtype.UUID `json:"server_id"`
+	Name             string      `json:"name"`
+	RepositoryUrl    pgtype.Text `json:"repository_url"`
+	Branch           string      `json:"branch"`
+	ComposePath      string      `json:"compose_path"`
+	RemoteDirectory  string      `json:"remote_directory"`
+	Domain           pgtype.Text `json:"domain"`
+	HealthCheckUrl   pgtype.Text `json:"health_check_url"`
+	DopplerProject   pgtype.Text `json:"doppler_project"`
+	DopplerConfig    pgtype.Text `json:"doppler_config"`
+	GithubAutoDeploy bool        `json:"github_auto_deploy"`
 }
 
 func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationParams) (Application, error) {
@@ -135,6 +187,7 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		arg.HealthCheckUrl,
 		arg.DopplerProject,
 		arg.DopplerConfig,
+		arg.GithubAutoDeploy,
 	)
 	var i Application
 	err := row.Scan(
@@ -155,28 +208,33 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.TargetVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GithubAutoDeploy,
 	)
 	return i, err
 }
 
 const createDeployment = `-- name: CreateDeployment :one
-INSERT INTO deployments (application_id, server_id, trigger, strategy, status, commit_sha, actor)
+INSERT INTO deployments (application_id, server_id, trigger, strategy, status, commit_sha, image_ref, image_digest, actor)
 SELECT applications.id,
        applications.server_id,
        $1::text,
        $2::text,
        'queued',
        $3::text,
-       $4::text
+       $4::text,
+       $5::text,
+       $6::text
 FROM applications
-WHERE applications.id = $5::uuid
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+WHERE applications.id = $7::uuid
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 `
 
 type CreateDeploymentParams struct {
 	Trigger       string      `json:"trigger"`
 	Strategy      string      `json:"strategy"`
 	CommitSha     pgtype.Text `json:"commit_sha"`
+	ImageRef      pgtype.Text `json:"image_ref"`
+	ImageDigest   pgtype.Text `json:"image_digest"`
 	Actor         pgtype.Text `json:"actor"`
 	ApplicationID pgtype.UUID `json:"application_id"`
 }
@@ -186,6 +244,8 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		arg.Trigger,
 		arg.Strategy,
 		arg.CommitSha,
+		arg.ImageRef,
+		arg.ImageDigest,
 		arg.Actor,
 		arg.ApplicationID,
 	)
@@ -202,6 +262,8 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.CreatedAt,
+		&i.ImageRef,
+		&i.ImageDigest,
 	)
 	return i, err
 }
@@ -255,7 +317,7 @@ const createProjectWithDefaultEnvironments = `-- name: CreateProjectWithDefaultE
 WITH created_project AS (
     INSERT INTO projects (name, slug, description)
     VALUES ($1, $2, $3)
-    RETURNING id, name, slug, description, created_at, updated_at
+    RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
 ),
 created_environments AS (
     INSERT INTO environments (project_id, name, slug, kind, is_ephemeral)
@@ -264,7 +326,7 @@ created_environments AS (
     SELECT id, 'Development', 'development', 'development', false FROM created_project
     RETURNING id
 )
-SELECT id, name, slug, description, created_at, updated_at
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id
 FROM created_project
 `
 
@@ -275,12 +337,13 @@ type CreateProjectWithDefaultEnvironmentsParams struct {
 }
 
 type CreateProjectWithDefaultEnvironmentsRow struct {
-	ID          pgtype.UUID        `json:"id"`
-	Name        string             `json:"name"`
-	Slug        string             `json:"slug"`
-	Description string             `json:"description"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID                pgtype.UUID        `json:"id"`
+	Name              string             `json:"name"`
+	Slug              string             `json:"slug"`
+	Description       string             `json:"description"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	DefaultRegistryID pgtype.UUID        `json:"default_registry_id"`
 }
 
 func (q *Queries) CreateProjectWithDefaultEnvironments(ctx context.Context, arg CreateProjectWithDefaultEnvironmentsParams) (CreateProjectWithDefaultEnvironmentsRow, error) {
@@ -293,28 +356,33 @@ func (q *Queries) CreateProjectWithDefaultEnvironments(ctx context.Context, arg 
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultRegistryID,
 	)
 	return i, err
 }
 
 const createProxyRoute = `-- name: CreateProxyRoute :one
-INSERT INTO proxy_routes (server_id, application_id, domain, upstream_url, tls_enabled)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO proxy_routes (server_id, application_id, domain, upstream_url, tls_enabled, blue_upstream_url, green_upstream_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (server_id, domain) DO UPDATE
 SET application_id = excluded.application_id,
     upstream_url = excluded.upstream_url,
     tls_enabled = excluded.tls_enabled,
+    blue_upstream_url = excluded.blue_upstream_url,
+    green_upstream_url = excluded.green_upstream_url,
     status = 'pending',
     updated_at = now()
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url
 `
 
 type CreateProxyRouteParams struct {
-	ServerID      pgtype.UUID `json:"server_id"`
-	ApplicationID pgtype.UUID `json:"application_id"`
-	Domain        string      `json:"domain"`
-	UpstreamUrl   string      `json:"upstream_url"`
-	TlsEnabled    bool        `json:"tls_enabled"`
+	ServerID         pgtype.UUID `json:"server_id"`
+	ApplicationID    pgtype.UUID `json:"application_id"`
+	Domain           string      `json:"domain"`
+	UpstreamUrl      string      `json:"upstream_url"`
+	TlsEnabled       bool        `json:"tls_enabled"`
+	BlueUpstreamUrl  pgtype.Text `json:"blue_upstream_url"`
+	GreenUpstreamUrl pgtype.Text `json:"green_upstream_url"`
 }
 
 func (q *Queries) CreateProxyRoute(ctx context.Context, arg CreateProxyRouteParams) (ProxyRoute, error) {
@@ -324,6 +392,8 @@ func (q *Queries) CreateProxyRoute(ctx context.Context, arg CreateProxyRoutePara
 		arg.Domain,
 		arg.UpstreamUrl,
 		arg.TlsEnabled,
+		arg.BlueUpstreamUrl,
+		arg.GreenUpstreamUrl,
 	)
 	var i ProxyRoute
 	err := row.Scan(
@@ -337,6 +407,8 @@ func (q *Queries) CreateProxyRoute(ctx context.Context, arg CreateProxyRoutePara
 		&i.LastAppliedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BlueUpstreamUrl,
+		&i.GreenUpstreamUrl,
 	)
 	return i, err
 }
@@ -507,7 +579,7 @@ WITH failed_deployments AS (
     SET status = 'failed',
         finished_at = now()
     WHERE status = 'running'
-    RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+    RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 ),
 failed_applications AS (
     UPDATE applications
@@ -523,6 +595,8 @@ SELECT failed_deployments.id,
        failed_deployments.strategy,
        failed_deployments.status,
        failed_deployments.commit_sha,
+       failed_deployments.image_ref,
+       failed_deployments.image_digest,
        failed_deployments.actor,
        failed_deployments.started_at,
        failed_deployments.finished_at,
@@ -538,6 +612,8 @@ type FailRunningDeploymentsForRecoveryRow struct {
 	Strategy      string             `json:"strategy"`
 	Status        string             `json:"status"`
 	CommitSha     pgtype.Text        `json:"commit_sha"`
+	ImageRef      pgtype.Text        `json:"image_ref"`
+	ImageDigest   pgtype.Text        `json:"image_digest"`
 	Actor         pgtype.Text        `json:"actor"`
 	StartedAt     pgtype.Timestamptz `json:"started_at"`
 	FinishedAt    pgtype.Timestamptz `json:"finished_at"`
@@ -561,6 +637,8 @@ func (q *Queries) FailRunningDeploymentsForRecovery(ctx context.Context) ([]Fail
 			&i.Strategy,
 			&i.Status,
 			&i.CommitSha,
+			&i.ImageRef,
+			&i.ImageDigest,
 			&i.Actor,
 			&i.StartedAt,
 			&i.FinishedAt,
@@ -576,8 +654,42 @@ func (q *Queries) FailRunningDeploymentsForRecovery(ctx context.Context) ([]Fail
 	return items, nil
 }
 
+const getActiveDeploymentSlot = `-- name: GetActiveDeploymentSlot :one
+SELECT id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+FROM application_deployment_slots
+WHERE application_id = $1
+  AND server_id = $2
+  AND status = 'active'
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+type GetActiveDeploymentSlotParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+}
+
+func (q *Queries) GetActiveDeploymentSlot(ctx context.Context, arg GetActiveDeploymentSlotParams) (ApplicationDeploymentSlot, error) {
+	row := q.db.QueryRow(ctx, getActiveDeploymentSlot, arg.ApplicationID, arg.ServerID)
+	var i ApplicationDeploymentSlot
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.ServerID,
+		&i.Color,
+		&i.DeploymentID,
+		&i.ImageRef,
+		&i.ImageDigest,
+		&i.Status,
+		&i.PromotedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getApplication = `-- name: GetApplication :one
-SELECT id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at
+SELECT id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy
 FROM applications
 WHERE id = $1
 `
@@ -603,6 +715,7 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 		&i.TargetVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GithubAutoDeploy,
 	)
 	return i, err
 }
@@ -625,6 +738,30 @@ func (q *Queries) GetConnectorAccount(ctx context.Context, id pgtype.UUID) (Conn
 		&i.LastSyncStatus,
 		&i.LastSyncMessage,
 		&i.LastSyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getContainerRegistry = `-- name: GetContainerRegistry :one
+SELECT id, name, provider, registry_host, namespace, repository, default_image, enabled, created_at, updated_at
+FROM container_registries
+WHERE id = $1
+`
+
+func (q *Queries) GetContainerRegistry(ctx context.Context, id pgtype.UUID) (ContainerRegistry, error) {
+	row := q.db.QueryRow(ctx, getContainerRegistry, id)
+	var i ContainerRegistry
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Provider,
+		&i.RegistryHost,
+		&i.Namespace,
+		&i.Repository,
+		&i.DefaultImage,
+		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -699,7 +836,7 @@ func (q *Queries) GetCredentialWithCounts(ctx context.Context, id pgtype.UUID) (
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 FROM deployments
 WHERE id = $1
 `
@@ -719,6 +856,8 @@ func (q *Queries) GetDeployment(ctx context.Context, id pgtype.UUID) (Deployment
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.CreatedAt,
+		&i.ImageRef,
+		&i.ImageDigest,
 	)
 	return i, err
 }
@@ -727,6 +866,8 @@ const getDeploymentTarget = `-- name: GetDeploymentTarget :one
 SELECT d.id AS deployment_id,
        d.strategy,
        d.commit_sha,
+       d.image_ref,
+       d.image_digest,
        a.id AS application_id,
        a.name AS application_name,
        a.repository_url,
@@ -754,6 +895,8 @@ type GetDeploymentTargetRow struct {
 	DeploymentID    pgtype.UUID `json:"deployment_id"`
 	Strategy        string      `json:"strategy"`
 	CommitSha       pgtype.Text `json:"commit_sha"`
+	ImageRef        pgtype.Text `json:"image_ref"`
+	ImageDigest     pgtype.Text `json:"image_digest"`
 	ApplicationID   pgtype.UUID `json:"application_id"`
 	ApplicationName string      `json:"application_name"`
 	RepositoryUrl   pgtype.Text `json:"repository_url"`
@@ -780,6 +923,8 @@ func (q *Queries) GetDeploymentTarget(ctx context.Context, id pgtype.UUID) (GetD
 		&i.DeploymentID,
 		&i.Strategy,
 		&i.CommitSha,
+		&i.ImageRef,
+		&i.ImageDigest,
 		&i.ApplicationID,
 		&i.ApplicationName,
 		&i.RepositoryUrl,
@@ -852,7 +997,7 @@ func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, name, slug, description, created_at, updated_at
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id
 FROM projects
 WHERE id = $1
 `
@@ -867,6 +1012,7 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 		&i.Description,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DefaultRegistryID,
 	)
 	return i, err
 }
@@ -879,6 +1025,8 @@ SELECT pr.id,
        pr.upstream_url,
        pr.tls_enabled,
        pr.status,
+       pr.blue_upstream_url,
+       pr.green_upstream_url,
        s.name AS server_name,
        s.hostname,
        s.ssh_user,
@@ -891,19 +1039,21 @@ WHERE pr.id = $1
 `
 
 type GetProxyRouteTargetRow struct {
-	ID            pgtype.UUID `json:"id"`
-	ServerID      pgtype.UUID `json:"server_id"`
-	ApplicationID pgtype.UUID `json:"application_id"`
-	Domain        string      `json:"domain"`
-	UpstreamUrl   string      `json:"upstream_url"`
-	TlsEnabled    bool        `json:"tls_enabled"`
-	Status        string      `json:"status"`
-	ServerName    string      `json:"server_name"`
-	Hostname      string      `json:"hostname"`
-	SshUser       string      `json:"ssh_user"`
-	SshPort       int32       `json:"ssh_port"`
-	SshKeyPath    pgtype.Text `json:"ssh_key_path"`
-	ProxyType     string      `json:"proxy_type"`
+	ID               pgtype.UUID `json:"id"`
+	ServerID         pgtype.UUID `json:"server_id"`
+	ApplicationID    pgtype.UUID `json:"application_id"`
+	Domain           string      `json:"domain"`
+	UpstreamUrl      string      `json:"upstream_url"`
+	TlsEnabled       bool        `json:"tls_enabled"`
+	Status           string      `json:"status"`
+	BlueUpstreamUrl  pgtype.Text `json:"blue_upstream_url"`
+	GreenUpstreamUrl pgtype.Text `json:"green_upstream_url"`
+	ServerName       string      `json:"server_name"`
+	Hostname         string      `json:"hostname"`
+	SshUser          string      `json:"ssh_user"`
+	SshPort          int32       `json:"ssh_port"`
+	SshKeyPath       pgtype.Text `json:"ssh_key_path"`
+	ProxyType        string      `json:"proxy_type"`
 }
 
 func (q *Queries) GetProxyRouteTarget(ctx context.Context, id pgtype.UUID) (GetProxyRouteTargetRow, error) {
@@ -917,6 +1067,8 @@ func (q *Queries) GetProxyRouteTarget(ctx context.Context, id pgtype.UUID) (GetP
 		&i.UpstreamUrl,
 		&i.TlsEnabled,
 		&i.Status,
+		&i.BlueUpstreamUrl,
+		&i.GreenUpstreamUrl,
 		&i.ServerName,
 		&i.Hostname,
 		&i.SshUser,
@@ -955,8 +1107,42 @@ func (q *Queries) GetServer(ctx context.Context, id pgtype.UUID) (Server, error)
 	return i, err
 }
 
+const getStandbyDeploymentSlot = `-- name: GetStandbyDeploymentSlot :one
+SELECT id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+FROM application_deployment_slots
+WHERE application_id = $1
+  AND server_id = $2
+  AND status = 'standby'
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+type GetStandbyDeploymentSlotParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+}
+
+func (q *Queries) GetStandbyDeploymentSlot(ctx context.Context, arg GetStandbyDeploymentSlotParams) (ApplicationDeploymentSlot, error) {
+	row := q.db.QueryRow(ctx, getStandbyDeploymentSlot, arg.ApplicationID, arg.ServerID)
+	var i ApplicationDeploymentSlot
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.ServerID,
+		&i.Color,
+		&i.DeploymentID,
+		&i.ImageRef,
+		&i.ImageDigest,
+		&i.Status,
+		&i.PromotedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listApplications = `-- name: ListApplications :many
-SELECT a.id, a.environment_id, a.server_id, a.name, a.repository_url, a.branch, a.compose_path, a.remote_directory, a.domain, a.health_check_url, a.doppler_project, a.doppler_config, a.status, a.current_version, a.target_version, a.created_at, a.updated_at,
+SELECT a.id, a.environment_id, a.server_id, a.name, a.repository_url, a.branch, a.compose_path, a.remote_directory, a.domain, a.health_check_url, a.doppler_project, a.doppler_config, a.status, a.current_version, a.target_version, a.created_at, a.updated_at, a.github_auto_deploy,
        s.name AS server_name,
        e.name AS environment_name,
        e.slug AS environment_slug,
@@ -964,11 +1150,14 @@ SELECT a.id, a.environment_id, a.server_id, a.name, a.repository_url, a.branch, 
        e.is_ephemeral AS environment_is_ephemeral,
        p.id AS project_id,
        p.name AS project_name,
-       p.slug AS project_slug
+       p.slug AS project_slug,
+       p.default_registry_id,
+       cr.name AS default_registry_name
 FROM applications a
 JOIN servers s ON s.id = a.server_id
 JOIN environments e ON e.id = a.environment_id
 JOIN projects p ON p.id = e.project_id
+LEFT JOIN container_registries cr ON cr.id = p.default_registry_id
 ORDER BY a.name
 `
 
@@ -990,6 +1179,7 @@ type ListApplicationsRow struct {
 	TargetVersion          pgtype.Text        `json:"target_version"`
 	CreatedAt              pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	GithubAutoDeploy       bool               `json:"github_auto_deploy"`
 	ServerName             string             `json:"server_name"`
 	EnvironmentName        string             `json:"environment_name"`
 	EnvironmentSlug        string             `json:"environment_slug"`
@@ -998,6 +1188,8 @@ type ListApplicationsRow struct {
 	ProjectID              pgtype.UUID        `json:"project_id"`
 	ProjectName            string             `json:"project_name"`
 	ProjectSlug            string             `json:"project_slug"`
+	DefaultRegistryID      pgtype.UUID        `json:"default_registry_id"`
+	DefaultRegistryName    pgtype.Text        `json:"default_registry_name"`
 }
 
 func (q *Queries) ListApplications(ctx context.Context) ([]ListApplicationsRow, error) {
@@ -1027,6 +1219,7 @@ func (q *Queries) ListApplications(ctx context.Context) ([]ListApplicationsRow, 
 			&i.TargetVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.GithubAutoDeploy,
 			&i.ServerName,
 			&i.EnvironmentName,
 			&i.EnvironmentSlug,
@@ -1035,6 +1228,8 @@ func (q *Queries) ListApplications(ctx context.Context) ([]ListApplicationsRow, 
 			&i.ProjectID,
 			&i.ProjectName,
 			&i.ProjectSlug,
+			&i.DefaultRegistryID,
+			&i.DefaultRegistryName,
 		); err != nil {
 			return nil, err
 		}
@@ -1051,6 +1246,7 @@ SELECT id, server_id, name, repository_url, branch
 FROM applications
 WHERE branch = $1
   AND repository_url = ANY($2::text[])
+  AND github_auto_deploy = true
 ORDER BY name
 `
 
@@ -1153,6 +1349,43 @@ func (q *Queries) ListConnectorAccounts(ctx context.Context) ([]ConnectorAccount
 			&i.LastSyncStatus,
 			&i.LastSyncMessage,
 			&i.LastSyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listContainerRegistries = `-- name: ListContainerRegistries :many
+SELECT id, name, provider, registry_host, namespace, repository, default_image, enabled, created_at, updated_at
+FROM container_registries
+ORDER BY enabled DESC, name
+`
+
+func (q *Queries) ListContainerRegistries(ctx context.Context) ([]ContainerRegistry, error) {
+	rows, err := q.db.Query(ctx, listContainerRegistries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ContainerRegistry{}
+	for rows.Next() {
+		var i ContainerRegistry
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Provider,
+			&i.RegistryHost,
+			&i.Namespace,
+			&i.Repository,
+			&i.DefaultImage,
+			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -1333,7 +1566,7 @@ func (q *Queries) ListDeploymentLogsAfter(ctx context.Context, arg ListDeploymen
 }
 
 const listDeployments = `-- name: ListDeployments :many
-SELECT d.id, d.application_id, d.server_id, d.trigger, d.strategy, d.status, d.commit_sha, d.actor, d.started_at, d.finished_at, d.created_at,
+SELECT d.id, d.application_id, d.server_id, d.trigger, d.strategy, d.status, d.commit_sha, d.actor, d.started_at, d.finished_at, d.created_at, d.image_ref, d.image_digest,
        a.name AS application_name,
        s.name AS server_name
 FROM deployments d
@@ -1355,6 +1588,8 @@ type ListDeploymentsRow struct {
 	StartedAt       pgtype.Timestamptz `json:"started_at"`
 	FinishedAt      pgtype.Timestamptz `json:"finished_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ImageRef        pgtype.Text        `json:"image_ref"`
+	ImageDigest     pgtype.Text        `json:"image_digest"`
 	ApplicationName string             `json:"application_name"`
 	ServerName      string             `json:"server_name"`
 }
@@ -1380,6 +1615,8 @@ func (q *Queries) ListDeployments(ctx context.Context, limit int32) ([]ListDeplo
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.CreatedAt,
+			&i.ImageRef,
+			&i.ImageDigest,
 			&i.ApplicationName,
 			&i.ServerName,
 		); err != nil {
@@ -1492,20 +1729,33 @@ func (q *Queries) ListEnvironmentsForProject(ctx context.Context, projectID pgty
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, name, slug, description, created_at, updated_at
-FROM projects
-ORDER BY name
+SELECT p.id, p.name, p.slug, p.description, p.created_at, p.updated_at, p.default_registry_id,
+       cr.name AS default_registry_name
+FROM projects p
+LEFT JOIN container_registries cr ON cr.id = p.default_registry_id
+ORDER BY p.name
 `
 
-func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
+type ListProjectsRow struct {
+	ID                  pgtype.UUID        `json:"id"`
+	Name                string             `json:"name"`
+	Slug                string             `json:"slug"`
+	Description         string             `json:"description"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	DefaultRegistryID   pgtype.UUID        `json:"default_registry_id"`
+	DefaultRegistryName pgtype.Text        `json:"default_registry_name"`
+}
+
+func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	rows, err := q.db.Query(ctx, listProjects)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Project{}
+	items := []ListProjectsRow{}
 	for rows.Next() {
-		var i Project
+		var i ListProjectsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
@@ -1513,6 +1763,8 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.Description,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DefaultRegistryID,
+			&i.DefaultRegistryName,
 		); err != nil {
 			return nil, err
 		}
@@ -1532,6 +1784,8 @@ SELECT pr.id,
        pr.upstream_url,
        pr.tls_enabled,
        pr.status,
+       pr.blue_upstream_url,
+       pr.green_upstream_url,
        s.name AS server_name,
        s.hostname,
        s.ssh_user,
@@ -1551,19 +1805,21 @@ type ListProxyRouteTargetsForApplicationParams struct {
 }
 
 type ListProxyRouteTargetsForApplicationRow struct {
-	ID            pgtype.UUID `json:"id"`
-	ServerID      pgtype.UUID `json:"server_id"`
-	ApplicationID pgtype.UUID `json:"application_id"`
-	Domain        string      `json:"domain"`
-	UpstreamUrl   string      `json:"upstream_url"`
-	TlsEnabled    bool        `json:"tls_enabled"`
-	Status        string      `json:"status"`
-	ServerName    string      `json:"server_name"`
-	Hostname      string      `json:"hostname"`
-	SshUser       string      `json:"ssh_user"`
-	SshPort       int32       `json:"ssh_port"`
-	SshKeyPath    pgtype.Text `json:"ssh_key_path"`
-	ProxyType     string      `json:"proxy_type"`
+	ID               pgtype.UUID `json:"id"`
+	ServerID         pgtype.UUID `json:"server_id"`
+	ApplicationID    pgtype.UUID `json:"application_id"`
+	Domain           string      `json:"domain"`
+	UpstreamUrl      string      `json:"upstream_url"`
+	TlsEnabled       bool        `json:"tls_enabled"`
+	Status           string      `json:"status"`
+	BlueUpstreamUrl  pgtype.Text `json:"blue_upstream_url"`
+	GreenUpstreamUrl pgtype.Text `json:"green_upstream_url"`
+	ServerName       string      `json:"server_name"`
+	Hostname         string      `json:"hostname"`
+	SshUser          string      `json:"ssh_user"`
+	SshPort          int32       `json:"ssh_port"`
+	SshKeyPath       pgtype.Text `json:"ssh_key_path"`
+	ProxyType        string      `json:"proxy_type"`
 }
 
 func (q *Queries) ListProxyRouteTargetsForApplication(ctx context.Context, arg ListProxyRouteTargetsForApplicationParams) ([]ListProxyRouteTargetsForApplicationRow, error) {
@@ -1583,6 +1839,8 @@ func (q *Queries) ListProxyRouteTargetsForApplication(ctx context.Context, arg L
 			&i.UpstreamUrl,
 			&i.TlsEnabled,
 			&i.Status,
+			&i.BlueUpstreamUrl,
+			&i.GreenUpstreamUrl,
 			&i.ServerName,
 			&i.Hostname,
 			&i.SshUser,
@@ -1611,6 +1869,8 @@ SELECT pr.id,
        pr.last_applied_at,
        pr.created_at,
        pr.updated_at,
+       pr.blue_upstream_url,
+       pr.green_upstream_url,
        s.name AS server_name,
        s.proxy_type,
        a.name AS application_name
@@ -1621,19 +1881,21 @@ ORDER BY pr.domain
 `
 
 type ListProxyRoutesRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	ServerID        pgtype.UUID        `json:"server_id"`
-	ApplicationID   pgtype.UUID        `json:"application_id"`
-	Domain          string             `json:"domain"`
-	UpstreamUrl     string             `json:"upstream_url"`
-	TlsEnabled      bool               `json:"tls_enabled"`
-	Status          string             `json:"status"`
-	LastAppliedAt   pgtype.Timestamptz `json:"last_applied_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	ServerName      string             `json:"server_name"`
-	ProxyType       string             `json:"proxy_type"`
-	ApplicationName pgtype.Text        `json:"application_name"`
+	ID               pgtype.UUID        `json:"id"`
+	ServerID         pgtype.UUID        `json:"server_id"`
+	ApplicationID    pgtype.UUID        `json:"application_id"`
+	Domain           string             `json:"domain"`
+	UpstreamUrl      string             `json:"upstream_url"`
+	TlsEnabled       bool               `json:"tls_enabled"`
+	Status           string             `json:"status"`
+	LastAppliedAt    pgtype.Timestamptz `json:"last_applied_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	BlueUpstreamUrl  pgtype.Text        `json:"blue_upstream_url"`
+	GreenUpstreamUrl pgtype.Text        `json:"green_upstream_url"`
+	ServerName       string             `json:"server_name"`
+	ProxyType        string             `json:"proxy_type"`
+	ApplicationName  pgtype.Text        `json:"application_name"`
 }
 
 func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ListProxyRoutesRow, error) {
@@ -1656,6 +1918,8 @@ func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ListProxyRoutesRow, er
 			&i.LastAppliedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.BlueUpstreamUrl,
+			&i.GreenUpstreamUrl,
 			&i.ServerName,
 			&i.ProxyType,
 			&i.ApplicationName,
@@ -1671,7 +1935,7 @@ func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ListProxyRoutesRow, er
 }
 
 const listQueuedDeploymentsForRecovery = `-- name: ListQueuedDeploymentsForRecovery :many
-SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 FROM deployments
 WHERE status = 'queued'
 ORDER BY created_at
@@ -1699,6 +1963,8 @@ func (q *Queries) ListQueuedDeploymentsForRecovery(ctx context.Context, limit in
 			&i.StartedAt,
 			&i.FinishedAt,
 			&i.CreatedAt,
+			&i.ImageRef,
+			&i.ImageDigest,
 		); err != nil {
 			return nil, err
 		}
@@ -1839,7 +2105,7 @@ const markProxyRouteApplied = `-- name: MarkProxyRouteApplied :one
 UPDATE proxy_routes
 SET status = 'applied', last_applied_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url
 `
 
 func (q *Queries) MarkProxyRouteApplied(ctx context.Context, id pgtype.UUID) (ProxyRoute, error) {
@@ -1856,6 +2122,8 @@ func (q *Queries) MarkProxyRouteApplied(ctx context.Context, id pgtype.UUID) (Pr
 		&i.LastAppliedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BlueUpstreamUrl,
+		&i.GreenUpstreamUrl,
 	)
 	return i, err
 }
@@ -1864,7 +2132,7 @@ const markProxyRouteFailed = `-- name: MarkProxyRouteFailed :one
 UPDATE proxy_routes
 SET status = 'failed', updated_at = now()
 WHERE id = $1
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url
 `
 
 func (q *Queries) MarkProxyRouteFailed(ctx context.Context, id pgtype.UUID) (ProxyRoute, error) {
@@ -1881,6 +2149,8 @@ func (q *Queries) MarkProxyRouteFailed(ctx context.Context, id pgtype.UUID) (Pro
 		&i.LastAppliedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BlueUpstreamUrl,
+		&i.GreenUpstreamUrl,
 	)
 	return i, err
 }
@@ -1891,7 +2161,7 @@ SET status = 'running',
     started_at = COALESCE(started_at, now())
 WHERE id = $1
   AND status = 'queued'
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 `
 
 func (q *Queries) StartQueuedDeployment(ctx context.Context, id pgtype.UUID) (Deployment, error) {
@@ -1909,6 +2179,8 @@ func (q *Queries) StartQueuedDeployment(ctx context.Context, id pgtype.UUID) (De
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.CreatedAt,
+		&i.ImageRef,
+		&i.ImageDigest,
 	)
 	return i, err
 }
@@ -1927,7 +2199,7 @@ SET status = $1::text,
     END,
     updated_at = now()
 WHERE id = $3::uuid
-RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at
+RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy
 `
 
 type UpdateApplicationStatusParams struct {
@@ -1957,6 +2229,7 @@ func (q *Queries) UpdateApplicationStatus(ctx context.Context, arg UpdateApplica
 		&i.TargetVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.GithubAutoDeploy,
 	)
 	return i, err
 }
@@ -1967,7 +2240,7 @@ SET status = $2,
     started_at = COALESCE(started_at, CASE WHEN $2 = 'running' THEN now() ELSE started_at END),
     finished_at = CASE WHEN $2 IN ('succeeded', 'failed', 'cancelled') THEN now() ELSE finished_at END
 WHERE id = $1
-RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at
+RETURNING id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest
 `
 
 type UpdateDeploymentStatusParams struct {
@@ -1990,6 +2263,8 @@ func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeployme
 		&i.StartedAt,
 		&i.FinishedAt,
 		&i.CreatedAt,
+		&i.ImageRef,
+		&i.ImageDigest,
 	)
 	return i, err
 }
@@ -2046,6 +2321,68 @@ func (q *Queries) UpdateInstanceSettings(ctx context.Context, arg UpdateInstance
 		&i.DocsUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateProjectRegistry = `-- name: UpdateProjectRegistry :one
+UPDATE projects
+SET default_registry_id = $1::uuid,
+    updated_at = now()
+WHERE id = $2::uuid
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
+`
+
+type UpdateProjectRegistryParams struct {
+	DefaultRegistryID pgtype.UUID `json:"default_registry_id"`
+	ID                pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateProjectRegistry(ctx context.Context, arg UpdateProjectRegistryParams) (Project, error) {
+	row := q.db.QueryRow(ctx, updateProjectRegistry, arg.DefaultRegistryID, arg.ID)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DefaultRegistryID,
+	)
+	return i, err
+}
+
+const updateProxyRouteUpstream = `-- name: UpdateProxyRouteUpstream :one
+UPDATE proxy_routes
+SET upstream_url = $2,
+    status = 'pending',
+    updated_at = now()
+WHERE id = $1
+RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url
+`
+
+type UpdateProxyRouteUpstreamParams struct {
+	ID          pgtype.UUID `json:"id"`
+	UpstreamUrl string      `json:"upstream_url"`
+}
+
+func (q *Queries) UpdateProxyRouteUpstream(ctx context.Context, arg UpdateProxyRouteUpstreamParams) (ProxyRoute, error) {
+	row := q.db.QueryRow(ctx, updateProxyRouteUpstream, arg.ID, arg.UpstreamUrl)
+	var i ProxyRoute
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.ApplicationID,
+		&i.Domain,
+		&i.UpstreamUrl,
+		&i.TlsEnabled,
+		&i.Status,
+		&i.LastAppliedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BlueUpstreamUrl,
+		&i.GreenUpstreamUrl,
 	)
 	return i, err
 }
@@ -2139,6 +2476,56 @@ func (q *Queries) UpsertConnectorAccount(ctx context.Context, arg UpsertConnecto
 		&i.LastSyncStatus,
 		&i.LastSyncMessage,
 		&i.LastSyncedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertContainerRegistry = `-- name: UpsertContainerRegistry :one
+INSERT INTO container_registries (name, provider, registry_host, namespace, repository, default_image, enabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (name) DO UPDATE
+SET provider = excluded.provider,
+    registry_host = excluded.registry_host,
+    namespace = excluded.namespace,
+    repository = excluded.repository,
+    default_image = excluded.default_image,
+    enabled = excluded.enabled,
+    updated_at = now()
+RETURNING id, name, provider, registry_host, namespace, repository, default_image, enabled, created_at, updated_at
+`
+
+type UpsertContainerRegistryParams struct {
+	Name         string `json:"name"`
+	Provider     string `json:"provider"`
+	RegistryHost string `json:"registry_host"`
+	Namespace    string `json:"namespace"`
+	Repository   string `json:"repository"`
+	DefaultImage string `json:"default_image"`
+	Enabled      bool   `json:"enabled"`
+}
+
+func (q *Queries) UpsertContainerRegistry(ctx context.Context, arg UpsertContainerRegistryParams) (ContainerRegistry, error) {
+	row := q.db.QueryRow(ctx, upsertContainerRegistry,
+		arg.Name,
+		arg.Provider,
+		arg.RegistryHost,
+		arg.Namespace,
+		arg.Repository,
+		arg.DefaultImage,
+		arg.Enabled,
+	)
+	var i ContainerRegistry
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Provider,
+		&i.RegistryHost,
+		&i.Namespace,
+		&i.Repository,
+		&i.DefaultImage,
+		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -2255,6 +2642,56 @@ func (q *Queries) UpsertCredentialUsage(ctx context.Context, arg UpsertCredentia
 		&i.UsedByName,
 		&i.UsageContext,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertDeploymentSlot = `-- name: UpsertDeploymentSlot :one
+INSERT INTO application_deployment_slots (application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7 = 'active' THEN now() ELSE NULL END)
+ON CONFLICT (application_id, server_id, color) DO UPDATE
+SET deployment_id = excluded.deployment_id,
+    image_ref = excluded.image_ref,
+    image_digest = excluded.image_digest,
+    status = excluded.status,
+    promoted_at = excluded.promoted_at,
+    updated_at = now()
+RETURNING id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+`
+
+type UpsertDeploymentSlotParams struct {
+	ApplicationID pgtype.UUID `json:"application_id"`
+	ServerID      pgtype.UUID `json:"server_id"`
+	Color         string      `json:"color"`
+	DeploymentID  pgtype.UUID `json:"deployment_id"`
+	ImageRef      string      `json:"image_ref"`
+	ImageDigest   pgtype.Text `json:"image_digest"`
+	Status        string      `json:"status"`
+}
+
+func (q *Queries) UpsertDeploymentSlot(ctx context.Context, arg UpsertDeploymentSlotParams) (ApplicationDeploymentSlot, error) {
+	row := q.db.QueryRow(ctx, upsertDeploymentSlot,
+		arg.ApplicationID,
+		arg.ServerID,
+		arg.Color,
+		arg.DeploymentID,
+		arg.ImageRef,
+		arg.ImageDigest,
+		arg.Status,
+	)
+	var i ApplicationDeploymentSlot
+	err := row.Scan(
+		&i.ID,
+		&i.ApplicationID,
+		&i.ServerID,
+		&i.Color,
+		&i.DeploymentID,
+		&i.ImageRef,
+		&i.ImageDigest,
+		&i.Status,
+		&i.PromotedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

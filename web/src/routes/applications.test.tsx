@@ -318,6 +318,8 @@ function applicationFactory(overrides: Partial<Application>): Application {
     project_id: 'project_1',
     project_name: 'Billing',
     project_slug: 'billing',
+    default_registry_id: null,
+    default_registry_name: null,
     ...overrides,
   }
 }

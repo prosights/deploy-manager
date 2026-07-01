@@ -10,7 +10,7 @@ import (
 )
 
 func TestReadinessReportsReadyWhenChecksPass(t *testing.T) {
-	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", ReadinessCheck{
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{}, ReadinessCheck{
 		Name: "database",
 		Check: func(context.Context) error {
 			return nil
@@ -33,7 +33,7 @@ func TestReadinessReportsReadyWhenChecksPass(t *testing.T) {
 }
 
 func TestReadinessReportsUnavailableWhenCheckFails(t *testing.T) {
-	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", ReadinessCheck{
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{}, ReadinessCheck{
 		Name: "redis",
 		Check: func(context.Context) error {
 			return errors.New("redis unavailable")
@@ -56,7 +56,7 @@ func TestReadinessReportsUnavailableWhenCheckFails(t *testing.T) {
 }
 
 func TestHealthzRemainsCheapLiveness(t *testing.T) {
-	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", ReadinessCheck{
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{}, ReadinessCheck{
 		Name: "redis",
 		Check: func(context.Context) error {
 			return errors.New("redis unavailable")
