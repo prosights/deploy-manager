@@ -5,6 +5,29 @@ import { checkServer, createServer } from '../lib/api'
 import { useUiStore } from '../store/ui'
 import { ServersRoute } from './servers'
 
+vi.mock('@xterm/xterm', () => ({
+  Terminal: class {
+    cols = 120
+    rows = 32
+    clear = vi.fn()
+    dispose = vi.fn()
+    focus = vi.fn()
+    loadAddon = vi.fn()
+    onData = vi.fn(() => ({ dispose: vi.fn() }))
+    open = vi.fn()
+    write = vi.fn()
+    writeln = vi.fn()
+  },
+}))
+
+vi.mock('@xterm/addon-fit', () => ({
+  FitAddon: class {
+    fit = vi.fn()
+  },
+}))
+
+vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
+
 vi.mock('../lib/api', () => ({
   checkServer: vi.fn(async () => ({
     server: { id: 'server_1' },
@@ -13,9 +36,42 @@ vi.mock('../lib/api', () => ({
     docker_error: 'docker unavailable',
   })),
   createServer: vi.fn(async (input) => input),
+  webSocketURL: vi.fn(() => 'ws://127.0.0.1:5173/api/servers/server_1/terminal'),
 }))
 
 vi.mock('../lib/queries', () => ({
+  applicationsQuery: {
+    queryKey: ['applications'],
+    queryFn: async () => [
+      {
+        id: 'app_1',
+        environment_id: 'env_1',
+        server_id: 'server_1',
+        name: 'workflows-server-blue-green',
+        repository_url: null,
+        branch: 'main',
+        compose_path: 'docker-compose.yml',
+        remote_directory: '/srv/deploy-manager/apps/production/workflows-server-blue-green',
+        domain: null,
+        health_check_url: null,
+        doppler_project: null,
+        doppler_config: null,
+        status: 'active',
+        current_version: null,
+        target_version: null,
+        server_name: 'prod-1',
+        environment_name: 'Production',
+        environment_slug: 'production',
+        environment_kind: 'production',
+        environment_is_ephemeral: false,
+        project_id: 'project_1',
+        project_name: 'Production',
+        project_slug: 'production',
+        default_registry_id: null,
+        default_registry_name: null,
+      },
+    ],
+  },
   serversQuery: {
     queryKey: ['servers'],
     queryFn: async () => [
@@ -25,7 +81,8 @@ vi.mock('../lib/queries', () => ({
         hostname: '10.0.0.10',
         ssh_user: 'root',
         ssh_port: 22,
-        ssh_key_path: '~/.ssh/id_ed25519',
+        ssh_key_path: null,
+        connection_mode: 'tailscale_ssh',
         proxy_type: 'caddy',
         status: 'healthy',
         cpu_usage: 12,
@@ -35,16 +92,43 @@ vi.mock('../lib/queries', () => ({
       },
     ],
   },
+  tailscaleDevicesQuery: {
+    queryKey: ['tailscale-devices'],
+    queryFn: async () => ({
+      available: true,
+      devices: [
+        {
+          name: 'internal',
+          host: '100.107.110.108',
+          dns_name: 'internal.tailnet.ts.net',
+          os: 'linux',
+          online: true,
+          tags: ['tag:server'],
+        },
+      ],
+    }),
+  },
 }))
 
 describe('ServersRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useUiStore.setState({ searchQuery: '' })
+    class MockWebSocket extends EventTarget {
+      static OPEN = 1
+      readyState = MockWebSocket.OPEN
+      constructor(readonly url: string) {
+        super()
+      }
+      close = vi.fn()
+      send = vi.fn()
+    }
+    vi.stubGlobal('WebSocket', MockWebSocket)
   })
 
   afterEach(() => {
     cleanup()
+    vi.unstubAllGlobals()
   })
 
   it('registers SSH deployment targets with proxy defaults', async () => {
@@ -70,6 +154,7 @@ describe('ServersRoute', () => {
           ssh_user: 'root',
           ssh_port: 2222,
           ssh_key_path: '~/.ssh/prod_ed25519',
+          connection_mode: 'direct_ssh',
           proxy_type: 'caddy',
         }),
       )
@@ -77,7 +162,54 @@ describe('ServersRoute', () => {
     expect(screen.getByText('CPU 12% / RAM 45% / Disk 61%')).toBeInTheDocument()
     expect(screen.getByText(/6\/23\/2026|23\/6\/2026|2026/)).toBeInTheDocument()
     expect(screen.getByText('root@10.0.0.10:22')).toBeInTheDocument()
-    expect(screen.getByText('~/.ssh/id_ed25519')).toBeInTheDocument()
+    expect(screen.getAllByText('Tailscale SSH').length).toBeGreaterThan(0)
+    expect(screen.getByText('keyless via tailnet policy')).toBeInTheDocument()
+  })
+
+  it('imports Tailscale machines into the server form', async () => {
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ServersRoute />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(await screen.findByLabelText('Tailscale machine'), { target: { value: '100.107.110.108' } })
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(createServer).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'internal',
+        hostname: '100.107.110.108',
+        connection_mode: 'tailscale_ssh',
+        ssh_key_path: '',
+      }))
+    })
+  })
+
+  it('registers Tailscale SSH targets without an SSH key path', async () => {
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ServersRoute />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'vpc-production' } })
+    fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '100.79.100.28' } })
+    fireEvent.change(screen.getByLabelText('Connection'), { target: { value: 'tailscale_ssh' } })
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => {
+      expect(createServer).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'vpc-production',
+        hostname: '100.79.100.28',
+        ssh_key_path: '',
+        connection_mode: 'tailscale_ssh',
+      }))
+    })
   })
 
   it('normalizes server payloads before registering a server', async () => {
@@ -103,6 +235,7 @@ describe('ServersRoute', () => {
         ssh_user: 'root',
         ssh_port: 2222,
         ssh_key_path: '~/.ssh/prod_ed25519',
+        connection_mode: 'direct_ssh',
         proxy_type: 'caddy',
       })
     })
@@ -125,6 +258,25 @@ describe('ServersRoute', () => {
     expect(await screen.findByText('SSH ok')).toBeInTheDocument()
     expect(screen.getByText('Docker failed')).toBeInTheDocument()
     expect(screen.getByText('docker unavailable')).toBeInTheDocument()
+  })
+
+  it('opens a literal terminal console from the server row', async () => {
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ServersRoute />
+      </QueryClientProvider>,
+    )
+
+    const consoleButton = await screen.findByRole('button', { name: /console/i })
+    expect(screen.queryByRole('heading', { name: 'Terminal console' })).not.toBeInTheDocument()
+
+    fireEvent.click(consoleButton)
+
+    expect(await screen.findByRole('heading', { name: 'Terminal console' })).toBeInTheDocument()
+    expect(screen.getByText('ssh console')).toBeInTheDocument()
+    expect(screen.getByText('/srv/deploy-manager/apps/production/workflows-server-blue-green')).toBeInTheDocument()
   })
 
   it('filters server rows from the global search query', async () => {

@@ -20,11 +20,15 @@ type Client struct {
 	port            int32
 	user            string
 	signer          ssh.Signer
+	authMethods     []ssh.AuthMethod
+	allowNoAuth     bool
 	hostKeyCallback ssh.HostKeyCallback
 }
 
 type ClientOptions struct {
 	HostKeyCallback ssh.HostKeyCallback
+	AuthMethods     []ssh.AuthMethod
+	AllowNoAuth     bool
 }
 
 func LoadSigner(path string) (ssh.Signer, error) {
@@ -53,8 +57,17 @@ func NewClientWithOptions(host string, port int32, user string, signer ssh.Signe
 		port:            port,
 		user:            user,
 		signer:          signer,
+		authMethods:     options.AuthMethods,
+		allowNoAuth:     options.AllowNoAuth,
 		hostKeyCallback: options.HostKeyCallback,
 	}
+}
+
+func NewTailscaleSSHClient(host string, port int32, user string) Client {
+	return NewClientWithOptions(host, port, user, nil, ClientOptions{
+		AllowNoAuth:     true,
+		HostKeyCallback: tailscaleHostKeyCallback(),
+	})
 }
 
 // maxSSHOutputBytes caps how much combined stdout+stderr we buffer from a
@@ -93,6 +106,10 @@ func (c Client) Run(ctx context.Context, command string) (string, error) {
 	}
 }
 
+func (c Client) Connect(ctx context.Context) (*ssh.Client, error) {
+	return c.connect(ctx)
+}
+
 // cappedBuffer accumulates output up to limit bytes and silently discards the
 // rest. Writes never fail so the underlying SSH session is not torn down by a
 // short-write error; we simply stop retaining bytes once the cap is reached.
@@ -122,7 +139,11 @@ func (b *cappedBuffer) String() string {
 }
 
 func (c Client) connect(ctx context.Context) (*ssh.Client, error) {
-	if c.signer == nil {
+	authMethods := c.authMethods
+	if len(authMethods) == 0 && c.signer != nil {
+		authMethods = []ssh.AuthMethod{ssh.PublicKeys(c.signer)}
+	}
+	if len(authMethods) == 0 && !c.allowNoAuth {
 		return nil, fmt.Errorf("ssh signer is required")
 	}
 	if c.host == "" {
@@ -132,7 +153,7 @@ func (c Client) connect(ctx context.Context) (*ssh.Client, error) {
 	address := net.JoinHostPort(c.host, fmt.Sprintf("%d", c.port))
 	config := &ssh.ClientConfig{
 		User:            c.user,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(c.signer)},
+		Auth:            authMethods,
 		HostKeyCallback: c.hostKeyCallback,
 		Timeout:         5 * time.Second,
 	}
@@ -153,6 +174,12 @@ func (c Client) connect(ctx context.Context) (*ssh.Client, error) {
 
 func defaultHostKeyCallback() ssh.HostKeyCallback {
 	return knownHostsCallback(defaultKnownHostsPath())
+}
+
+func tailscaleHostKeyCallback() ssh.HostKeyCallback {
+	return func(string, net.Addr, ssh.PublicKey) error {
+		return nil
+	}
 }
 
 func knownHostsCallback(path string) ssh.HostKeyCallback {

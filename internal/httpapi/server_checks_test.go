@@ -158,6 +158,22 @@ func TestRunServerChecksNormalizesBlankSuccessStatus(t *testing.T) {
 	}
 }
 
+func TestParseDockerVersionOutput(t *testing.T) {
+	apiVersion, osType, err := parseDockerVersionOutput("1.47 linux\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if apiVersion != "1.47" || osType != "linux" {
+		t.Fatalf("unexpected docker version fields: %q %q", apiVersion, osType)
+	}
+}
+
+func TestParseDockerVersionOutputRejectsUnexpectedOutput(t *testing.T) {
+	if _, _, err := parseDockerVersionOutput("docker unavailable now"); err == nil {
+		t.Fatal("expected unexpected docker output to fail")
+	}
+}
+
 func TestNormalizeServerCheckStatusRejectsUnexpectedValues(t *testing.T) {
 	for _, status := range []string{"", "idle", "failed", " healthy "} {
 		t.Run(status, func(t *testing.T) {

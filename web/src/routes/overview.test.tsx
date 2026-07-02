@@ -88,6 +88,7 @@ vi.mock('../lib/queries', () => ({
         ssh_user: 'root',
         ssh_port: 22,
         ssh_key_path: '~/.ssh/id_ed25519',
+        connection_mode: 'direct_ssh',
         proxy_type: 'caddy',
         status: 'healthy',
         cpu_usage: 12,
@@ -113,6 +114,8 @@ describe('OverviewRoute', () => {
 
     expect(await screen.findByText('Operations')).toBeInTheDocument()
     expect(screen.getByText('10.0.0.10')).toBeInTheDocument()
+    expect(screen.getByText('Last snapshot')).toBeInTheDocument()
+    expect(screen.getByText('not checked')).toBeInTheDocument()
     expect(screen.getByText('Strategy')).toBeInTheDocument()
     expect(screen.getByText('rolling')).toBeInTheDocument()
     expect(screen.getByText('Trigger')).toBeInTheDocument()

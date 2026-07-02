@@ -63,6 +63,8 @@ export function DeploymentQueuePanel({
 }: DeploymentQueuePanelProps) {
   const blueGreenError = strategy === 'blue_green' ? blueGreenHealthCheckError(target?.health_check_url ?? '') : ''
   const blueGreenReady = blueGreenError === ''
+  const rollbackError = blueGreenHealthCheckError(target?.health_check_url ?? '')
+  const rollbackReady = rollbackError === ''
 
   return (
     <Panel title="Queue deployment">
@@ -96,7 +98,7 @@ export function DeploymentQueuePanel({
           </Button>
         </div>
         <div className="flex items-end">
-          <Button variant="secondary" disabled={!target || isRollingBack || strategy !== 'blue_green'} onClick={onRollback}>
+          <Button variant="secondary" disabled={!target || isRollingBack || !rollbackReady} onClick={onRollback}>
             <RotateCcw className="size-4" />
             {isRollingBack ? 'Rolling back...' : 'Rollback'}
           </Button>
@@ -121,6 +123,11 @@ export function DeploymentQueuePanel({
       {blueGreenError && (
         <div className="border-t px-4 py-3 text-sm text-danger">
           {blueGreenError}
+        </div>
+      )}
+      {target && !rollbackReady && strategy !== 'blue_green' && (
+        <div className="border-t px-4 py-3 text-sm text-muted">
+          Rollback is available after the target has a color-aware health check URL.
         </div>
       )}
     </Panel>

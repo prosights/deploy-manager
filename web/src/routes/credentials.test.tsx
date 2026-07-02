@@ -87,8 +87,10 @@ describe('CredentialsRoute', () => {
     renderRoute()
 
     expect(await screen.findByText('GitHub deploy key')).toBeInTheDocument()
+    expect(screen.getByText('Inventory coverage')).toBeInTheDocument()
+    expect(screen.getByText('Access facts')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /inspect/i }))
-    expect(screen.getByText('Permissions')).toBeInTheDocument()
+    expect(screen.getAllByText('Access').length).toBeGreaterThan(0)
     expect(screen.getByText('Used by')).toBeInTheDocument()
     expect(await screen.findByText('Reference')).toBeInTheDocument()
     expect(screen.getByText(/Secret values stay in their source systems/)).toBeInTheDocument()

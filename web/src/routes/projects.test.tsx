@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createEnvironment, createProject } from '../lib/api'
+import { createEnvironment, createProject, deleteApplication, deleteEnvironment, deleteProject, deleteProxyRoute, updateProject } from '../lib/api'
 import { ProjectsRoute } from './projects'
 
 vi.mock('../lib/api', () => ({
@@ -9,6 +9,11 @@ vi.mock('../lib/api', () => ({
   createEnvironment: vi.fn(async (input) => ({ id: 'env_2', ...input })),
   createApplication: vi.fn(async (input) => ({ id: 'app_2', ...input })),
   createProxyRoute: vi.fn(async (input) => ({ id: 'route_2', ...input })),
+  deleteApplication: vi.fn(async () => undefined),
+  deleteEnvironment: vi.fn(async () => undefined),
+  deleteProject: vi.fn(async () => undefined),
+  deleteProxyRoute: vi.fn(async () => undefined),
+  updateProject: vi.fn(async (projectID, input) => ({ id: projectID, ...input })),
   applyProxyRoute: vi.fn(async (routeID) => ({ id: routeID, status: 'applied' })),
   updateProjectRegistry: vi.fn(async (projectID, defaultRegistryID) => ({ id: projectID, default_registry_id: defaultRegistryID })),
   upsertContainerRegistry: vi.fn(async (input) => ({ id: 'registry_2', ...input })),
@@ -92,6 +97,7 @@ vi.mock('../lib/queries', () => ({
         ssh_user: 'deploy',
         ssh_port: 22,
         ssh_key_path: '~/.ssh/id_ed25519',
+        connection_mode: 'direct_ssh',
         proxy_type: 'caddy',
         status: 'healthy',
         cpu_usage: null,
@@ -130,9 +136,11 @@ vi.mock('../lib/queries', () => ({
 describe('ProjectsRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     window.location.hash = ''
     cleanup()
   })
@@ -146,11 +154,8 @@ describe('ProjectsRoute', () => {
       </QueryClientProvider>,
     )
 
-    const nameInputs = await screen.findAllByLabelText('Name')
-    const slugInputs = screen.getAllByLabelText('Slug')
-    fireEvent.change(nameInputs[0], { target: { value: 'API Platform' } })
-    fireEvent.change(slugInputs[0], { target: { value: ' API-Platform ' } })
-    fireEvent.click(screen.getByRole('button', { name: /create/i }))
+    fireEvent.change(await screen.findByLabelText('New app'), { target: { value: 'API Platform' } })
+    fireEvent.click(screen.getByRole('button', { name: /create app/i }))
 
     await waitFor(() => {
       expect(createProject).toHaveBeenCalledWith(expect.objectContaining({
@@ -170,11 +175,9 @@ describe('ProjectsRoute', () => {
       </QueryClientProvider>,
     )
 
-    const nameInputs = await screen.findAllByLabelText('Name')
-    const slugInputs = screen.getAllByLabelText('Slug')
-    fireEvent.change(nameInputs[1], { target: { value: 'PR 42' } })
-    fireEvent.change(slugInputs[1], { target: { value: 'pr-42' } })
-    fireEvent.change(screen.getByLabelText('Kind'), { target: { value: 'preview' } })
+    fireEvent.change(await screen.findByLabelText('Environment'), { target: { value: 'PR 42' } })
+    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'preview' } })
+    fireEvent.click(screen.getByRole('button', { name: /advanced/i }))
     fireEvent.change(screen.getByLabelText('PR'), { target: { value: '42' } })
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'feature/api' } })
     fireEvent.click(screen.getByRole('button', { name: /add/i }))
@@ -190,7 +193,7 @@ describe('ProjectsRoute', () => {
     })
   })
 
-  it('shows applications inside the project environment cockpit', async () => {
+  it('shows services inside the project environment cockpit', async () => {
     const client = new QueryClient()
 
     render(
@@ -202,5 +205,71 @@ describe('ProjectsRoute', () => {
     expect(await screen.findByText('API')).toBeInTheDocument()
     expect(screen.getAllByText('api.example.com').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('api / prd')).toBeInTheDocument()
+  })
+
+  it('deletes project-owned resources from project screens', async () => {
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ProjectsRoute />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(await screen.findByLabelText('Delete app Billing'))
+    await waitFor(() => expect(vi.mocked(deleteProject).mock.calls[0]?.[0]).toBe('project_1'))
+
+    fireEvent.click(screen.getByLabelText('Delete environment Production'))
+    await waitFor(() => expect(vi.mocked(deleteEnvironment).mock.calls[0]?.[0]).toBe('env_1'))
+
+    fireEvent.click(screen.getByLabelText('Delete service API'))
+    await waitFor(() => expect(vi.mocked(deleteApplication).mock.calls[0]?.[0]).toBe('app_1'))
+
+    window.location.hash = '#routes'
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+    fireEvent.click(await screen.findByLabelText('Delete route api.example.com'))
+    await waitFor(() => expect(vi.mocked(deleteProxyRoute).mock.calls[0]?.[0]).toBe('route_1'))
+  })
+
+  it('updates project identity from settings', async () => {
+    window.location.hash = '#settings'
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ProjectsRoute />
+      </QueryClientProvider>,
+    )
+
+    const settingsPanel = (await screen.findByText('Project identity')).closest('section')
+    if (!settingsPanel) throw new Error('Project identity panel not found')
+
+    fireEvent.change(within(settingsPanel).getByLabelText('App name'), { target: { value: 'Recreate Worker' } })
+    fireEvent.change(within(settingsPanel).getByLabelText('Slug'), { target: { value: 'recreate-worker' } })
+    fireEvent.change(within(settingsPanel).getByLabelText('Description'), { target: { value: 'Chart recreation service' } })
+    fireEvent.click(within(settingsPanel).getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() => {
+      expect(updateProject).toHaveBeenCalledWith('project_1', {
+        name: 'Recreate Worker',
+        slug: 'recreate-worker',
+        description: 'Chart recreation service',
+      })
+    })
+  })
+
+  it('keeps app switching out of project settings', async () => {
+    window.location.hash = '#settings'
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ProjectsRoute />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('Project identity')).toBeInTheDocument()
+    expect(screen.queryByLabelText('New app')).not.toBeInTheDocument()
+    expect(screen.queryByText('Setup path')).not.toBeInTheDocument()
   })
 })

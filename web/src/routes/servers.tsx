@@ -1,26 +1,32 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
-import { defaultServerForm, ServerCreatePanel, ServerList, type ServerCheckResults, type ServerFormState } from '../features/servers/components'
+import { defaultServerForm, ServerCreatePanel, ServerList, ServerTerminalPanel, type ServerCheckResults, type ServerFormState } from '../features/servers/components'
 import { checkServer, createServer, type CreateServerInput } from '../lib/api'
-import { serversQuery } from '../lib/queries'
+import { applicationsQuery, serversQuery, tailscaleDevicesQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
 import { useUiStore } from '../store/ui'
 
 export function ServersRoute() {
   const queryClient = useQueryClient()
   const { data: servers } = useSuspenseQuery(serversQuery)
+  const { data: applications } = useSuspenseQuery(applicationsQuery)
+  const { data: tailscaleDevices } = useQuery(tailscaleDevicesQuery)
   const searchQuery = useUiStore((state) => state.searchQuery)
   const [form, setForm] = useState(defaultServerForm())
   const [formError, setFormError] = useState<string>()
   const [checkResults, setCheckResults] = useState<ServerCheckResults>({})
+  const [terminalServerID, setTerminalServerID] = useState('')
+  const [terminalApplicationID, setTerminalApplicationID] = useState('')
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const visibleServers = servers.filter((server) => matchesSearch(searchQuery, [
     server.name,
     server.hostname,
     server.ssh_user,
     server.ssh_port,
     server.ssh_key_path,
+    server.connection_mode,
     server.proxy_type,
     server.status,
   ]))
@@ -32,6 +38,11 @@ export function ServersRoute() {
       await queryClient.invalidateQueries({ queryKey: serversQuery.queryKey })
     },
   })
+  const selectedTerminalServerID = terminalServerID || visibleServers[0]?.id || ''
+  const selectedServerApplications = applications.filter((application) => application.server_id === selectedTerminalServerID)
+  const selectedTerminalApplicationID = selectedServerApplications.some((application) => application.id === terminalApplicationID)
+    ? terminalApplicationID
+    : selectedServerApplications[0]?.id || ''
   const check = useMutation({
     mutationFn: (serverID: string) => checkServer(serverID),
     onSuccess: async (result) => {
@@ -61,22 +72,44 @@ export function ServersRoute() {
     create.mutate()
   }
 
+  function selectTerminalServer(serverID: string) {
+    setTerminalServerID(serverID)
+    setTerminalApplicationID('')
+  }
+
+  function openTerminal(serverID: string) {
+    selectTerminalServer(serverID)
+    setTerminalOpen(true)
+  }
+
   return (
     <div className="space-y-5">
       <PageHeader title="Servers" description="SSH targets, health checks, resource pressure, and proxy mode." />
       <ServerCreatePanel
         form={form}
+        tailscaleDevices={tailscaleDevices}
         isSaving={create.isPending}
         errorMessage={formError ?? create.error?.message}
         onChange={(updates) => setForm((state) => ({ ...state, ...updates }))}
         onSubmit={submitServer}
       />
       {check.error && <BlockError message={check.error.message} />}
+      <ServerTerminalPanel
+        servers={visibleServers}
+        applications={applications}
+        selectedServerID={selectedTerminalServerID}
+        selectedApplicationID={selectedTerminalApplicationID}
+        isOpen={terminalOpen}
+        onSelectServer={selectTerminalServer}
+        onSelectApplication={setTerminalApplicationID}
+        onClose={() => setTerminalOpen(false)}
+      />
       <ServerList
         servers={visibleServers}
         checkResults={checkResults}
         isChecking={check.isPending}
         onCheck={(serverID) => check.mutate(serverID)}
+        onOpenConsole={openTerminal}
       />
     </div>
   )
@@ -88,7 +121,8 @@ function serverInput(form: ServerFormState): CreateServerInput {
     hostname: form.hostname.trim(),
     ssh_user: form.ssh_user.trim() || 'root',
     ssh_port: parseSSHPort(form.ssh_port),
-    ssh_key_path: form.ssh_key_path.trim(),
+    ssh_key_path: form.connection_mode === 'tailscale_ssh' ? '' : form.ssh_key_path.trim(),
+    connection_mode: form.connection_mode,
     proxy_type: form.proxy_type,
   }
 }
@@ -107,10 +141,14 @@ function validateServerIdentity(form: ReturnType<typeof defaultServerForm>): voi
     ['Hostname', form.hostname],
     ['SSH user', form.ssh_user],
     ['SSH key path', form.ssh_key_path],
+    ['Connection mode', form.connection_mode],
   ] as const) {
     if (value.includes('\n') || value.includes('\r') || value.includes('\t')) {
       throw new Error(`${label} cannot contain control characters.`)
     }
+  }
+  if (form.connection_mode === 'tailscale_ssh') {
+    return
   }
   validateSSHKeyPath(form.ssh_key_path)
 }

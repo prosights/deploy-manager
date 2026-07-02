@@ -8,7 +8,7 @@ export function validateHealthCheckURL(value: string): void {
   }
   let parsed: URL
   try {
-    parsed = new URL(healthCheckURL.replaceAll('{color}', 'blue'))
+    parsed = new URL(healthCheckURL.replaceAll('{color}', 'blue').replaceAll('{port}', '3101'))
   } catch {
     throw new Error('Health check URL must be an absolute HTTP URL.')
   }

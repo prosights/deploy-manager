@@ -5,12 +5,29 @@ export type Server = {
   ssh_user: string
   ssh_port: number
   ssh_key_path: string | null
+  connection_mode: 'direct_ssh' | 'tailscale_ssh' | 'cloud_tunnel'
   proxy_type: 'caddy' | 'traefik' | 'none'
   status: 'healthy' | 'degraded' | 'unreachable' | 'unknown'
   cpu_usage: number | null
   memory_usage: number | null
   disk_usage: number | null
   last_checked_at: string | null
+}
+
+export type TailscaleDevice = {
+  name: string
+  host: string
+  dns_name: string
+  os: string
+  online: boolean
+  tags: string[]
+  last_seen?: string
+}
+
+export type TailscaleDevicesResponse = {
+  available: boolean
+  error?: string
+  devices: TailscaleDevice[]
 }
 
 export type DockerStatus = {
@@ -26,6 +43,11 @@ export type ServerCheckResponse = {
   docker?: DockerStatus
   error?: string
   docker_error?: string
+}
+
+export type ServerCommandResponse = {
+  output: string
+  error?: string
 }
 
 export type Application = {
@@ -147,6 +169,7 @@ export type CreateServerInput = {
   ssh_user?: string
   ssh_port?: number
   ssh_key_path: string
+  connection_mode?: Server['connection_mode']
   proxy_type?: 'caddy' | 'traefik' | 'none'
 }
 
@@ -192,6 +215,12 @@ export type Environment = {
 }
 
 export type CreateProjectInput = {
+  name: string
+  slug: string
+  description?: string
+}
+
+export type UpdateProjectInput = {
   name: string
   slug: string
   description?: string
@@ -352,6 +381,12 @@ export function withAccessToken(path: string): string {
   return `${path}${separator}access_token=${encodeURIComponent(apiToken)}`
 }
 
+export function webSocketURL(path: string): string {
+  const authenticatedPath = withAccessToken(path)
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}${authenticatedPath}`
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init?.headers },
@@ -440,10 +475,23 @@ export function checkServer(serverID: string) {
   })
 }
 
+export function runServerCommand(serverID: string, command: string) {
+  return api<ServerCommandResponse>(`/api/servers/${serverID}/commands`, {
+    method: 'POST',
+    body: JSON.stringify({ command }),
+  })
+}
+
 export function createApplication(input: CreateApplicationInput) {
   return api<Application>('/api/applications', {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+export function deleteApplication(applicationID: string) {
+  return api<void>(`/api/applications/${applicationID}`, {
+    method: 'DELETE',
   })
 }
 
@@ -454,6 +502,19 @@ export function createProject(input: CreateProjectInput) {
   })
 }
 
+export function updateProject(projectID: string, input: UpdateProjectInput) {
+  return api<Project>(`/api/projects/${projectID}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteProject(projectID: string) {
+  return api<void>(`/api/projects/${projectID}`, {
+    method: 'DELETE',
+  })
+}
+
 export function createEnvironment(input: CreateEnvironmentInput) {
   return api<Environment>('/api/environments', {
     method: 'POST',
@@ -461,10 +522,22 @@ export function createEnvironment(input: CreateEnvironmentInput) {
   })
 }
 
+export function deleteEnvironment(environmentID: string) {
+  return api<void>(`/api/environments/${environmentID}`, {
+    method: 'DELETE',
+  })
+}
+
 export function createProxyRoute(input: CreateProxyRouteInput) {
   return api<ProxyRoute>('/api/proxy-routes', {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+export function deleteProxyRoute(routeID: string) {
+  return api<void>(`/api/proxy-routes/${routeID}`, {
+    method: 'DELETE',
   })
 }
 

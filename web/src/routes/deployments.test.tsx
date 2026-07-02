@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cancelDeployment, createDeployment, retryDeployment } from '../lib/api'
+import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication } from '../lib/api'
 import { useDeploymentSelection } from '../store/deployments'
 import { useUiStore } from '../store/ui'
 import { DeploymentsRoute } from './deployments'
@@ -67,6 +67,7 @@ vi.mock('../lib/api', async () => {
     cancelDeployment: vi.fn(async (deploymentID: string) => ({ id: deploymentID, status: 'cancelled' })),
     createDeployment: vi.fn(),
     retryDeployment: vi.fn(async (deploymentID: string) => ({ id: deploymentID, status: 'queued' })),
+    rollbackApplication: vi.fn(async (applicationID: string) => ({ id: 'rollback_1', application_id: applicationID, status: 'queued' })),
   }
 })
 
@@ -336,6 +337,24 @@ describe('DeploymentsRoute', () => {
 
     await waitFor(() => {
       expect(retryDeployment).toHaveBeenCalledWith('deployment_2')
+    })
+    expect(createDeployment).not.toHaveBeenCalled()
+  })
+
+  it('rolls back blue-green targets without changing the strategy dropdown first', async () => {
+    queryData.applications[0].health_check_url = 'http://127.0.0.1:{port}/healthz?color={color}'
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <DeploymentsRoute />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: /^rollback$/i }))
+
+    await waitFor(() => {
+      expect(rollbackApplication).toHaveBeenCalledWith('app_1')
     })
     expect(createDeployment).not.toHaveBeenCalled()
   })

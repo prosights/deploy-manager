@@ -18,7 +18,7 @@ func TestNormalizeCreateServerTrimsAndDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if input.Name != "prod" || input.Hostname != "10.0.0.10" || input.SshUser != "root" || input.SshPort != 22 || input.ProxyType != "caddy" {
+	if input.Name != "prod" || input.Hostname != "10.0.0.10" || input.SshUser != "root" || input.SshPort != 22 || input.ConnectionMode != "direct_ssh" || input.ProxyType != "caddy" {
 		t.Fatalf("unexpected normalized server: %+v", input)
 	}
 	if input.SshKeyPath.String != "~/.ssh/id_ed25519" {
@@ -36,13 +36,54 @@ func TestNormalizeCreateServerRejectsBlankRequiredFields(t *testing.T) {
 	}
 }
 
-func TestNormalizeCreateServerRequiresSSHKeyPath(t *testing.T) {
+func TestNormalizeCreateServerRequiresSSHKeyPathForDirectSSH(t *testing.T) {
 	_, err := normalizeCreateServer(db.CreateServerParams{
-		Name:     "prod",
-		Hostname: "10.0.0.10",
+		Name:           "prod",
+		Hostname:       "10.0.0.10",
+		ConnectionMode: "direct_ssh",
 	})
 	if err == nil {
 		t.Fatal("expected missing ssh key path to fail")
+	}
+}
+
+func TestNormalizeCreateServerAllowsKeylessTailscaleSSH(t *testing.T) {
+	input, err := normalizeCreateServer(db.CreateServerParams{
+		Name:           "prod",
+		Hostname:       "100.79.100.28",
+		ConnectionMode: "tailscale_ssh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.SshKeyPath.Valid {
+		t.Fatalf("expected tailscale ssh key path to stay empty, got %+v", input.SshKeyPath)
+	}
+}
+
+func TestNormalizeCreateServerRejectsSSHKeyPathForTailscaleSSH(t *testing.T) {
+	_, err := normalizeCreateServer(db.CreateServerParams{
+		Name:           "prod",
+		Hostname:       "100.79.100.28",
+		ConnectionMode: "tailscale_ssh",
+		SshKeyPath:     pgtype.Text{String: "~/.ssh/id_ed25519", Valid: true},
+	})
+	if err == nil {
+		t.Fatal("expected tailscale ssh with key path to fail")
+	}
+}
+
+func TestNormalizeCreateServerRejectsUnsupportedConnectionMode(t *testing.T) {
+	for _, mode := range []string{"unknown", "cloud_tunnel"} {
+		_, err := normalizeCreateServer(db.CreateServerParams{
+			Name:           "prod",
+			Hostname:       "10.0.0.10",
+			SshKeyPath:     pgtype.Text{String: "~/.ssh/id_ed25519", Valid: true},
+			ConnectionMode: mode,
+		})
+		if err == nil {
+			t.Fatalf("expected unsupported connection mode %q to fail", mode)
+		}
 	}
 }
 
@@ -115,9 +156,9 @@ func TestNormalizeCreateServerRejectsUnsafeSSHKeyPaths(t *testing.T) {
 }
 
 func TestServerCreateAuditMetadataShowsSSHInventoryTracking(t *testing.T) {
-	metadata := serverCreateAuditMetadata("10.0.0.10", "caddy", pgtype.Text{String: "~/.ssh/id_ed25519", Valid: true})
+	metadata := serverCreateAuditMetadata("10.0.0.10", "tailscale_ssh", "caddy", pgtype.Text{String: "~/.ssh/id_ed25519", Valid: true})
 
-	if metadata["hostname"] != "10.0.0.10" || metadata["proxy_type"] != "caddy" {
+	if metadata["hostname"] != "10.0.0.10" || metadata["connection_mode"] != "tailscale_ssh" || metadata["proxy_type"] != "caddy" {
 		t.Fatalf("unexpected server metadata: %+v", metadata)
 	}
 	if metadata["ssh_inventory_tracked"] != true {

@@ -148,3 +148,14 @@ func TestRunReturnsPromptlyOnContextCancellation(t *testing.T) {
 		t.Fatal("Run did not return after context cancellation")
 	}
 }
+
+func TestTailscaleSSHClientAllowsNoSigner(t *testing.T) {
+	client := NewTailscaleSSHClient("100.79.100.28", 22, "deploy")
+
+	if !client.allowNoAuth {
+		t.Fatal("expected tailscale ssh client to allow keyless auth")
+	}
+	if len(client.authMethods) != 0 || client.signer != nil {
+		t.Fatalf("expected tailscale ssh client to avoid static auth methods, got %+v", client)
+	}
+}

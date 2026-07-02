@@ -47,6 +47,7 @@ vi.mock('../lib/queries', () => ({
         ssh_user: 'root',
         ssh_port: 22,
         ssh_key_path: null,
+        connection_mode: 'direct_ssh',
         proxy_type: 'caddy',
         status: 'unknown',
         cpu_usage: null,
@@ -129,6 +130,20 @@ describe('ApplicationsRoute', () => {
         doppler_config: undefined,
       })
     })
+  })
+
+  it('suggests shared srv deployment directories from the application name', async () => {
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ApplicationsRoute />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'API Worker' } })
+
+    expect(screen.getByLabelText('Remote directory')).toHaveValue('/srv/deploy-manager/apps/api-worker')
   })
 
   it('shows current and target deployment versions', async () => {

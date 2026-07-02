@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { Boxes, Cable, ChevronLeft, Container, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Layers3, Monitor, Moon, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
+import { Bell, Boxes, Cable, ChevronLeft, Container, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Layers3, Monitor, Moon, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
 import { useSuspenseQueries } from '@tanstack/react-query'
 import type { CSSProperties } from 'react'
 import { Suspense, useEffect, useState } from 'react'
@@ -15,6 +15,7 @@ const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
   { to: '/deployments', label: 'Deployments', icon: Rocket },
   { to: '/servers', label: 'Servers', icon: Server },
   { to: '/credentials', label: 'Credentials', icon: KeyRound },
+  { to: '/notifications', label: 'Notifications', icon: Bell },
   { to: '/connectors', label: 'Connectors', icon: Cable },
   { to: '/audit', label: 'Audit', icon: FileClock },
   { to: '/settings', label: 'Settings', icon: Settings },
@@ -23,7 +24,8 @@ const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
 const projectNav: Array<{ hash: string, label: string, icon: typeof Gauge }> = [
   { hash: 'overview', label: 'Overview', icon: Layers3 },
   { hash: 'environments', label: 'Environments', icon: GitBranch },
-  { hash: 'targets', label: 'Deploy Targets', icon: Boxes },
+  { hash: 'services', label: 'Services', icon: Boxes },
+  { hash: 'targets', label: 'Deploy Targets', icon: Server },
   { hash: 'registry', label: 'Registry', icon: Container },
   { hash: 'routes', label: 'Proxy Routes', icon: Route },
   { hash: 'settings', label: 'Settings', icon: Settings },
@@ -33,7 +35,7 @@ const defaultSettings: InstanceSettings = {
   name: 'Deploy Manager',
   short_name: 'Deploy',
   meta_description: 'Internal deployment control plane',
-  logo_url: '/branding/prosights/logo.svg',
+  logo_url: '/branding/prosights/prosights-co-logo.png',
   favicon_url: '/branding/prosights/favicon.png',
   primary_color: '#0980fd',
   docs_url: '#',
@@ -59,12 +61,13 @@ export function AppShell() {
     '--color-accent-fg': accentForeground(safeAccent),
     '--color-accent-text': accentTextColor(safeAccent, theme),
   } as CSSProperties
-  const activeProject = projects[0]
+  const projectID = projectIDFromSearch(window.location.search)
+  const activeProject = location.pathname === '/projects' ? projects.find((project) => project.id === projectID) : undefined
   const activeEnvironments = activeProject ? environments.filter((environment) => environment.project_id === activeProject.id) : []
   const projectSection = activeProject ? projectSectionFromHash(location.hash) : ''
   const contextLabel = activeProject
     ? `${activeProject.slug} / ${activeEnvironments.length} env${activeEnvironments.length === 1 ? '' : 's'}`
-    : 'no projects'
+    : 'all projects'
 
   useEffect(() => {
     document.title = settings.name
@@ -109,12 +112,16 @@ export function AppShell() {
                   </Link>
                 {item.to === '/projects' && !collapsed && active && activeProject && (
                   <div className="ml-6 mt-1 space-y-1 border-l pl-2">
+                    <div className="px-2 py-1 text-xs text-muted">
+                      <div className="truncate font-medium text-ink">{activeProject.name}</div>
+                      <div className="truncate">{activeEnvironments.length} env{activeEnvironments.length === 1 ? '' : 's'}</div>
+                    </div>
                     {projectNav.map((projectItem) => {
                       const ProjectIcon = projectItem.icon
                       return (
                         <a
                           key={projectItem.hash}
-                          href={`/projects#${projectItem.hash}`}
+                          href={projectSectionHref(activeProject.id, projectItem.hash)}
                           className={cn(
                             'flex h-8 items-center gap-2 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
                             projectSection === projectItem.hash && 'bg-accent/15 text-accent-text',
@@ -185,6 +192,14 @@ export function AppShell() {
 function projectSectionFromHash(hash: string): string {
   const value = hash.replace(/^#/, '')
   return projectNav.some((item) => item.hash === value) ? value : 'overview'
+}
+
+function projectIDFromSearch(search: string): string {
+  return new URLSearchParams(search).get('project') ?? ''
+}
+
+function projectSectionHref(projectID: string, section: string): string {
+  return `/projects?project=${encodeURIComponent(projectID)}#${section}`
 }
 
 // ponytail: renders nothing for 150ms so fast suspense resolves invisibly

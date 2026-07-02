@@ -9,6 +9,7 @@ import { ApplicationsRoute } from './routes/applications'
 import { DeploymentsRoute } from './routes/deployments'
 import { CredentialsRoute } from './routes/credentials'
 import { ConnectorsRoute } from './routes/connectors'
+import { NotificationsRoute } from './routes/notifications'
 import { RegistriesRoute } from './routes/registries'
 import { ProxyRoute } from './routes/proxy'
 import { AuditRoute } from './routes/audit'
@@ -27,6 +28,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/applications', component: ApplicationsRoute }),
   createRoute({ getParentRoute: () => rootRoute, path: '/deployments', component: DeploymentsRoute }),
   createRoute({ getParentRoute: () => rootRoute, path: '/credentials', component: CredentialsRoute }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/notifications', component: NotificationsRoute }),
   createRoute({ getParentRoute: () => rootRoute, path: '/connectors', component: ConnectorsRoute }),
   createRoute({ getParentRoute: () => rootRoute, path: '/registries', component: RegistriesRoute }),
   createRoute({ getParentRoute: () => rootRoute, path: '/proxy', component: ProxyRoute }),

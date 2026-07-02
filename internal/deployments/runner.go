@@ -166,25 +166,15 @@ func deploymentLogEvent(entry db.DeploymentLog) LogEvent {
 }
 
 func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow) error {
-	if !target.SshKeyPath.Valid || strings.TrimSpace(target.SshKeyPath.String) == "" {
+	if target.ConnectionMode != sshutil.ConnectionModeTailscaleSSH && (!target.SshKeyPath.Valid || strings.TrimSpace(target.SshKeyPath.String) == "") {
 		return fmt.Errorf("server %s has no ssh key path configured", target.ServerName)
 	}
 
-	signerSource := r.signer
-	if signerSource == nil {
-		signerSource = sshutil.FileSigner{}
-	}
-	signer, err := signerSource.Signer(ctx, sshutil.ServerRef{
-		Host:    target.Hostname,
-		Port:    target.SshPort,
-		User:    target.SshUser,
-		KeyPath: target.SshKeyPath.String,
-	})
+	client, err := deploymentSSHClient(ctx, target, r.signer)
 	if err != nil {
-		return fmt.Errorf("load ssh key: %w", err)
+		return fmt.Errorf("prepare ssh client: %w", err)
 	}
 
-	client := sshutil.NewClient(target.Hostname, target.SshPort, target.SshUser, signer)
 	r.append(ctx, deployment, "system", fmt.Sprintf("Connecting to %s@%s", target.SshUser, target.Hostname))
 	r.append(ctx, deployment, "system", fmt.Sprintf("Strategy: %s", target.Strategy))
 	if deployment.Trigger == "rollback" {
@@ -238,6 +228,25 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 	}
 
 	return nil
+}
+
+func deploymentSSHClient(ctx context.Context, target db.GetDeploymentTargetRow, signerSource sshutil.SignerSource) (sshutil.Client, error) {
+	if target.ConnectionMode == sshutil.ConnectionModeTailscaleSSH {
+		return sshutil.NewTailscaleSSHClient(target.Hostname, target.SshPort, target.SshUser), nil
+	}
+	if signerSource == nil {
+		signerSource = sshutil.FileSigner{}
+	}
+	signer, err := signerSource.Signer(ctx, sshutil.ServerRef{
+		Host:    target.Hostname,
+		Port:    target.SshPort,
+		User:    target.SshUser,
+		KeyPath: target.SshKeyPath.String,
+	})
+	if err != nil {
+		return sshutil.Client{}, err
+	}
+	return sshutil.NewClient(target.Hostname, target.SshPort, target.SshUser, signer), nil
 }
 
 type remoteRunner interface {

@@ -5,6 +5,7 @@ import { Panel } from '../../components/ui/panel'
 import { SelectInput } from '../../components/ui/select-input'
 import { TextInput } from '../../components/ui/text-input'
 import type { Application, Environment, Server } from '../../lib/api'
+import { suggestedRemoteDirectory } from '../../lib/remote-directory'
 import { statusTone } from '../status'
 
 export type ApplicationFormState = {
@@ -77,9 +78,17 @@ export function ApplicationCreatePanel({
             <option key={server.id} value={server.id}>{server.name}</option>
           ))}
         </SelectInput>
-        <TextInput label="Name" value={form.name} onChange={(name) => onChange({ name })} required />
+        <TextInput
+          label="Name"
+          value={form.name}
+          onChange={(name) => onChange({
+            name,
+            ...(!form.remote_directory.trim() ? { remote_directory: suggestedRemoteDirectory(name) } : {}),
+          })}
+          required
+        />
         <TextInput label="Repository" value={form.repository_url} onChange={(repository_url) => onChange({ repository_url })} placeholder="git@github.com:org/app.git" />
-        <TextInput label="Remote directory" value={form.remote_directory} onChange={(remote_directory) => onChange({ remote_directory })} required placeholder="/srv/app" />
+        <TextInput label="Remote directory" value={form.remote_directory} onChange={(remote_directory) => onChange({ remote_directory })} required placeholder="/srv/deploy-manager/apps/api" />
         <TextInput label="Domain" value={form.domain} onChange={(domain) => onChange({ domain })} />
         <div className="flex items-end">
           <Button variant="primary" disabled={isSaving || !form.environment_id || !form.server_id || !form.name || !form.remote_directory}>

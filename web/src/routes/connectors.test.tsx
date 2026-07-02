@@ -54,18 +54,17 @@ describe('ConnectorsRoute', () => {
     expect(screen.getByText(/Last sync/)).toBeInTheDocument()
     expect(screen.getByText(/Registered GitHub connectors can sync repository credential references/)).toBeInTheDocument()
     expect(screen.getByText(/Registered S3 and GCS connectors can sync bucket metadata/)).toBeInTheDocument()
-    expect(screen.getByText(/Registered Slack connectors can sync channel permission metadata/)).toBeInTheDocument()
-    expect(screen.getByText(/Registered Resend connectors can sync sender permission metadata/)).toBeInTheDocument()
     expect(screen.getByText(/Inventory metadata keys: project, config, applications/)).toBeInTheDocument()
   })
 
   it('registers connector metadata without storing secrets', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Provider'), { target: { value: 's3' } })
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: ' production buckets ' } })
+    fireEvent.click(await screen.findByRole('button', { name: /S3/i }))
+    fireEvent.change(screen.getByLabelText('Connection name'), { target: { value: ' production buckets ' } })
+    fireEvent.click(screen.getByText('Advanced metadata'))
     fireEvent.change(screen.getByLabelText('Metadata JSON'), { target: { value: '{"region":"us-east-1"}' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     await waitFor(() => {
       expect(upsertConnector).toHaveBeenCalledWith({
@@ -80,8 +79,8 @@ describe('ConnectorsRoute', () => {
   it('rejects connector names with control characters before submit', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'prod\tbuckets' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.change(await screen.findByLabelText('Connection name'), { target: { value: 'prod\tbuckets' } })
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     expect(await screen.findByText('Connector name cannot contain control characters.')).toBeInTheDocument()
     expect(upsertConnector).not.toHaveBeenCalledWith(expect.objectContaining({ name: expect.stringContaining('prod') }))
@@ -90,9 +89,10 @@ describe('ConnectorsRoute', () => {
   it('treats whitespace-only connector metadata as an empty object', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'metadata optional' } })
+    fireEvent.change(await screen.findByLabelText('Connection name'), { target: { value: 'metadata optional' } })
+    fireEvent.click(screen.getByText('Advanced metadata'))
     fireEvent.change(screen.getByLabelText('Metadata JSON'), { target: { value: '   ' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     await waitFor(() => {
       expect(upsertConnector).toHaveBeenCalledWith(expect.objectContaining({
@@ -105,7 +105,8 @@ describe('ConnectorsRoute', () => {
   it('prunes blank connector metadata before submit', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'production buckets' } })
+    fireEvent.change(await screen.findByLabelText('Connection name'), { target: { value: 'production buckets' } })
+    fireEvent.click(screen.getByText('Advanced metadata'))
     fireEvent.change(screen.getByLabelText('Metadata JSON'), {
       target: {
         value: JSON.stringify({
@@ -116,7 +117,7 @@ describe('ConnectorsRoute', () => {
         }),
       },
     })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     await waitFor(() => {
       expect(upsertConnector).toHaveBeenCalledWith(expect.objectContaining({
@@ -142,9 +143,10 @@ describe('ConnectorsRoute', () => {
   it('rejects connector metadata that is not a JSON object', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'broken' } })
+    fireEvent.change(await screen.findByLabelText('Connection name'), { target: { value: 'broken' } })
+    fireEvent.click(screen.getByText('Advanced metadata'))
     fireEvent.change(screen.getByLabelText('Metadata JSON'), { target: { value: '["main"]' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     expect(await screen.findByText('Connector metadata must be a JSON object.')).toBeInTheDocument()
     expect(upsertConnector).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'broken' }))
@@ -153,9 +155,10 @@ describe('ConnectorsRoute', () => {
   it('rejects secret-like connector metadata before submit', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'leaky' } })
+    fireEvent.change(await screen.findByLabelText('Connection name'), { target: { value: 'leaky' } })
+    fireEvent.click(screen.getByText('Advanced metadata'))
     fireEvent.change(screen.getByLabelText('Metadata JSON'), { target: { value: '{"buckets":[{"accessKeyId":"secret"}]}' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     expect(await screen.findByText('Connector metadata cannot contain secrets, tokens, passwords, private keys, or API keys.')).toBeInTheDocument()
     expect(upsertConnector).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'leaky' }))
@@ -164,9 +167,10 @@ describe('ConnectorsRoute', () => {
   it('rejects blank secret-like connector metadata keys before submit', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'blank leaky key' } })
+    fireEvent.change(await screen.findByLabelText('Connection name'), { target: { value: 'blank leaky key' } })
+    fireEvent.click(screen.getByText('Advanced metadata'))
     fireEvent.change(screen.getByLabelText('Metadata JSON'), { target: { value: '{"api_key":" "}' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     expect(await screen.findByText('Connector metadata cannot contain secrets, tokens, passwords, private keys, or API keys.')).toBeInTheDocument()
     expect(upsertConnector).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'blank leaky key' }))
@@ -175,9 +179,10 @@ describe('ConnectorsRoute', () => {
   it('rejects raw secret material in connector metadata values before submit', async () => {
     renderRoute()
 
-    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'leaky value' } })
+    fireEvent.change(await screen.findByLabelText('Connection name'), { target: { value: 'leaky value' } })
+    fireEvent.click(screen.getByText('Advanced metadata'))
     fireEvent.change(screen.getByLabelText('Metadata JSON'), { target: { value: '{"reference":"ghp_1234567890"}' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save integration/i }))
 
     expect(await screen.findByText('Connector metadata cannot contain raw secret material.')).toBeInTheDocument()
     expect(upsertConnector).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'leaky value' }))

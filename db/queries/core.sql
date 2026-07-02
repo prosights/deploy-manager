@@ -1,18 +1,18 @@
 -- name: ListServers :many
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM servers
 ORDER BY name;
 
 -- name: CreateServer :one
-INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
+INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
 
 -- name: CreateServerWithSSHInventory :one
 WITH created_server AS (
-    INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type)
-    VALUES ($1, $2, $3, $4, $5, $6)
-    RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+    INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 ),
 ssh_credential AS (
     INSERT INTO credentials (name, provider, external_ref, credential_type, status, last_seen_at)
@@ -45,11 +45,11 @@ ssh_usage AS (
     SET usage_context = excluded.usage_context
     RETURNING id
 )
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM created_server;
 
 -- name: GetServer :one
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM servers
 WHERE id = $1;
 
@@ -57,7 +57,7 @@ WHERE id = $1;
 UPDATE servers
 SET status = $2, cpu_usage = $3, memory_usage = $4, disk_usage = $5, last_checked_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
+RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
 
 -- name: ListProjects :many
 SELECT p.id, p.name, p.slug, p.description, p.created_at, p.updated_at, p.default_registry_id,
@@ -87,6 +87,19 @@ SELECT id, name, slug, description, created_at, updated_at, default_registry_id
 FROM projects
 WHERE id = $1;
 
+-- name: UpdateProject :one
+UPDATE projects
+SET name = $2,
+    slug = $3,
+    description = $4,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id;
+
+-- name: DeleteProject :exec
+DELETE FROM projects
+WHERE id = $1;
+
 -- name: UpdateProjectRegistry :one
 UPDATE projects
 SET default_registry_id = sqlc.narg(default_registry_id)::uuid,
@@ -111,6 +124,10 @@ ORDER BY CASE kind WHEN 'production' THEN 1 WHEN 'development' THEN 2 ELSE 3 END
 -- name: GetEnvironment :one
 SELECT id, project_id, name, slug, kind, is_ephemeral, pull_request_number, branch, expires_at, created_at, updated_at
 FROM environments
+WHERE id = $1;
+
+-- name: DeleteEnvironment :exec
+DELETE FROM environments
 WHERE id = $1;
 
 -- name: CreateEnvironment :one
@@ -140,6 +157,10 @@ ORDER BY a.name;
 -- name: GetApplication :one
 SELECT id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy
 FROM applications
+WHERE id = $1;
+
+-- name: DeleteApplication :exec
+DELETE FROM applications
 WHERE id = $1;
 
 -- name: CreateApplication :one
@@ -245,6 +266,7 @@ SELECT d.id AS deployment_id,
        s.ssh_user,
        s.ssh_port,
        s.ssh_key_path,
+       s.connection_mode,
        s.proxy_type
 FROM deployments d
 JOIN applications a ON a.id = d.application_id
@@ -383,6 +405,10 @@ SELECT pr.id,
 FROM proxy_routes pr
 JOIN servers s ON s.id = pr.server_id
 WHERE pr.id = $1;
+
+-- name: DeleteProxyRoute :exec
+DELETE FROM proxy_routes
+WHERE id = $1;
 
 -- name: ListProxyRouteTargetsForApplication :many
 SELECT pr.id,

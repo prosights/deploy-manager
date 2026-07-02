@@ -22,8 +22,12 @@ type Querier interface {
 	CreateProxyRoute(ctx context.Context, arg CreateProxyRouteParams) (ProxyRoute, error)
 	CreateServer(ctx context.Context, arg CreateServerParams) (Server, error)
 	CreateServerWithSSHInventory(ctx context.Context, arg CreateServerWithSSHInventoryParams) (CreateServerWithSSHInventoryRow, error)
+	DeleteApplication(ctx context.Context, id pgtype.UUID) error
 	DeleteCredentialPermissions(ctx context.Context, credentialID pgtype.UUID) error
 	DeleteCredentialUsages(ctx context.Context, credentialID pgtype.UUID) error
+	DeleteEnvironment(ctx context.Context, id pgtype.UUID) error
+	DeleteProject(ctx context.Context, id pgtype.UUID) error
+	DeleteProxyRoute(ctx context.Context, id pgtype.UUID) error
 	FailRunningDeploymentsForRecovery(ctx context.Context) ([]FailRunningDeploymentsForRecoveryRow, error)
 	GetActiveDeploymentSlot(ctx context.Context, arg GetActiveDeploymentSlotParams) (ApplicationDeploymentSlot, error)
 	GetApplication(ctx context.Context, id pgtype.UUID) (Application, error)
@@ -64,6 +68,7 @@ type Querier interface {
 	UpdateApplicationStatus(ctx context.Context, arg UpdateApplicationStatusParams) (Application, error)
 	UpdateDeploymentStatus(ctx context.Context, arg UpdateDeploymentStatusParams) (Deployment, error)
 	UpdateInstanceSettings(ctx context.Context, arg UpdateInstanceSettingsParams) (InstanceSetting, error)
+	UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error)
 	UpdateProjectRegistry(ctx context.Context, arg UpdateProjectRegistryParams) (Project, error)
 	UpdateProxyRouteUpstream(ctx context.Context, arg UpdateProxyRouteUpstreamParams) (ProxyRoute, error)
 	UpdateServerHealth(ctx context.Context, arg UpdateServerHealthParams) (Server, error)

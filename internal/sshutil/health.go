@@ -19,6 +19,10 @@ type HealthResult struct {
 
 func Check(ctx context.Context, host string, port int32, user string, signer ssh.Signer) (HealthResult, error) {
 	client := NewClient(host, port, user, signer)
+	return CheckWithClient(ctx, client)
+}
+
+func CheckWithClient(ctx context.Context, client Client) (HealthResult, error) {
 	output, err := client.Run(ctx, healthMetricsCommand)
 	if err != nil {
 		return HealthResult{Status: "unreachable"}, err

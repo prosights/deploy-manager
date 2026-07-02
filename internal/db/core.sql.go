@@ -414,18 +414,19 @@ func (q *Queries) CreateProxyRoute(ctx context.Context, arg CreateProxyRoutePara
 }
 
 const createServer = `-- name: CreateServer :one
-INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 `
 
 type CreateServerParams struct {
-	Name       string      `json:"name"`
-	Hostname   string      `json:"hostname"`
-	SshUser    string      `json:"ssh_user"`
-	SshPort    int32       `json:"ssh_port"`
-	SshKeyPath pgtype.Text `json:"ssh_key_path"`
-	ProxyType  string      `json:"proxy_type"`
+	Name           string      `json:"name"`
+	Hostname       string      `json:"hostname"`
+	SshUser        string      `json:"ssh_user"`
+	SshPort        int32       `json:"ssh_port"`
+	SshKeyPath     pgtype.Text `json:"ssh_key_path"`
+	ConnectionMode string      `json:"connection_mode"`
+	ProxyType      string      `json:"proxy_type"`
 }
 
 func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Server, error) {
@@ -435,6 +436,7 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 		arg.SshUser,
 		arg.SshPort,
 		arg.SshKeyPath,
+		arg.ConnectionMode,
 		arg.ProxyType,
 	)
 	var i Server
@@ -445,6 +447,7 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 		&i.SshUser,
 		&i.SshPort,
 		&i.SshKeyPath,
+		&i.ConnectionMode,
 		&i.ProxyType,
 		&i.Status,
 		&i.CpuUsage,
@@ -459,9 +462,9 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 
 const createServerWithSSHInventory = `-- name: CreateServerWithSSHInventory :one
 WITH created_server AS (
-    INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type)
-    VALUES ($1, $2, $3, $4, $5, $6)
-    RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+    INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 ),
 ssh_credential AS (
     INSERT INTO credentials (name, provider, external_ref, credential_type, status, last_seen_at)
@@ -494,34 +497,36 @@ ssh_usage AS (
     SET usage_context = excluded.usage_context
     RETURNING id
 )
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM created_server
 `
 
 type CreateServerWithSSHInventoryParams struct {
-	Name       string      `json:"name"`
-	Hostname   string      `json:"hostname"`
-	SshUser    string      `json:"ssh_user"`
-	SshPort    int32       `json:"ssh_port"`
-	SshKeyPath pgtype.Text `json:"ssh_key_path"`
-	ProxyType  string      `json:"proxy_type"`
+	Name           string      `json:"name"`
+	Hostname       string      `json:"hostname"`
+	SshUser        string      `json:"ssh_user"`
+	SshPort        int32       `json:"ssh_port"`
+	SshKeyPath     pgtype.Text `json:"ssh_key_path"`
+	ConnectionMode string      `json:"connection_mode"`
+	ProxyType      string      `json:"proxy_type"`
 }
 
 type CreateServerWithSSHInventoryRow struct {
-	ID            pgtype.UUID        `json:"id"`
-	Name          string             `json:"name"`
-	Hostname      string             `json:"hostname"`
-	SshUser       string             `json:"ssh_user"`
-	SshPort       int32              `json:"ssh_port"`
-	SshKeyPath    pgtype.Text        `json:"ssh_key_path"`
-	ProxyType     string             `json:"proxy_type"`
-	Status        string             `json:"status"`
-	CpuUsage      pgtype.Numeric     `json:"cpu_usage"`
-	MemoryUsage   pgtype.Numeric     `json:"memory_usage"`
-	DiskUsage     pgtype.Numeric     `json:"disk_usage"`
-	LastCheckedAt pgtype.Timestamptz `json:"last_checked_at"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID             pgtype.UUID        `json:"id"`
+	Name           string             `json:"name"`
+	Hostname       string             `json:"hostname"`
+	SshUser        string             `json:"ssh_user"`
+	SshPort        int32              `json:"ssh_port"`
+	SshKeyPath     pgtype.Text        `json:"ssh_key_path"`
+	ConnectionMode string             `json:"connection_mode"`
+	ProxyType      string             `json:"proxy_type"`
+	Status         string             `json:"status"`
+	CpuUsage       pgtype.Numeric     `json:"cpu_usage"`
+	MemoryUsage    pgtype.Numeric     `json:"memory_usage"`
+	DiskUsage      pgtype.Numeric     `json:"disk_usage"`
+	LastCheckedAt  pgtype.Timestamptz `json:"last_checked_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 func (q *Queries) CreateServerWithSSHInventory(ctx context.Context, arg CreateServerWithSSHInventoryParams) (CreateServerWithSSHInventoryRow, error) {
@@ -531,6 +536,7 @@ func (q *Queries) CreateServerWithSSHInventory(ctx context.Context, arg CreateSe
 		arg.SshUser,
 		arg.SshPort,
 		arg.SshKeyPath,
+		arg.ConnectionMode,
 		arg.ProxyType,
 	)
 	var i CreateServerWithSSHInventoryRow
@@ -541,6 +547,7 @@ func (q *Queries) CreateServerWithSSHInventory(ctx context.Context, arg CreateSe
 		&i.SshUser,
 		&i.SshPort,
 		&i.SshKeyPath,
+		&i.ConnectionMode,
 		&i.ProxyType,
 		&i.Status,
 		&i.CpuUsage,
@@ -551,6 +558,16 @@ func (q *Queries) CreateServerWithSSHInventory(ctx context.Context, arg CreateSe
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const deleteApplication = `-- name: DeleteApplication :exec
+DELETE FROM applications
+WHERE id = $1
+`
+
+func (q *Queries) DeleteApplication(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteApplication, id)
+	return err
 }
 
 const deleteCredentialPermissions = `-- name: DeleteCredentialPermissions :exec
@@ -570,6 +587,36 @@ WHERE credential_id = $1
 
 func (q *Queries) DeleteCredentialUsages(ctx context.Context, credentialID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteCredentialUsages, credentialID)
+	return err
+}
+
+const deleteEnvironment = `-- name: DeleteEnvironment :exec
+DELETE FROM environments
+WHERE id = $1
+`
+
+func (q *Queries) DeleteEnvironment(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteEnvironment, id)
+	return err
+}
+
+const deleteProject = `-- name: DeleteProject :exec
+DELETE FROM projects
+WHERE id = $1
+`
+
+func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteProject, id)
+	return err
+}
+
+const deleteProxyRoute = `-- name: DeleteProxyRoute :exec
+DELETE FROM proxy_routes
+WHERE id = $1
+`
+
+func (q *Queries) DeleteProxyRoute(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteProxyRoute, id)
 	return err
 }
 
@@ -884,6 +931,7 @@ SELECT d.id AS deployment_id,
        s.ssh_user,
        s.ssh_port,
        s.ssh_key_path,
+       s.connection_mode,
        s.proxy_type
 FROM deployments d
 JOIN applications a ON a.id = d.application_id
@@ -913,6 +961,7 @@ type GetDeploymentTargetRow struct {
 	SshUser         string      `json:"ssh_user"`
 	SshPort         int32       `json:"ssh_port"`
 	SshKeyPath      pgtype.Text `json:"ssh_key_path"`
+	ConnectionMode  string      `json:"connection_mode"`
 	ProxyType       string      `json:"proxy_type"`
 }
 
@@ -941,6 +990,7 @@ func (q *Queries) GetDeploymentTarget(ctx context.Context, id pgtype.UUID) (GetD
 		&i.SshUser,
 		&i.SshPort,
 		&i.SshKeyPath,
+		&i.ConnectionMode,
 		&i.ProxyType,
 	)
 	return i, err
@@ -1080,7 +1130,7 @@ func (q *Queries) GetProxyRouteTarget(ctx context.Context, id pgtype.UUID) (GetP
 }
 
 const getServer = `-- name: GetServer :one
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM servers
 WHERE id = $1
 `
@@ -1095,6 +1145,7 @@ func (q *Queries) GetServer(ctx context.Context, id pgtype.UUID) (Server, error)
 		&i.SshUser,
 		&i.SshPort,
 		&i.SshKeyPath,
+		&i.ConnectionMode,
 		&i.ProxyType,
 		&i.Status,
 		&i.CpuUsage,
@@ -2020,7 +2071,7 @@ func (q *Queries) ListRecentDeploymentLogs(ctx context.Context, arg ListRecentDe
 }
 
 const listServers = `-- name: ListServers :many
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM servers
 ORDER BY name
 `
@@ -2041,6 +2092,7 @@ func (q *Queries) ListServers(ctx context.Context) ([]Server, error) {
 			&i.SshUser,
 			&i.SshPort,
 			&i.SshKeyPath,
+			&i.ConnectionMode,
 			&i.ProxyType,
 			&i.Status,
 			&i.CpuUsage,
@@ -2325,6 +2377,43 @@ func (q *Queries) UpdateInstanceSettings(ctx context.Context, arg UpdateInstance
 	return i, err
 }
 
+const updateProject = `-- name: UpdateProject :one
+UPDATE projects
+SET name = $2,
+    slug = $3,
+    description = $4,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
+`
+
+type UpdateProjectParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	Slug        string      `json:"slug"`
+	Description string      `json:"description"`
+}
+
+func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error) {
+	row := q.db.QueryRow(ctx, updateProject,
+		arg.ID,
+		arg.Name,
+		arg.Slug,
+		arg.Description,
+	)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DefaultRegistryID,
+	)
+	return i, err
+}
+
 const updateProjectRegistry = `-- name: UpdateProjectRegistry :one
 UPDATE projects
 SET default_registry_id = $1::uuid,
@@ -2391,7 +2480,7 @@ const updateServerHealth = `-- name: UpdateServerHealth :one
 UPDATE servers
 SET status = $2, cpu_usage = $3, memory_usage = $4, disk_usage = $5, last_checked_at = now(), updated_at = now()
 WHERE id = $1
-RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
+RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 `
 
 type UpdateServerHealthParams struct {
@@ -2418,6 +2507,7 @@ func (q *Queries) UpdateServerHealth(ctx context.Context, arg UpdateServerHealth
 		&i.SshUser,
 		&i.SshPort,
 		&i.SshKeyPath,
+		&i.ConnectionMode,
 		&i.ProxyType,
 		&i.Status,
 		&i.CpuUsage,

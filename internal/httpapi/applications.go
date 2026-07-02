@@ -56,6 +56,25 @@ func (s Server) createApplication(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, application)
 }
 
+func (s Server) deleteApplication(w http.ResponseWriter, r *http.Request) {
+	applicationID, err := parseUUIDParam(r, "applicationID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	application, err := s.queries.GetApplication(r.Context(), applicationID)
+	if err != nil {
+		writeError(w, applicationLookupError(err, "application not found"))
+		return
+	}
+	if err := s.queries.DeleteApplication(r.Context(), applicationID); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "application.delete", "application", uuidString(application.ID), application.Name, map[string]any{"environment_id": uuidString(application.EnvironmentID), "server_id": uuidString(application.ServerID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func normalizeCreateApplication(input db.CreateApplicationParams) (db.CreateApplicationParams, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Branch = strings.TrimSpace(input.Branch)

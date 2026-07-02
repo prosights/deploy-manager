@@ -2,7 +2,13 @@ import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tansta
 import { useMemo, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
-import { CredentialInventoryImportPanel, CredentialInventoryPanels, CredentialList } from '../features/credentials/components'
+import {
+  CredentialInventoryImportPanel,
+  CredentialInventoryPanels,
+  CredentialInventorySummary,
+  CredentialList,
+  CredentialSelectionHint,
+} from '../features/credentials/components'
 import { syncCredentialInventory, type CredentialInventoryInput } from '../lib/api'
 import { credentialDetailQuery, credentialsQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
@@ -66,6 +72,15 @@ export function CredentialsRoute() {
   return (
     <div className="space-y-5">
       <PageHeader title="Credential inventory" description="Permission and usage visibility for deployment credentials. Secret values stay in their source systems." />
+      <CredentialInventorySummary credentials={visibleCredentials} />
+      <CredentialList credentials={visibleCredentials} selectedID={selectedID} onInspect={setSelectedID} />
+      {!selectedCredential && visibleCredentials.length > 0 && (
+        <CredentialSelectionHint />
+      )}
+      {selectedCredential && (
+        <CredentialInventoryPanels credential={selectedCredential} detail={detail.data} />
+      )}
+      {detail.error && <BlockError message={detail.error.message} />}
       <CredentialInventoryImportPanel
         value={inventoryJSON}
         isSyncing={sync.isPending}
@@ -74,16 +89,6 @@ export function CredentialsRoute() {
         onChange={setInventoryJSON}
         onSubmit={submitInventory}
       />
-      <CredentialList credentials={visibleCredentials} onInspect={setSelectedID} />
-      {!selectedCredential && visibleCredentials.length > 0 && (
-        <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
-          Select a credential to inspect permissions and usage.
-        </div>
-      )}
-      {selectedCredential && (
-        <CredentialInventoryPanels credential={selectedCredential} detail={detail.data} />
-      )}
-      {detail.error && <BlockError message={detail.error.message} />}
     </div>
   )
 }

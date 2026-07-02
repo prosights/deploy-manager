@@ -42,6 +42,51 @@ func (s Server) createProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, project)
 }
 
+func (s Server) updateProject(w http.ResponseWriter, r *http.Request) {
+	projectID, err := parseUUIDParam(r, "projectID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var request db.UpdateProjectParams
+	if err := readJSON(w, r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+	request.ID = projectID
+	request, err = normalizeUpdateProject(request)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	project, err := s.queries.UpdateProject(r.Context(), request)
+	if err != nil {
+		writeError(w, applicationLookupError(err, "project not found"))
+		return
+	}
+	s.audit(r, "project.update", "project", uuidString(project.ID), project.Name, map[string]any{"slug": project.Slug})
+	writeJSON(w, http.StatusOK, project)
+}
+
+func (s Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	projectID, err := parseUUIDParam(r, "projectID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	project, err := s.queries.GetProject(r.Context(), projectID)
+	if err != nil {
+		writeError(w, applicationLookupError(err, "project not found"))
+		return
+	}
+	if err := s.queries.DeleteProject(r.Context(), projectID); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "project.delete", "project", uuidString(project.ID), project.Name, map[string]any{"slug": project.Slug})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s Server) updateProjectRegistry(w http.ResponseWriter, r *http.Request) {
 	projectID, err := parseUUIDParam(r, "projectID")
 	if err != nil {
@@ -109,7 +154,42 @@ func (s Server) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, environment)
 }
 
+func (s Server) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
+	environmentID, err := parseUUIDParam(r, "environmentID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	environment, err := s.queries.GetEnvironment(r.Context(), environmentID)
+	if err != nil {
+		writeError(w, applicationLookupError(err, "environment not found"))
+		return
+	}
+	if err := s.queries.DeleteEnvironment(r.Context(), environmentID); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "environment.delete", "environment", uuidString(environment.ID), environment.Name, map[string]any{"project_id": uuidString(environment.ProjectID), "kind": environment.Kind})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func normalizeCreateProject(input db.CreateProjectWithDefaultEnvironmentsParams) (db.CreateProjectWithDefaultEnvironmentsParams, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.Slug = normalizeSlug(input.Slug)
+	input.Description = strings.TrimSpace(input.Description)
+	if input.Name == "" || input.Slug == "" {
+		return input, validationError("name and slug are required")
+	}
+	if hasProjectControlCharacters(input.Name, input.Description) {
+		return input, validationError("project text fields cannot contain control characters")
+	}
+	if !slugPattern.MatchString(input.Slug) {
+		return input, validationError("slug must use lowercase letters, numbers, and hyphens")
+	}
+	return input, nil
+}
+
+func normalizeUpdateProject(input db.UpdateProjectParams) (db.UpdateProjectParams, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Slug = normalizeSlug(input.Slug)
 	input.Description = strings.TrimSpace(input.Description)

@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS instance_settings (
     name text NOT NULL DEFAULT 'Deploy Manager',
     short_name text NOT NULL DEFAULT 'Deploy',
     meta_description text NOT NULL DEFAULT 'Internal deployment control plane',
-    logo_url text NOT NULL DEFAULT '/branding/prosights/logo.svg',
+    logo_url text NOT NULL DEFAULT '/branding/prosights/prosights-co-logo.png',
     favicon_url text NOT NULL DEFAULT '/branding/prosights/favicon.png',
     primary_color text NOT NULL DEFAULT '#0980fd',
     docs_url text NOT NULL DEFAULT '#',
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS servers (
     ssh_user text NOT NULL DEFAULT 'root',
     ssh_port integer NOT NULL DEFAULT 22,
     ssh_key_path text,
+    connection_mode text NOT NULL DEFAULT 'direct_ssh' CHECK (connection_mode IN ('direct_ssh', 'tailscale_ssh', 'cloud_tunnel')),
     proxy_type text NOT NULL DEFAULT 'caddy' CHECK (proxy_type IN ('caddy', 'traefik', 'none')),
     status text NOT NULL DEFAULT 'unknown' CHECK (status IN ('healthy', 'degraded', 'unreachable', 'unknown')),
     cpu_usage numeric(5,2),
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS servers (
     CHECK (left(btrim(ssh_key_path), 1) = '/' OR left(btrim(ssh_key_path), 2) = '~/'),
     CHECK (btrim(ssh_key_path) !~ '//'),
     CHECK (btrim(ssh_key_path) !~ '(^|/)\.\.(/|$)'),
-    CHECK (name !~ '[[:cntrl:]]' AND hostname !~ '[[:cntrl:]]' AND ssh_user !~ '[[:cntrl:]]' AND ssh_key_path !~ '[[:cntrl:]]'),
+    CHECK (name !~ '[[:cntrl:]]' AND hostname !~ '[[:cntrl:]]' AND ssh_user !~ '[[:cntrl:]]' AND ssh_key_path !~ '[[:cntrl:]]' AND connection_mode !~ '[[:cntrl:]]'),
     CHECK (ssh_port BETWEEN 1 AND 65535),
     CHECK (cpu_usage IS NULL OR (cpu_usage >= 0 AND cpu_usage <= 100)),
     CHECK (memory_usage IS NULL OR (memory_usage >= 0 AND memory_usage <= 100)),
@@ -282,5 +283,5 @@ CREATE INDEX IF NOT EXISTS credential_usages_credential_idx ON credential_usages
 CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC);
 
 INSERT INTO instance_settings (name, short_name, meta_description, logo_url, favicon_url, primary_color, docs_url)
-SELECT 'Deploy Manager', 'Deploy', 'Internal deployment control plane', '/branding/prosights/logo.svg', '/branding/prosights/favicon.png', '#0980fd', '#'
+SELECT 'Deploy Manager', 'Deploy', 'Internal deployment control plane', '/branding/prosights/prosights-co-logo.png', '/branding/prosights/favicon.png', '#0980fd', '#'
 WHERE NOT EXISTS (SELECT 1 FROM instance_settings);

@@ -68,6 +68,7 @@ function ServerHealthPanel({ servers }: { servers: Server[] }) {
               <th className="px-4 py-3 font-medium">CPU</th>
               <th className="px-4 py-3 font-medium">RAM</th>
               <th className="px-4 py-3 font-medium">Disk</th>
+              <th className="px-4 py-3 font-medium">Last snapshot</th>
               <th className="px-4 py-3 font-medium">Proxy</th>
             </tr>
           </thead>
@@ -84,6 +85,7 @@ function ServerHealthPanel({ servers }: { servers: Server[] }) {
                 <td className="px-4 py-3 text-muted">{percent(server.cpu_usage)}</td>
                 <td className="px-4 py-3 text-muted">{percent(server.memory_usage)}</td>
                 <td className="px-4 py-3 text-muted">{percent(server.disk_usage)}</td>
+                <td className="px-4 py-3 text-muted">{formatSnapshotTime(server.last_checked_at)}</td>
                 <td className="px-4 py-3 text-muted">{server.proxy_type}</td>
               </tr>
             ))}
@@ -136,6 +138,13 @@ function DeploymentFact({ label, value, monospace }: { label: string; value: str
 function formatDateTime(value: string | null) {
   if (!value) {
     return 'not set'
+  }
+  return new Date(value).toLocaleString()
+}
+
+function formatSnapshotTime(value: string | null) {
+  if (!value) {
+    return 'not checked'
   }
   return new Date(value).toLocaleString()
 }

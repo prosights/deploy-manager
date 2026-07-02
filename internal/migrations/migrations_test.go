@@ -83,7 +83,7 @@ func TestInitialMigrationCarriesDeploymentGuardrails(t *testing.T) {
 		"CHECK (left(btrim(ssh_key_path), 1) = '/' OR left(btrim(ssh_key_path), 2) = '~/')",
 		"CHECK (btrim(ssh_key_path) !~ '//')",
 		"CHECK (btrim(ssh_key_path) !~ '(^|/)\\.\\.(/|$)')",
-		"CHECK (name !~ '[[:cntrl:]]' AND hostname !~ '[[:cntrl:]]' AND ssh_user !~ '[[:cntrl:]]' AND ssh_key_path !~ '[[:cntrl:]]')",
+		"CHECK (name !~ '[[:cntrl:]]' AND hostname !~ '[[:cntrl:]]' AND ssh_user !~ '[[:cntrl:]]' AND ssh_key_path !~ '[[:cntrl:]]' AND connection_mode !~ '[[:cntrl:]]')",
 		"CHECK (ssh_port BETWEEN 1 AND 65535)",
 		"CHECK (cpu_usage IS NULL OR (cpu_usage >= 0 AND cpu_usage <= 100))",
 		"CHECK (memory_usage IS NULL OR (memory_usage >= 0 AND memory_usage <= 100))",
@@ -198,6 +198,41 @@ func TestServerIdentityControlCharacterRequirementHasForwardMigration(t *testing
 	}
 	if !strings.Contains(sql, "CHECK (name !~ '[[:cntrl:]]' AND hostname !~ '[[:cntrl:]]' AND ssh_user !~ '[[:cntrl:]]' AND ssh_key_path !~ '[[:cntrl:]]') NOT VALID") {
 		t.Fatalf("expected future-write server identity guardrail, got %s", sql)
+	}
+}
+
+func TestServerConnectionModeHasForwardMigration(t *testing.T) {
+	migration, err := files.ReadFile("sql/027_server_connection_modes.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(migration)
+	for _, expected := range []string{
+		"ADD COLUMN IF NOT EXISTS connection_mode text NOT NULL DEFAULT 'direct_ssh'",
+		"CHECK (connection_mode IN ('direct_ssh', 'tailscale_ssh', 'cloud_tunnel')) NOT VALID",
+		"CHECK (connection_mode !~ '[[:cntrl:]]') NOT VALID",
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("expected server connection mode guardrail %q, got %s", expected, sql)
+		}
+	}
+}
+
+func TestTailscaleSSHKeylessServersHaveForwardMigration(t *testing.T) {
+	migration, err := files.ReadFile("sql/028_tailscale_ssh_keyless_servers.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(migration)
+	for _, expected := range []string{
+		"servers_ssh_key_path_required_for_direct_ssh",
+		"CHECK (connection_mode <> 'direct_ssh' OR (ssh_key_path IS NOT NULL AND btrim(ssh_key_path) <> '')) NOT VALID",
+		"servers_ssh_key_path_empty_for_tailscale_ssh",
+		"CHECK (connection_mode <> 'tailscale_ssh' OR ssh_key_path IS NULL) NOT VALID",
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("expected tailscale ssh guardrail %q, got %s", expected, sql)
+		}
 	}
 }
 

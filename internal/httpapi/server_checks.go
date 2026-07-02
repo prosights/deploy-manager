@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"math/big"
 	"net/http"
@@ -29,7 +30,9 @@ type sshHealthCheck struct {
 	signer sshutil.SignerSource
 }
 
-type dockerEngineCheck struct{}
+type dockerEngineCheck struct {
+	signer sshutil.SignerSource
+}
 
 var errDockerCheckSkipped = errors.New("docker check skipped because ssh failed")
 
@@ -50,11 +53,6 @@ func (s Server) checkServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, serverLookupError(err))
 		return
 	}
-	if !server.SshKeyPath.Valid || strings.TrimSpace(server.SshKeyPath.String) == "" {
-		writeError(w, validationError("server ssh_key_path is required for connectivity checks"))
-		return
-	}
-
 	checkCtx, cancel := context.WithTimeout(r.Context(), serverCheckTimeout)
 	defer cancel()
 	check := s.runServerChecks(checkCtx, server)
@@ -140,28 +138,39 @@ func (s Server) dockerEngineChecker() dockerEngineChecker {
 }
 
 func (c sshHealthCheck) Check(ctx context.Context, server db.Server) (sshutil.HealthResult, error) {
-	signerSource := c.signer
-	if signerSource == nil {
-		signerSource = sshutil.FileSigner{}
-	}
-	signer, err := signerSource.Signer(ctx, sshutil.ServerRef{
-		Host:    server.Hostname,
-		Port:    server.SshPort,
-		User:    server.SshUser,
-		KeyPath: server.SshKeyPath.String,
-	})
+	client, err := sshutil.ServerClient(ctx, server, c.signer)
 	if err != nil {
 		return sshutil.HealthResult{}, err
 	}
-	return sshutil.Check(ctx, server.Hostname, server.SshPort, server.SshUser, signer)
+	return sshutil.CheckWithClient(ctx, client)
 }
 
-func (dockerEngineCheck) Check(ctx context.Context, server db.Server) (dockerx.EngineStatus, error) {
-	dockerHost, err := dockerx.BuildSSHHost(server.SshUser, server.Hostname, server.SshPort)
+func (c dockerEngineCheck) Check(ctx context.Context, server db.Server) (dockerx.EngineStatus, error) {
+	client, err := sshutil.ServerClient(ctx, server, c.signer)
 	if err != nil {
 		return dockerx.EngineStatus{}, err
 	}
-	return dockerx.Check(ctx, dockerHost)
+	output, err := client.Run(ctx, `docker version --format '{{.Server.APIVersion}} {{.Server.Os}}'`)
+	if err != nil {
+		return dockerx.EngineStatus{}, err
+	}
+	apiVersion, osType, err := parseDockerVersionOutput(output)
+	if err != nil {
+		return dockerx.EngineStatus{}, err
+	}
+	return dockerx.EngineStatus{
+		Host:       dockerx.SSHHost(server.SshUser, server.Hostname, server.SshPort),
+		APIVersion: apiVersion,
+		OSType:     osType,
+	}, nil
+}
+
+func parseDockerVersionOutput(output string) (string, string, error) {
+	fields := strings.Fields(output)
+	if len(fields) != 2 {
+		return "", "", fmt.Errorf("unexpected docker version output")
+	}
+	return fields[0], fields[1], nil
 }
 
 type serverCheckResponse struct {

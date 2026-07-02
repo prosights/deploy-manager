@@ -15,7 +15,7 @@ vi.mock('../lib/queries', () => ({
       name: 'Prosights Deploy',
       short_name: 'Deploy',
       meta_description: 'Internal deployment control plane',
-      logo_url: '/branding/prosights/logo.svg',
+      logo_url: '/branding/prosights/prosights-co-logo.png',
       favicon_url: '/branding/prosights/favicon.png',
       primary_color: '#0980fd',
       docs_url: '#',
@@ -87,7 +87,7 @@ describe('SettingsRoute', () => {
 
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: ' Deploy Manager ' } })
     fireEvent.change(screen.getByLabelText('Short name'), { target: { value: ' Deploy ' } })
-    fireEvent.change(screen.getByLabelText('Logo URL'), { target: { value: ' /branding/prosights/logo.svg ' } })
+    fireEvent.change(screen.getByLabelText('Logo URL'), { target: { value: ' /branding/prosights/prosights-co-logo.png ' } })
     fireEvent.change(screen.getByLabelText('Primary color'), { target: { value: ' ' } })
     fireEvent.change(screen.getByLabelText('Docs URL'), { target: { value: ' ' } })
     fireEvent.click(screen.getByRole('button', { name: /apply settings/i }))
@@ -96,7 +96,7 @@ describe('SettingsRoute', () => {
       expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
         name: 'Deploy Manager',
         short_name: 'Deploy',
-        logo_url: '/branding/prosights/logo.svg',
+        logo_url: '/branding/prosights/prosights-co-logo.png',
         primary_color: '#0980fd',
         docs_url: '#',
       }))

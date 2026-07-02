@@ -14,7 +14,8 @@ export function ConnectorsRoute() {
   const searchQuery = useUiStore((state) => state.searchQuery)
   const [form, setForm] = useState(defaultConnectorForm)
   const [formError, setFormError] = useState<string>()
-  const visibleConnectors = connectors.filter((connector) => matchesSearch(searchQuery, [
+  const inventoryConnectors = connectors.filter((connector) => connector.provider !== 'slack' && connector.provider !== 'resend')
+  const visibleConnectors = inventoryConnectors.filter((connector) => matchesSearch(searchQuery, [
     connector.name,
     connector.provider,
     connector.enabled ? 'enabled' : 'disabled',
@@ -50,7 +51,7 @@ export function ConnectorsRoute() {
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Connectors" description="Provider integrations for deployments, notifications, object storage, and secret-system runtime sync." />
+      <PageHeader title="Connectors" description="Connect deploy sources, secrets, and cloud inventory without storing provider secrets here." />
       <ConnectorForm
         form={form}
         isSaving={save.isPending}

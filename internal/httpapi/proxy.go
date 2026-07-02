@@ -77,6 +77,25 @@ func (s Server) createProxyRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, route)
 }
 
+func (s Server) deleteProxyRoute(w http.ResponseWriter, r *http.Request) {
+	routeID, err := parseUUIDParam(r, "routeID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	route, err := s.queries.GetProxyRouteTarget(r.Context(), routeID)
+	if err != nil {
+		writeError(w, proxyLookupError(err, "proxy route not found"))
+		return
+	}
+	if err := s.queries.DeleteProxyRoute(r.Context(), routeID); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.audit(r, "proxy_route.delete", "proxy_route", uuidString(route.ID), route.Domain, map[string]any{"server_id": uuidString(route.ServerID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func normalizeCreateProxyRoute(input db.CreateProxyRouteParams, application *db.Application) db.CreateProxyRouteParams {
 	if application != nil {
 		input.ServerID = application.ServerID

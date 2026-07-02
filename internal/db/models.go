@@ -188,18 +188,19 @@ type ProxyRoute struct {
 }
 
 type Server struct {
-	ID            pgtype.UUID        `json:"id"`
-	Name          string             `json:"name"`
-	Hostname      string             `json:"hostname"`
-	SshUser       string             `json:"ssh_user"`
-	SshPort       int32              `json:"ssh_port"`
-	SshKeyPath    pgtype.Text        `json:"ssh_key_path"`
-	ProxyType     string             `json:"proxy_type"`
-	Status        string             `json:"status"`
-	CpuUsage      pgtype.Numeric     `json:"cpu_usage"`
-	MemoryUsage   pgtype.Numeric     `json:"memory_usage"`
-	DiskUsage     pgtype.Numeric     `json:"disk_usage"`
-	LastCheckedAt pgtype.Timestamptz `json:"last_checked_at"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	ID             pgtype.UUID        `json:"id"`
+	Name           string             `json:"name"`
+	Hostname       string             `json:"hostname"`
+	SshUser        string             `json:"ssh_user"`
+	SshPort        int32              `json:"ssh_port"`
+	SshKeyPath     pgtype.Text        `json:"ssh_key_path"`
+	ConnectionMode string             `json:"connection_mode"`
+	ProxyType      string             `json:"proxy_type"`
+	Status         string             `json:"status"`
+	CpuUsage       pgtype.Numeric     `json:"cpu_usage"`
+	MemoryUsage    pgtype.Numeric     `json:"memory_usage"`
+	DiskUsage      pgtype.Numeric     `json:"disk_usage"`
+	LastCheckedAt  pgtype.Timestamptz `json:"last_checked_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }

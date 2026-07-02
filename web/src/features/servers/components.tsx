@@ -1,11 +1,15 @@
-import { Wifi } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Terminal as XTerm } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
+import { LogOut, Terminal as TerminalIcon, Wifi } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { PanelError } from '../../components/ui/error-message'
 import { Panel } from '../../components/ui/panel'
 import { SelectInput } from '../../components/ui/select-input'
 import { TextInput } from '../../components/ui/text-input'
-import type { Server } from '../../lib/api'
+import { webSocketURL, type Application, type Server, type TailscaleDevicesResponse } from '../../lib/api'
 import { percent, statusTone } from '../status'
 
 export type ServerFormState = {
@@ -14,6 +18,7 @@ export type ServerFormState = {
   ssh_user: string
   ssh_port: string
   ssh_key_path: string
+  connection_mode: Server['connection_mode']
   proxy_type: 'caddy' | 'traefik' | 'none'
 }
 
@@ -32,12 +37,14 @@ export function defaultServerForm(): ServerFormState {
     ssh_user: 'root',
     ssh_port: '22',
     ssh_key_path: '',
+    connection_mode: 'direct_ssh',
     proxy_type: 'caddy',
   }
 }
 
 type ServerCreatePanelProps = {
   form: ServerFormState
+  tailscaleDevices?: TailscaleDevicesResponse
   isSaving: boolean
   errorMessage?: string
   onChange: (updates: Partial<ServerFormState>) => void
@@ -46,15 +53,55 @@ type ServerCreatePanelProps = {
 
 export function ServerCreatePanel({
   form,
+  tailscaleDevices,
   isSaving,
   errorMessage,
   onChange,
   onSubmit,
 }: ServerCreatePanelProps) {
+  const selectedDeviceKey = tailscaleDevices?.devices.find((device) => device.host === form.hostname)?.host ?? ''
+  const requiresSSHKey = form.connection_mode === 'direct_ssh'
+  function importTailscaleDevice(host: string) {
+    const device = tailscaleDevices?.devices.find((item) => item.host === host)
+    if (!device) {
+      return
+    }
+    onChange({
+      name: device.name,
+      hostname: device.host,
+      connection_mode: 'tailscale_ssh',
+      ssh_key_path: '',
+    })
+  }
+
+  function setConnectionMode(connectionMode: ServerFormState['connection_mode']) {
+    onChange({
+      connection_mode: connectionMode,
+      ...(connectionMode === 'tailscale_ssh' ? { ssh_key_path: '' } : {}),
+    })
+  }
+
   return (
     <Panel title="Register server">
+      {tailscaleDevices && (
+        <div className="border-b p-4">
+          <SelectInput label="Tailscale machine" value={selectedDeviceKey} onChange={importTailscaleDevice} disabled={!tailscaleDevices.available || tailscaleDevices.devices.length === 0}>
+            <option value="">{tailscaleDevices.available ? 'Select machine' : 'Tailscale unavailable'}</option>
+            {tailscaleDevices.devices.map((device) => (
+              <option key={device.host} value={device.host}>
+                {device.name} · {device.host}{device.online ? '' : ' · offline'}
+              </option>
+            ))}
+          </SelectInput>
+          <div className="mt-2 text-xs text-muted">
+            {tailscaleDevices.available
+              ? 'Import fills the server name and tailnet IP. Tailscale SSH uses tailnet policy instead of an SSH key path.'
+              : tailscaleDevices.error ?? 'Tailscale is not available on this host.'}
+          </div>
+        </div>
+      )}
       <form
-        className="grid gap-3 p-4 md:grid-cols-[1fr_1fr_110px_110px_1fr_120px_auto]"
+        className="grid gap-3 p-4 md:grid-cols-[1fr_1fr_110px_110px_1fr_150px_120px_auto]"
         noValidate
         onSubmit={(event) => {
           event.preventDefault()
@@ -76,14 +123,18 @@ export function ServerCreatePanel({
             required
           />
         </label>
-        <TextInput label="SSH key path" value={form.ssh_key_path} onChange={(ssh_key_path) => onChange({ ssh_key_path })} placeholder="~/.ssh/id_ed25519" required />
+        <TextInput label="SSH key path" value={form.ssh_key_path} onChange={(ssh_key_path) => onChange({ ssh_key_path })} placeholder={requiresSSHKey ? '~/.ssh/id_ed25519' : 'not used for Tailscale SSH'} disabled={!requiresSSHKey} required={requiresSSHKey} />
+        <SelectInput label="Connection" value={form.connection_mode} onChange={(connection_mode) => setConnectionMode(connection_mode as ServerFormState['connection_mode'])}>
+          <option value="direct_ssh">Direct SSH</option>
+          <option value="tailscale_ssh">Tailscale SSH</option>
+        </SelectInput>
         <SelectInput label="Proxy" value={form.proxy_type} onChange={(proxy_type) => onChange({ proxy_type: proxy_type as ServerFormState['proxy_type'] })}>
           <option value="caddy">Caddy</option>
           <option value="traefik">Traefik</option>
           <option value="none">None</option>
         </SelectInput>
         <div className="flex items-end">
-          <Button variant="primary" disabled={isSaving || !form.name || !form.hostname || !form.ssh_key_path}>
+          <Button variant="primary" disabled={isSaving || !form.name || !form.hostname || (requiresSSHKey && !form.ssh_key_path)}>
             {isSaving ? 'Saving...' : 'Save'}
           </Button>
         </div>
@@ -98,9 +149,10 @@ type ServerListProps = {
   checkResults: ServerCheckResults
   isChecking: boolean
   onCheck: (serverID: string) => void
+  onOpenConsole: (serverID: string) => void
 }
 
-export function ServerList({ servers, checkResults, isChecking, onCheck }: ServerListProps) {
+export function ServerList({ servers, checkResults, isChecking, onCheck, onOpenConsole }: ServerListProps) {
   return (
     <Panel>
       <div className="overflow-x-auto">
@@ -109,6 +161,7 @@ export function ServerList({ servers, checkResults, isChecking, onCheck }: Serve
             <tr>
               <th className="px-4 py-3 font-medium">Name</th>
               <th className="px-4 py-3 font-medium">Host</th>
+              <th className="px-4 py-3 font-medium">Connection</th>
               <th className="px-4 py-3 font-medium">Status</th>
               <th className="px-4 py-3 font-medium">Resource usage</th>
               <th className="px-4 py-3 font-medium">Last checked</th>
@@ -122,8 +175,9 @@ export function ServerList({ servers, checkResults, isChecking, onCheck }: Serve
                 <td className="px-4 py-3 font-medium">{server.name}</td>
                 <td className="px-4 py-3">
                   <div className="font-mono text-xs text-ink">{server.ssh_user}@{server.hostname}:{server.ssh_port}</div>
-                  <div className="mt-1 text-xs text-muted">{server.ssh_key_path ?? 'ssh key not configured'}</div>
+                  <div className="mt-1 text-xs text-muted">{server.connection_mode === 'tailscale_ssh' ? 'keyless via tailnet policy' : server.ssh_key_path ?? 'ssh key not configured'}</div>
                 </td>
+                <td className="px-4 py-3 text-muted">{connectionModeLabel(server.connection_mode)}</td>
                 <td className="px-4 py-3">
                   <Badge tone={statusTone(server.status)}>{server.status}</Badge>
                 </td>
@@ -131,10 +185,16 @@ export function ServerList({ servers, checkResults, isChecking, onCheck }: Serve
                 <td className="px-4 py-3 text-muted">{formatLastChecked(server.last_checked_at)}</td>
                 <td className="px-4 py-3 text-muted">{server.proxy_type}</td>
                 <td className="px-4 py-3">
-                  <Button variant="ghost" disabled={!server.ssh_key_path || isChecking} onClick={() => onCheck(server.id)}>
-                    <Wifi className="size-4" />
-                    Check
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="ghost" disabled={!canConnectToServer(server) || isChecking} onClick={() => onCheck(server.id)}>
+                      <Wifi className="size-4" />
+                      Check
+                    </Button>
+                    <Button variant="secondary" disabled={!canConnectToServer(server)} onClick={() => onOpenConsole(server.id)}>
+                      <TerminalIcon className="size-4" />
+                      Console
+                    </Button>
+                  </div>
                   {checkResults[server.id] && <ServerCheckSummary result={checkResults[server.id]} />}
                 </td>
               </tr>
@@ -145,6 +205,201 @@ export function ServerList({ servers, checkResults, isChecking, onCheck }: Serve
       {servers.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No servers found.</div>}
     </Panel>
   )
+}
+
+type ServerTerminalPanelProps = {
+  servers: Server[]
+  applications: Application[]
+  selectedServerID: string
+  selectedApplicationID: string
+  isOpen: boolean
+  onSelectServer: (serverID: string) => void
+  onSelectApplication: (applicationID: string) => void
+  onClose: () => void
+}
+
+export function ServerTerminalPanel({
+  servers,
+  applications,
+  selectedServerID,
+  selectedApplicationID,
+  isOpen,
+  onSelectServer,
+  onSelectApplication,
+  onClose,
+}: ServerTerminalPanelProps) {
+  const terminalRef = useRef<HTMLDivElement>(null)
+  const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle')
+  const selectedServer = servers.find((server) => server.id === selectedServerID)
+  const serverApplications = applications.filter((application) => application.server_id === selectedServerID)
+  const selectedApplication = serverApplications.find((application) => application.id === selectedApplicationID)
+
+  useEffect(() => {
+    if (!isOpen || !selectedServer || !selectedApplication || !terminalRef.current) {
+      setStatus('idle')
+      return
+    }
+
+    setStatus('connecting')
+    const terminal = new XTerm({
+      allowProposedApi: false,
+      convertEol: true,
+      cursorBlink: true,
+      fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
+      fontSize: 13,
+      theme: {
+        background: '#09090b',
+        foreground: '#e5e7eb',
+        cursor: '#ffffff',
+        black: '#18181b',
+        red: '#ef4444',
+        green: '#22c55e',
+        yellow: '#eab308',
+        blue: '#3b82f6',
+        magenta: '#a855f7',
+        cyan: '#06b6d4',
+        white: '#f4f4f5',
+        brightBlack: '#71717a',
+        brightRed: '#f87171',
+        brightGreen: '#4ade80',
+        brightYellow: '#facc15',
+        brightBlue: '#60a5fa',
+        brightMagenta: '#c084fc',
+        brightCyan: '#22d3ee',
+        brightWhite: '#ffffff',
+      },
+    })
+    const fitAddon = new FitAddon()
+    terminal.loadAddon(fitAddon)
+    terminal.open(terminalRef.current)
+    fitAddon.fit()
+    terminal.focus()
+    terminal.writeln(`Connecting to ${selectedServer.name}:${selectedApplication.remote_directory}...`)
+
+    const socket = new WebSocket(webSocketURL(`/api/servers/${selectedServer.id}/terminal?application_id=${encodeURIComponent(selectedApplication.id)}`))
+    const sendResize = () => {
+      fitAddon.fit()
+      socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }))
+    }
+    const resize = () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        sendResize()
+      }
+    }
+
+    socket.addEventListener('open', () => {
+      setStatus('connected')
+      terminal.clear()
+      sendResize()
+    })
+    socket.addEventListener('message', (event) => {
+      terminal.write(String(event.data))
+    })
+    socket.addEventListener('close', () => {
+      setStatus('closed')
+      terminal.writeln('\r\nconnection closed')
+    })
+    socket.addEventListener('error', () => {
+      setStatus('error')
+      terminal.writeln('\r\nterminal connection failed')
+    })
+    const disposable = terminal.onData((data) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'input', data }))
+      }
+    })
+    window.addEventListener('resize', resize)
+
+    return () => {
+      window.removeEventListener('resize', resize)
+      disposable.dispose()
+      socket.close()
+      terminal.dispose()
+    }
+  }, [isOpen, selectedServer, selectedApplication])
+
+  if (!isOpen) {
+    return null
+  }
+
+  return (
+    <Panel
+      title="Terminal console"
+      action={
+        <div className="flex items-center gap-3">
+          {selectedServer && <span className="font-mono text-xs text-muted">{terminalStatusLabel(status)} · {selectedServer.hostname}:{selectedServer.ssh_port}</span>}
+          <Button variant="ghost" onClick={onClose}>
+            <LogOut className="size-4" />
+            Leave
+          </Button>
+        </div>
+      }
+    >
+      <div className="grid gap-3 p-4 lg:grid-cols-[220px_260px_1fr]">
+        <SelectInput label="Server" value={selectedServerID} onChange={onSelectServer}>
+          {servers.map((server) => (
+            <option key={server.id} value={server.id}>{server.name}</option>
+          ))}
+        </SelectInput>
+        <SelectInput label="Application" value={selectedApplicationID} onChange={onSelectApplication}>
+          {serverApplications.map((application) => (
+            <option key={application.id} value={application.id}>{application.name}</option>
+          ))}
+        </SelectInput>
+        <div className="flex items-end">
+          <div className="flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm text-muted">
+            <TerminalIcon className="size-4" />
+            <span className="truncate">{selectedApplication?.remote_directory ?? 'No application target selected'}</span>
+          </div>
+        </div>
+      </div>
+      <div className="border-t p-4">
+        {!selectedServer && <PanelError message="Select a server before opening the terminal." />}
+        {selectedServer && !selectedApplication && <PanelError message="Select an application target before opening the terminal." />}
+        <div className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-inner">
+          <div className="flex h-9 items-center justify-between border-b border-white/10 px-3">
+            <div className="flex items-center gap-2 text-xs text-zinc-400">
+              <span className="size-2 rounded-full bg-red-400" />
+              <span className="size-2 rounded-full bg-yellow-300" />
+              <span className="size-2 rounded-full bg-emerald-400" />
+            </div>
+            <div className="font-mono text-xs text-zinc-400">ssh console</div>
+          </div>
+          <div ref={terminalRef} className="h-[420px] p-2 [&_.xterm]:h-full [&_.xterm-viewport]:overflow-y-auto" />
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
+function terminalStatusLabel(status: 'idle' | 'connecting' | 'connected' | 'closed' | 'error') {
+  switch (status) {
+    case 'connecting':
+      return 'connecting'
+    case 'connected':
+      return 'connected'
+    case 'error':
+      return 'error'
+    case 'closed':
+      return 'closed'
+    default:
+      return 'idle'
+  }
+}
+
+function connectionModeLabel(connectionMode: Server['connection_mode']) {
+  switch (connectionMode) {
+    case 'tailscale_ssh':
+      return 'Tailscale SSH'
+    case 'cloud_tunnel':
+      return 'Cloud tunnel'
+    default:
+      return 'Direct SSH'
+  }
+}
+
+function canConnectToServer(server: Server) {
+  return server.connection_mode === 'tailscale_ssh' || Boolean(server.ssh_key_path)
 }
 
 function formatLastChecked(value: string | null) {

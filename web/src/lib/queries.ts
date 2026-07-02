@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import { api, listDeploymentLogs, type Application, type AuditEvent, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type Environment, type InstanceSettings, type Project, type ProxyRoute, type Server } from './api'
+import { api, listDeploymentLogs, type Application, type AuditEvent, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type Environment, type InstanceSettings, type Project, type ProxyRoute, type Server, type TailscaleDevicesResponse } from './api'
 
 export const settingsQuery = queryOptions({
   queryKey: ['settings'],
@@ -14,6 +14,11 @@ export const auditEventsQuery = queryOptions({
 export const serversQuery = queryOptions({
   queryKey: ['servers'],
   queryFn: ({ signal }) => api<Server[]>('/api/servers', { signal }),
+})
+
+export const tailscaleDevicesQuery = queryOptions({
+  queryKey: ['tailscale-devices'],
+  queryFn: ({ signal }) => api<TailscaleDevicesResponse>('/api/tailscale/devices', { signal }),
 })
 
 export const projectsQuery = queryOptions({

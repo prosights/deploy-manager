@@ -26,8 +26,9 @@ type Server struct {
 	sources map[string]connectors.Connector
 	static  string
 
-	sshHealth    sshHealthChecker
-	dockerEngine dockerEngineChecker
+	sshHealth      sshHealthChecker
+	dockerEngine   dockerEngineChecker
+	remoteCommands remoteCommandRunner
 }
 
 type transactionStarter interface {
@@ -80,14 +81,21 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Get("/audit-events", server.listAuditEvents)
 			r.Get("/projects", server.listProjects)
 			r.Post("/projects", server.createProject)
+			r.Patch("/projects/{projectID}", server.updateProject)
+			r.Delete("/projects/{projectID}", server.deleteProject)
 			r.Patch("/projects/{projectID}/registry", server.updateProjectRegistry)
 			r.Get("/environments", server.listEnvironments)
 			r.Post("/environments", server.createEnvironment)
+			r.Delete("/environments/{environmentID}", server.deleteEnvironment)
 			r.Get("/servers", server.listServers)
 			r.Post("/servers", server.createServer)
+			r.Get("/tailscale/devices", server.listTailscaleDevices)
 			r.Post("/servers/{serverID}/check", server.checkServer)
+			r.Post("/servers/{serverID}/commands", server.runServerCommand)
+			r.Get("/servers/{serverID}/terminal", server.serverTerminal)
 			r.Get("/applications", server.listApplications)
 			r.Post("/applications", server.createApplication)
+			r.Delete("/applications/{applicationID}", server.deleteApplication)
 			r.Post("/applications/{applicationID}/rollback", server.rollbackApplication)
 			r.Get("/deployments", server.listDeployments)
 			r.Post("/deployments", server.createDeployment)
@@ -106,6 +114,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Post("/container-registries", server.upsertContainerRegistry)
 			r.Get("/proxy-routes", server.listProxyRoutes)
 			r.Post("/proxy-routes", server.createProxyRoute)
+			r.Delete("/proxy-routes/{routeID}", server.deleteProxyRoute)
 			r.Post("/proxy-routes/{routeID}/apply", server.applyProxyRoute)
 		})
 	})
