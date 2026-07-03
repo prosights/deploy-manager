@@ -8,21 +8,21 @@ import (
 	"deploy-manager/internal/auditlog"
 )
 
-func TestAuditActorUsesTrimmedDeployActorHeader(t *testing.T) {
+func TestAuditActorIgnoresDeployActorHeader(t *testing.T) {
 	request := &http.Request{Header: http.Header{}, RemoteAddr: "10.0.0.5:1234"}
 	request.Header.Set("X-Deploy-Actor", " ali ")
 
-	if actor := auditActor(request); actor != "ali" {
-		t.Fatalf("expected deploy actor, got %q", actor)
+	if actor := auditActor(request); actor != "10.0.0.5" {
+		t.Fatalf("expected remote actor, got %q", actor)
 	}
 }
 
-func TestAuditActorRemovesControlCharacters(t *testing.T) {
+func TestAuditActorUsesGitHubDeliveryHeader(t *testing.T) {
 	request := &http.Request{Header: http.Header{}, RemoteAddr: "10.0.0.5:1234"}
-	request.Header.Set("X-Deploy-Actor", " ali\nroot\t ")
+	request.Header.Set("X-GitHub-Delivery", " delivery-1 ")
 
-	if actor := auditActor(request); actor != "aliroot" {
-		t.Fatalf("expected sanitized deploy actor, got %q", actor)
+	if actor := auditActor(request); actor != "delivery-1" {
+		t.Fatalf("expected github delivery actor, got %q", actor)
 	}
 }
 
@@ -36,7 +36,7 @@ func TestAuditActorUsesRemoteHostWithoutPort(t *testing.T) {
 
 func TestAuditActorIsBounded(t *testing.T) {
 	request := &http.Request{Header: http.Header{}}
-	request.Header.Set("X-Deploy-Actor", strings.Repeat("x", 200))
+	request.Header.Set("X-GitHub-Delivery", strings.Repeat("x", 200))
 
 	if actor := auditActor(request); len(actor) != auditlog.MaxIdentityLength {
 		t.Fatalf("expected bounded actor length, got %d", len(actor))

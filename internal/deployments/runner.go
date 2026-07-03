@@ -143,6 +143,7 @@ func (r Runner) append(ctx context.Context, deployment db.Deployment, stream str
 }
 
 func normalizeDeploymentLogMessage(message string) (string, bool) {
+	message = stringutil.RedactSensitiveText(message)
 	if strings.TrimSpace(message) == "" {
 		return "", false
 	}

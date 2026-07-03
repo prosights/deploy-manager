@@ -83,11 +83,8 @@ func (s Server) audit(r *http.Request, action string, targetType string, targetI
 }
 
 func auditActor(r *http.Request) string {
-	for _, header := range []string{"X-Deploy-Actor", "X-GitHub-Delivery"} {
-		value := normalizeAuditActor(r.Header.Get(header))
-		if value != "" {
-			return value
-		}
+	if value := normalizeAuditActor(r.Header.Get("X-GitHub-Delivery")); value != "" {
+		return value
 	}
 	if r.RemoteAddr != "" {
 		return normalizeRemoteActor(r.RemoteAddr)

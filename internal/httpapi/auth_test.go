@@ -64,15 +64,27 @@ func TestAuthAllowsGithubWebhookWithoutToken(t *testing.T) {
 	}
 }
 
-func TestAuthDisabledWhenNoTokenConfigured(t *testing.T) {
-	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{})
+func TestAuthDisabledOnlyWhenExplicitlyConfigured(t *testing.T) {
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{Disabled: true})
 
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/healthz", nil)
 	handler.ServeHTTP(response, request)
 
 	if response.Code == http.StatusUnauthorized {
-		t.Fatal("auth must be disabled when no token is configured")
+		t.Fatal("auth must be disabled when explicitly configured")
+	}
+}
+
+func TestAuthRejectsQueryToken(t *testing.T) {
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{Token: "supersecrettoken123"})
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/projects?access_token=supersecrettoken123", nil)
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected query token to be rejected, got %d", response.Code)
 	}
 }
 

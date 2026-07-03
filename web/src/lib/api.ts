@@ -365,20 +365,12 @@ export class ApiError extends Error {
   }
 }
 
-export const apiToken: string = import.meta.env.VITE_API_TOKEN ?? ''
-
 function authHeaders(): Record<string, string> {
-  return apiToken ? { Authorization: `Bearer ${apiToken}` } : {}
+  return {}
 }
 
-// withAccessToken appends the access_token query param used to authenticate
-// EventSource (SSE) connections, which cannot set request headers.
 export function withAccessToken(path: string): string {
-  if (!apiToken) {
-    return path
-  }
-  const separator = path.includes('?') ? '&' : '?'
-  return `${path}${separator}access_token=${encodeURIComponent(apiToken)}`
+  return path
 }
 
 export function webSocketURL(path: string): string {

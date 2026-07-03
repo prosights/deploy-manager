@@ -159,3 +159,16 @@ func TestTailscaleSSHClientAllowsNoSigner(t *testing.T) {
 		t.Fatalf("expected tailscale ssh client to avoid static auth methods, got %+v", client)
 	}
 }
+
+func TestValidateTailscaleHost(t *testing.T) {
+	for _, host := range []string{"100.79.100.28", "fd7a:115c:a1e0::1", "workflows.tail897611.ts.net"} {
+		if err := ValidateTailscaleHost(host); err != nil {
+			t.Fatalf("expected %q to be accepted: %v", host, err)
+		}
+	}
+	for _, host := range []string{"10.0.0.10", "example.com", "bad host.ts.net"} {
+		if err := ValidateTailscaleHost(host); err == nil {
+			t.Fatalf("expected %q to be rejected", host)
+		}
+	}
+}

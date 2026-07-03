@@ -37,6 +37,7 @@ services:
       STATIC_DIR: web/dist
       SSH_KNOWN_HOSTS_PATH: /app/known_hosts
       API_TOKEN: "${API_TOKEN:-}"
+      AUTH_DISABLED: "${AUTH_DISABLED:-true}"
       GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET:-}"
       DOPPLER_PROJECT: "${DOPPLER_PROJECT:-}"
       DOPPLER_CONFIG: "${DOPPLER_CONFIG:-}"

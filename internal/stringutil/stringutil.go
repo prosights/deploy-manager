@@ -52,7 +52,9 @@ func UniqueTrimmed(values []string) []string {
 }
 
 var SensitiveTextPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(ghp_|github_pat_|xoxb-|sk_live_|sk_test_)[A-Za-z0-9_.-]+`),
+	regexp.MustCompile(`(?i)(ghp_|github_pat_|xoxb-|xoxp-|sk_live_|sk_test_|dp\.pt\.|AIza)[A-Za-z0-9_.-]+`),
+	regexp.MustCompile(`\b(AKIA|ASIA)[A-Z0-9]{16}\b`),
+	regexp.MustCompile(`https://hooks\.slack\.com/services/[A-Za-z0-9/_-]+`),
 	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._~+/=-]{8,}`),
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`),
 }

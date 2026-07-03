@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"deploy-manager/internal/connectors"
 	"deploy-manager/internal/db"
@@ -23,6 +24,7 @@ type Server struct {
 	logs    *deployments.LogBus
 	proxy   ProxyApplier
 	github  GitHubWebhookConfig
+	replays *replayCache
 	sources map[string]connectors.Connector
 	static  string
 
@@ -48,7 +50,8 @@ type GitHubWebhookConfig struct {
 }
 
 type AuthConfig struct {
-	Token string
+	Token    string
+	Disabled bool
 }
 
 type ReadinessCheck struct {
@@ -57,15 +60,17 @@ type ReadinessCheck struct {
 }
 
 func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs *deployments.LogBus, proxyApplier ProxyApplier, github GitHubWebhookConfig, sources map[string]connectors.Connector, staticDir string, auth AuthConfig, readiness ...ReadinessCheck) http.Handler {
-	server := Server{queries: queries, tx: tx, ready: readiness, queue: queue, logs: logs, proxy: proxyApplier, github: github, sources: sources, static: staticDir}
+	server := Server{queries: queries, tx: tx, ready: readiness, queue: queue, logs: logs, proxy: proxyApplier, github: github, replays: newReplayCache(1024), sources: sources, static: staticDir}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
+	r.Use(securityHeaders)
 
 	r.Route("/api", func(r chi.Router) {
+		r.Use(rateLimit(600, 1*time.Minute))
 		// Unauthenticated endpoints: liveness/readiness probes and the GitHub
 		// webhook, which authenticates itself with an HMAC signature.
 		r.Get("/healthz", server.health)
@@ -73,7 +78,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 		r.Post("/webhooks/github", server.githubWebhook)
 
 		r.Group(func(r chi.Router) {
-			if auth.Token != "" {
+			if !auth.Disabled {
 				r.Use(requireAuth(auth.Token))
 			}
 			r.Get("/settings", server.settings)
@@ -110,6 +115,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Get("/connectors", server.listConnectors)
 			r.Post("/connectors", server.upsertConnector)
 			r.Post("/connectors/{connectorID}/sync", server.syncConnector)
+			r.Get("/github/repositories", server.listGitHubRepositories)
 			r.Get("/container-registries", server.listContainerRegistries)
 			r.Post("/container-registries", server.upsertContainerRegistry)
 			r.Get("/proxy-routes", server.listProxyRoutes)

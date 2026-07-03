@@ -22,6 +22,10 @@ func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid github signature"})
 		return
 	}
+	if s.replays != nil && s.replays.Seen(r.Header.Get("X-GitHub-Delivery")) {
+		writeJSON(w, http.StatusAccepted, map[string]any{"ignored": true, "reason": "duplicate_delivery"})
+		return
+	}
 
 	event, err := normalizeGitHubEvent(r.Header.Get("X-GitHub-Event"))
 	if err != nil {

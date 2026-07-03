@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"deploy-manager/internal/db"
 	"deploy-manager/internal/dockerx"
+	"deploy-manager/internal/sshutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -61,6 +63,9 @@ func normalizeCreateServer(input db.CreateServerParams) (db.CreateServerParams, 
 		input.ProxyType = "caddy"
 	}
 	input.SshKeyPath = blankTextAsNull(input.SshKeyPath)
+	if input.ConnectionMode == "tailscale_ssh" {
+		input.SshKeyPath = pgtype.Text{}
+	}
 	if input.Name == "" || input.Hostname == "" {
 		return input, validationError("name and hostname are required")
 	}
@@ -73,6 +78,14 @@ func normalizeCreateServer(input db.CreateServerParams) (db.CreateServerParams, 
 	if err := validateServerSSHKeyPath(input.ConnectionMode, input.SshKeyPath.String, input.SshKeyPath.Valid); err != nil {
 		return input, validationError(err.Error())
 	}
+	if err := validateSSHHostname(input.Hostname); err != nil {
+		return input, validationError(err.Error())
+	}
+	if input.ConnectionMode == "tailscale_ssh" {
+		if err := sshutil.ValidateTailscaleHost(input.Hostname); err != nil {
+			return input, validationError(err.Error())
+		}
+	}
 	if input.SshPort < 1 || input.SshPort > 65535 {
 		return input, validationError("ssh_port must be between 1 and 65535")
 	}
@@ -83,6 +96,19 @@ func normalizeCreateServer(input db.CreateServerParams) (db.CreateServerParams, 
 		return input, validationError("proxy_type must be caddy, traefik, or none")
 	}
 	return input, nil
+}
+
+func validateSSHHostname(hostname string) error {
+	hostname = strings.Trim(strings.ToLower(strings.TrimSpace(hostname)), "[]")
+	if hostname == "metadata.google.internal" {
+		return validationError("ssh hostname cannot target cloud metadata services")
+	}
+	if addr, err := netip.ParseAddr(hostname); err == nil {
+		if addr == netip.MustParseAddr("169.254.169.254") || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
+			return validationError("ssh hostname cannot target link-local addresses")
+		}
+	}
+	return nil
 }
 
 func validConnectionMode(connectionMode string) bool {
@@ -105,9 +131,6 @@ func validProxyType(proxyType string) bool {
 
 func validateServerSSHKeyPath(connectionMode string, value string, valid bool) error {
 	if connectionMode == "tailscale_ssh" {
-		if valid {
-			return validationError("ssh_key_path must be empty for tailscale_ssh")
-		}
 		return nil
 	}
 	if !valid {
@@ -119,6 +142,9 @@ func validateServerSSHKeyPath(connectionMode string, value string, valid bool) e
 func validateSSHKeyPath(value string) error {
 	if !strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "~/") {
 		return validationError("ssh_key_path must be absolute or home-relative")
+	}
+	if !strings.HasPrefix(value, "~/.ssh/") && !strings.Contains(value, "/.ssh/") {
+		return validationError("ssh_key_path must be inside an .ssh directory")
 	}
 	if strings.Contains(value, "//") {
 		return validationError("ssh_key_path cannot contain empty path segments")

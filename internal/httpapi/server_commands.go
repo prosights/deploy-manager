@@ -56,7 +56,7 @@ func (s Server) runServerCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, serverLookupError(err))
 		return
 	}
-	if !server.SshKeyPath.Valid || strings.TrimSpace(server.SshKeyPath.String) == "" {
+	if server.ConnectionMode != sshutil.ConnectionModeTailscaleSSH && (!server.SshKeyPath.Valid || strings.TrimSpace(server.SshKeyPath.String) == "") {
 		writeError(w, validationError("server ssh_key_path is required for terminal access"))
 		return
 	}
@@ -80,6 +80,9 @@ func (s Server) remoteCommandRunner() remoteCommandRunner {
 }
 
 func (r sshRemoteCommandRunner) Run(ctx context.Context, server db.Server, command string) (string, error) {
+	if server.ConnectionMode == sshutil.ConnectionModeTailscaleSSH {
+		return sshutil.NewTailscaleSSHClient(server.Hostname, server.SshPort, server.SshUser).Run(ctx, command)
+	}
 	signerSource := r.signer
 	if signerSource == nil {
 		signerSource = sshutil.FileSigner{}

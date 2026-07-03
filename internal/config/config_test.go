@@ -15,6 +15,20 @@ func TestValidateRequiresDopplerProjectAndConfigTogether(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresAPITokenUnlessAuthDisabled(t *testing.T) {
+	cfg := validConfig()
+	cfg.APIToken = ""
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected missing API token to fail")
+	}
+
+	cfg.AuthDisabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateRequiresDopplerCLIPathWhenDopplerConfigured(t *testing.T) {
 	cfg := validConfig()
 	cfg.DopplerProject = "billing"
@@ -198,6 +212,7 @@ func validConfig() Config {
 		DatabaseURL:    "postgres://deploy:deploy@db:5432/deploy_manager",
 		RedisURL:       "redis://redis:6379/0",
 		StaticDir:      "web/dist",
+		APIToken:       "supersecrettoken123",
 		DopplerCLIPath: "doppler",
 	}
 }

@@ -162,6 +162,21 @@ func TestRunnerBoundsDeploymentLogMessages(t *testing.T) {
 	}
 }
 
+func TestRunnerRedactsDeploymentLogMessages(t *testing.T) {
+	deploymentID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	queries := &fakeRunnerQueries{}
+	runner := NewRunner(queries, NewLogBus(nil), nil, nil)
+
+	runner.append(context.Background(), db.Deployment{ID: deploymentID}, "stdout", "token ghp_1234567890abcdef")
+
+	if len(queries.logs) != 1 {
+		t.Fatalf("expected one deployment log, got %+v", queries.logs)
+	}
+	if strings.Contains(queries.logs[0].Message, "ghp_1234567890abcdef") || !strings.Contains(queries.logs[0].Message, "[redacted]") {
+		t.Fatalf("expected redacted deployment log, got %q", queries.logs[0].Message)
+	}
+}
+
 func TestRunnerDoesNotMarkApplicationHealthyWhenSucceededStatusCannotPersist(t *testing.T) {
 	applicationID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
 	deploymentID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}

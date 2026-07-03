@@ -19,6 +19,7 @@ type Config struct {
 	RedisURL            string
 	StaticDir           string
 	APIToken            string
+	AuthDisabled        bool
 	SSHSignerMode       string
 	GitHubWebhookSecret string
 	SlackWebhookURL     string
@@ -40,6 +41,7 @@ func Load() Config {
 		RedisURL:            env("REDIS_URL", "redis://localhost:6379/0"),
 		StaticDir:           env("STATIC_DIR", "web/dist"),
 		APIToken:            env("API_TOKEN", ""),
+		AuthDisabled:        boolEnv("AUTH_DISABLED", false),
 		SSHSignerMode:       env("SSH_SIGNER_MODE", "file"),
 		GitHubWebhookSecret: env("GITHUB_WEBHOOK_SECRET", ""),
 		SlackWebhookURL:     env("SLACK_WEBHOOK_URL", ""),
@@ -77,7 +79,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.StaticDir) == "" {
 		return fmt.Errorf("STATIC_DIR is required")
 	}
-	if token := strings.TrimSpace(c.APIToken); token != "" && len(token) < 16 {
+	if token := strings.TrimSpace(c.APIToken); token == "" && !c.AuthDisabled {
+		return fmt.Errorf("API_TOKEN is required unless AUTH_DISABLED=true")
+	} else if token != "" && len(token) < 16 {
 		return fmt.Errorf("API_TOKEN must be at least 16 characters")
 	}
 	switch strings.TrimSpace(c.SSHSignerMode) {
@@ -127,6 +131,18 @@ func env(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func boolEnv(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func durationEnv(key string, fallback time.Duration) time.Duration {

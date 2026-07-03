@@ -22,6 +22,7 @@ const (
 )
 
 var imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var imageRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,511}$`)
 
 func (s Server) listDeployments(w http.ResponseWriter, r *http.Request) {
 	limit, err := deploymentHistoryLimit(r.URL.Query().Get("limit"))
@@ -362,7 +363,7 @@ func validImageRef(value string) bool {
 	if value == "" || len(value) > 512 {
 		return false
 	}
-	return !strings.ContainsAny(value, " \n\r\t")
+	return imageRefPattern.MatchString(value)
 }
 
 func validDeploymentStrategy(strategy string) bool {

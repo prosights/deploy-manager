@@ -61,15 +61,29 @@ func TestNormalizeCreateServerAllowsKeylessTailscaleSSH(t *testing.T) {
 	}
 }
 
-func TestNormalizeCreateServerRejectsSSHKeyPathForTailscaleSSH(t *testing.T) {
-	_, err := normalizeCreateServer(db.CreateServerParams{
+func TestNormalizeCreateServerDropsSSHKeyPathForTailscaleSSH(t *testing.T) {
+	input, err := normalizeCreateServer(db.CreateServerParams{
 		Name:           "prod",
 		Hostname:       "100.79.100.28",
 		ConnectionMode: "tailscale_ssh",
 		SshKeyPath:     pgtype.Text{String: "~/.ssh/id_ed25519", Valid: true},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.SshKeyPath.Valid {
+		t.Fatalf("expected tailscale ssh key path to be discarded, got %+v", input.SshKeyPath)
+	}
+}
+
+func TestNormalizeCreateServerRejectsNonTailnetTailscaleHost(t *testing.T) {
+	_, err := normalizeCreateServer(db.CreateServerParams{
+		Name:           "prod",
+		Hostname:       "10.0.0.10",
+		ConnectionMode: "tailscale_ssh",
+	})
 	if err == nil {
-		t.Fatal("expected tailscale ssh with key path to fail")
+		t.Fatal("expected non-tailnet tailscale host to fail")
 	}
 }
 
@@ -141,7 +155,7 @@ func TestNormalizeCreateServerRejectsControlCharacters(t *testing.T) {
 }
 
 func TestNormalizeCreateServerRejectsUnsafeSSHKeyPaths(t *testing.T) {
-	for _, sshKeyPath := range []string{"id_ed25519", "~", "~/.ssh//id_ed25519", "~/.ssh/../id_ed25519", "/Users/ali//.ssh/id_ed25519", "/Users/ali/../id_ed25519"} {
+	for _, sshKeyPath := range []string{"id_ed25519", "~", "~/keys/id_ed25519", "~/.ssh//id_ed25519", "~/.ssh/../id_ed25519", "/Users/ali//.ssh/id_ed25519", "/Users/ali/../id_ed25519"} {
 		t.Run(sshKeyPath, func(t *testing.T) {
 			_, err := normalizeCreateServer(db.CreateServerParams{
 				Name:       "prod",

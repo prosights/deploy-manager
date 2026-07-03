@@ -55,7 +55,13 @@ WHERE id = $1;
 
 -- name: UpdateServerHealth :one
 UPDATE servers
-SET status = $2, cpu_usage = $3, memory_usage = $4, disk_usage = $5, last_checked_at = now(), updated_at = now()
+SET status = $2,
+    cpu_usage = $3,
+    memory_usage = $4,
+    disk_usage = $5,
+    ssh_key_path = CASE WHEN connection_mode = 'tailscale_ssh' THEN NULL ELSE ssh_key_path END,
+    last_checked_at = now(),
+    updated_at = now()
 WHERE id = $1
 RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
 

@@ -2,9 +2,12 @@ package proxy
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"deploy-manager/internal/stringutil"
 )
@@ -51,6 +54,9 @@ func BuildCommand(target Target) (string, error) {
 }
 
 func ValidateTarget(target Target) error {
+	if containsUnsafeProxyRune(target.Upstream) {
+		return fmt.Errorf("upstream_url contains unsupported characters")
+	}
 	target.Domain = strings.TrimSpace(target.Domain)
 	target.Upstream = strings.TrimSpace(target.Upstream)
 	if target.Domain == "" {
@@ -77,6 +83,9 @@ func validateUpstreamURL(value string) error {
 	if stringutil.HasControlCharacter(value) {
 		return fmt.Errorf("upstream_url cannot contain control characters")
 	}
+	if containsUnsafeProxyRune(value) {
+		return fmt.Errorf("upstream_url contains unsupported characters")
+	}
 
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" {
@@ -88,12 +97,54 @@ func validateUpstreamURL(value string) error {
 	if parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return fmt.Errorf("upstream_url must be an origin URL without path, query, or fragment")
 	}
+	if err := validateUpstreamHost(parsed.Hostname()); err != nil {
+		return err
+	}
 	switch parsed.Scheme {
 	case "http", "https":
 		return nil
 	default:
 		return fmt.Errorf("upstream_url must use http or https")
 	}
+}
+
+func containsUnsafeProxyRune(value string) bool {
+	for _, char := range value {
+		if char == '\'' || char == '"' || char == '`' {
+			return true
+		}
+		if unicode.IsSpace(char) && char != ' ' {
+			return true
+		}
+	}
+	return false
+}
+
+func validateUpstreamHost(host string) error {
+	host = strings.ToLower(strings.Trim(host, "[]"))
+	if host == "metadata.google.internal" {
+		return fmt.Errorf("upstream_url cannot target cloud metadata services")
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr == netip.MustParseAddr("169.254.169.254") || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
+			return fmt.Errorf("upstream_url cannot target link-local addresses")
+		}
+		return nil
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil
+	}
+	for _, ip := range ips {
+		addr, ok := netip.AddrFromSlice(ip)
+		if !ok {
+			continue
+		}
+		if addr == netip.MustParseAddr("169.254.169.254") || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() {
+			return fmt.Errorf("upstream_url cannot target link-local addresses")
+		}
+	}
+	return nil
 }
 
 func caddyConfig(target Target) string {

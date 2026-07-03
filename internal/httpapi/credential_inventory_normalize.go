@@ -277,10 +277,16 @@ func looksLikeSecretMaterial(value string) bool {
 	}
 
 	lower := strings.ToLower(value)
-	for _, prefix := range []string{"ghp_", "github_pat_", "xoxb-", "sk_live_", "sk_test_"} {
+	for _, prefix := range []string{"ghp_", "github_pat_", "xoxb-", "xoxp-", "sk_live_", "sk_test_", "dp.pt.", "aiza"} {
 		if strings.HasPrefix(lower, prefix) {
 			return true
 		}
+	}
+	if strings.HasPrefix(upper, "AKIA") || strings.HasPrefix(upper, "ASIA") {
+		return len(value) == 20
+	}
+	if strings.HasPrefix(lower, "https://hooks.slack.com/services/") {
+		return true
 	}
 	return looksLikeCredentialJSON(value)
 }

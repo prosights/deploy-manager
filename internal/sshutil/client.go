@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -149,6 +150,11 @@ func (c Client) connect(ctx context.Context) (*ssh.Client, error) {
 	if c.host == "" {
 		return nil, fmt.Errorf("host is required")
 	}
+	if c.allowNoAuth {
+		if err := ValidateTailscaleHost(c.host); err != nil {
+			return nil, err
+		}
+	}
 
 	address := net.JoinHostPort(c.host, fmt.Sprintf("%d", c.port))
 	config := &ssh.ClientConfig{
@@ -174,6 +180,36 @@ func (c Client) connect(ctx context.Context) (*ssh.Client, error) {
 
 func defaultHostKeyCallback() ssh.HostKeyCallback {
 	return knownHostsCallback(defaultKnownHostsPath())
+}
+
+func ValidateTailscaleHost(host string) error {
+	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+	if host == "" {
+		return fmt.Errorf("tailscale ssh host is required")
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if netip.MustParsePrefix("100.64.0.0/10").Contains(addr) || netip.MustParsePrefix("fd7a:115c:a1e0::/48").Contains(addr) {
+			return nil
+		}
+		return fmt.Errorf("tailscale ssh host must be a tailnet IP or MagicDNS name")
+	}
+	if strings.HasSuffix(host, ".ts.net") && safeDNSName(host) {
+		return nil
+	}
+	return fmt.Errorf("tailscale ssh host must be a tailnet IP or MagicDNS name")
+}
+
+func safeDNSName(host string) bool {
+	if strings.Contains(host, "..") {
+		return false
+	}
+	for _, char := range host {
+		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '.' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func tailscaleHostKeyCallback() ssh.HostKeyCallback {

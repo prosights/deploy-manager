@@ -154,6 +154,27 @@ func TestValidateTargetAllowsSupportedProxyTargets(t *testing.T) {
 	}
 }
 
+func TestValidateTargetRejectsMetadataAndUnsafeUpstreams(t *testing.T) {
+	for _, upstream := range []string{
+		"http://169.254.169.254",
+		"http://metadata.google.internal",
+		"http://127.0.0.1:8080`",
+		"http://127.0.0.1:8080\u00a0",
+	} {
+		t.Run(upstream, func(t *testing.T) {
+			err := ValidateTarget(Target{
+				Domain:     "app.example.com",
+				Upstream:   upstream,
+				TLSEnabled: true,
+				ProxyType:  "caddy",
+			})
+			if err == nil {
+				t.Fatal("expected unsafe upstream to fail")
+			}
+		})
+	}
+}
+
 func TestValidateTargetRejectsProxyDisabledServers(t *testing.T) {
 	err := ValidateTarget(Target{
 		Domain:     "app.example.com",
