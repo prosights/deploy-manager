@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
-import { Boxes, Container, GitBranch, Globe2, Plus, Server, Settings, ShieldCheck, Trash2 } from 'lucide-react'
+import { Container, GitBranch, Globe2, Plus, Server, Settings, ShieldCheck, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { Badge } from '../components/ui/badge'
@@ -413,7 +413,7 @@ function ProjectOverview({
               complete={Boolean(production)}
             />
             <SetupAction
-              icon={Boxes}
+              icon={Server}
               label="Service placement"
               value={`${activeTargets.length} active / ${applications.length} service${applications.length === 1 ? '' : 's'}`}
               action="Place"

@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { Bell, Boxes, Cable, ChevronLeft, Container, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Layers3, Monitor, Moon, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
+import { Bell, Cable, ChevronLeft, Container, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Layers3, Monitor, Moon, Package, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
 import { useSuspenseQueries } from '@tanstack/react-query'
 import type { CSSProperties } from 'react'
 import { Suspense, useEffect, useState } from 'react'
@@ -24,7 +24,7 @@ const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
 const projectNav: Array<{ hash: string, label: string, icon: typeof Gauge }> = [
   { hash: 'overview', label: 'Overview', icon: Layers3 },
   { hash: 'environments', label: 'Environments', icon: GitBranch },
-  { hash: 'services', label: 'Services', icon: Boxes },
+  { hash: 'services', label: 'Services', icon: Package },
   { hash: 'targets', label: 'Deploy Targets', icon: Server },
   { hash: 'registry', label: 'Registry', icon: Container },
   { hash: 'routes', label: 'Proxy Routes', icon: Route },
