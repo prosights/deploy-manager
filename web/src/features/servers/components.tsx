@@ -392,6 +392,7 @@ export function ServerTerminalPanel({
       convertEol: true,
       cursorBlink: false,
       cursorStyle: 'block',
+      cursorInactiveStyle: 'block',
       fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
       fontSize: 13.5,
       lineHeight: 1.35,

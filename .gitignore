@@ -17,4 +17,5 @@ server
 coverage/
 
 tmp/
+data/
 *.log

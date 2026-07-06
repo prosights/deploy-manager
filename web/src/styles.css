@@ -107,6 +107,12 @@ html.light .logo-mark {
 .terminal-shell .xterm-cursor-blink {
   animation: none !important;
   opacity: 1 !important;
+  visibility: visible !important;
+}
+
+.terminal-shell .xterm-cursor-outline {
+  animation: none !important;
+  opacity: 1 !important;
 }
 
 .terminal-shell .xterm-helper-textarea {
