@@ -30,6 +30,7 @@ type Querier interface {
 	DeleteEnvironment(ctx context.Context, id pgtype.UUID) error
 	DeleteProject(ctx context.Context, id pgtype.UUID) error
 	DeleteProxyRoute(ctx context.Context, id pgtype.UUID) error
+	DeleteServerDevSudoUser(ctx context.Context, arg DeleteServerDevSudoUserParams) error
 	FailRunningDeploymentsForRecovery(ctx context.Context) ([]FailRunningDeploymentsForRecoveryRow, error)
 	GetActiveDeploymentSlot(ctx context.Context, arg GetActiveDeploymentSlotParams) (ApplicationDeploymentSlot, error)
 	GetApplication(ctx context.Context, id pgtype.UUID) (Application, error)
@@ -65,10 +66,13 @@ type Querier interface {
 	ListProxyRoutes(ctx context.Context) ([]ListProxyRoutesRow, error)
 	ListQueuedDeploymentsForRecovery(ctx context.Context, limit int32) ([]Deployment, error)
 	ListRecentDeploymentLogs(ctx context.Context, arg ListRecentDeploymentLogsParams) ([]DeploymentLog, error)
+	ListServerDevSudoUsers(ctx context.Context, serverID pgtype.UUID) ([]ServerDevSudoUser, error)
 	ListServers(ctx context.Context) ([]Server, error)
 	MarkConnectorSync(ctx context.Context, arg MarkConnectorSyncParams) (ConnectorAccount, error)
 	MarkProxyRouteApplied(ctx context.Context, id pgtype.UUID) (ProxyRoute, error)
 	MarkProxyRouteFailed(ctx context.Context, id pgtype.UUID) (ProxyRoute, error)
+	RenameServerDevSudoUser(ctx context.Context, arg RenameServerDevSudoUserParams) (ServerDevSudoUser, error)
+	ReplaceServerDevSudoUsers(ctx context.Context, arg ReplaceServerDevSudoUsersParams) error
 	StartQueuedDeployment(ctx context.Context, id pgtype.UUID) (Deployment, error)
 	UpdateApplicationStatus(ctx context.Context, arg UpdateApplicationStatusParams) (Application, error)
 	UpdateDeploymentStatus(ctx context.Context, arg UpdateDeploymentStatusParams) (Deployment, error)
@@ -83,6 +87,7 @@ type Querier interface {
 	UpsertCredentialPermission(ctx context.Context, arg UpsertCredentialPermissionParams) (CredentialPermission, error)
 	UpsertCredentialUsage(ctx context.Context, arg UpsertCredentialUsageParams) (CredentialUsage, error)
 	UpsertDeploymentSlot(ctx context.Context, arg UpsertDeploymentSlotParams) (ApplicationDeploymentSlot, error)
+	UpsertServerDevSudoUser(ctx context.Context, arg UpsertServerDevSudoUserParams) (ServerDevSudoUser, error)
 }
 
 var _ Querier = (*Queries)(nil)

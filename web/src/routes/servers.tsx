@@ -2,8 +2,8 @@ import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tansta
 import { useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
-import { defaultServerForm, ServerCreatePanel, ServerList, ServerTerminalPanel, type ServerCheckResults, type ServerFormState } from '../features/servers/components'
-import { checkServer, createServer, type CreateServerInput } from '../lib/api'
+import { defaultServerForm, ServerCreatePanel, ServerDevUsersPanel, ServerList, ServerTerminalPanel, type ServerCheckResults, type ServerFormState } from '../features/servers/components'
+import { addServerDevUser, applyServerDevUsers, checkServer, createServer, deleteServerDevUser, listServerDevUsers, updateServerDevUser, type CreateServerInput } from '../lib/api'
 import { applicationsQuery, serversQuery, tailscaleDevicesQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
 import { useUiStore } from '../store/ui'
@@ -20,6 +20,7 @@ export function ServersRoute() {
   const [terminalServerID, setTerminalServerID] = useState('')
   const [terminalApplicationID, setTerminalApplicationID] = useState('')
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [devUsersServerID, setDevUsersServerID] = useState('')
   const visibleServers = servers.filter((server) => matchesSearch(searchQuery, [
     server.name,
     server.hostname,
@@ -39,6 +40,14 @@ export function ServersRoute() {
     },
   })
   const selectedTerminalServerID = terminalServerID || visibleServers[0]?.id || ''
+  const selectedDevUsersServerID = visibleServers.some((server) => server.id === devUsersServerID)
+    ? devUsersServerID
+    : visibleServers[0]?.id || ''
+  const devUsers = useQuery({
+    queryKey: ['servers', selectedDevUsersServerID, 'dev-users'],
+    queryFn: ({ signal }) => listServerDevUsers(selectedDevUsersServerID, { signal }),
+    enabled: Boolean(selectedDevUsersServerID),
+  })
   const selectedServerApplications = applications.filter((application) => application.server_id === selectedTerminalServerID)
   const selectedTerminalApplicationID = selectedServerApplications.some((application) => application.id === terminalApplicationID)
     ? terminalApplicationID
@@ -57,6 +66,30 @@ export function ServersRoute() {
         },
       }))
       await queryClient.invalidateQueries({ queryKey: serversQuery.queryKey })
+    },
+  })
+  const addDevUser = useMutation({
+    mutationFn: (username: string) => addServerDevUser(selectedDevUsersServerID, username),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['servers', selectedDevUsersServerID, 'dev-users'] })
+    },
+  })
+  const updateDevUser = useMutation({
+    mutationFn: ({ currentUsername, username }: { currentUsername: string, username: string }) => updateServerDevUser(selectedDevUsersServerID, currentUsername, username),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['servers', selectedDevUsersServerID, 'dev-users'] })
+    },
+  })
+  const deleteDevUser = useMutation({
+    mutationFn: (username: string) => deleteServerDevUser(selectedDevUsersServerID, username),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['servers', selectedDevUsersServerID, 'dev-users'] })
+    },
+  })
+  const applyDevUsers = useMutation({
+    mutationFn: () => applyServerDevUsers(selectedDevUsersServerID),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['servers', selectedDevUsersServerID, 'dev-users'] })
     },
   })
 
@@ -92,6 +125,19 @@ export function ServersRoute() {
         errorMessage={formError ?? create.error?.message}
         onChange={(updates) => setForm((state) => ({ ...state, ...updates }))}
         onSubmit={submitServer}
+      />
+      <ServerDevUsersPanel
+        servers={visibleServers}
+        selectedServerID={selectedDevUsersServerID}
+        users={devUsers.data}
+        loading={devUsers.isFetching}
+        pending={addDevUser.isPending || updateDevUser.isPending || deleteDevUser.isPending || applyDevUsers.isPending}
+        errorMessage={devUsers.error?.message ?? addDevUser.error?.message ?? updateDevUser.error?.message ?? deleteDevUser.error?.message ?? applyDevUsers.error?.message}
+        onSelectServer={setDevUsersServerID}
+        onAdd={(username) => addDevUser.mutate(username)}
+        onUpdate={(currentUsername, username) => updateDevUser.mutate({ currentUsername, username })}
+        onDelete={(username) => deleteDevUser.mutate(username)}
+        onApply={() => applyDevUsers.mutate()}
       />
       {check.error && <BlockError message={check.error.message} />}
       <ServerTerminalPanel

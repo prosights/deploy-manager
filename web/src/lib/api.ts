@@ -50,6 +50,12 @@ export type ServerCommandResponse = {
   error?: string
 }
 
+export type ServerDevUsersResponse = {
+  users: string[]
+  path: string
+  script_path: string
+}
+
 export type Application = {
   id: string
   environment_id: string
@@ -588,6 +594,36 @@ export function runServerCommand(serverID: string, command: string) {
   return api<ServerCommandResponse>(`/api/servers/${serverID}/commands`, {
     method: 'POST',
     body: JSON.stringify({ command }),
+  })
+}
+
+export function listServerDevUsers(serverID: string, init?: RequestInit) {
+  return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users`, init)
+}
+
+export function addServerDevUser(serverID: string, username: string) {
+  return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users`, {
+    method: 'POST',
+    body: JSON.stringify({ username }),
+  })
+}
+
+export function updateServerDevUser(serverID: string, currentUsername: string, username: string) {
+  return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users/${encodeURIComponent(currentUsername)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ username }),
+  })
+}
+
+export function deleteServerDevUser(serverID: string, username: string) {
+  return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users/${encodeURIComponent(username)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function applyServerDevUsers(serverID: string) {
+  return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users/apply`, {
+    method: 'POST',
   })
 }
 

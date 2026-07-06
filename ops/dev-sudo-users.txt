@@ -1,0 +1,7 @@
+# One Linux username per line.
+# These users are created on Prosights dev/internal VMs with sudo, docker,
+# deployers, and passwordless sudo access.
+alihussaini
+narasaka
+rootsec1
+pramitbhatia

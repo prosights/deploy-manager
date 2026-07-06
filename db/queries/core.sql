@@ -65,6 +65,47 @@ SET status = $2,
 WHERE id = $1
 RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
 
+-- name: ListServerDevSudoUsers :many
+SELECT id, server_id, username, created_at, updated_at
+FROM server_dev_sudo_users
+WHERE server_id = $1
+ORDER BY username;
+
+-- name: UpsertServerDevSudoUser :one
+INSERT INTO server_dev_sudo_users (server_id, username)
+VALUES ($1, $2)
+ON CONFLICT (server_id, username) DO UPDATE
+SET updated_at = now()
+RETURNING id, server_id, username, created_at, updated_at;
+
+-- name: RenameServerDevSudoUser :one
+UPDATE server_dev_sudo_users
+SET username = $3,
+    updated_at = now()
+WHERE server_id = $1
+  AND username = $2
+RETURNING id, server_id, username, created_at, updated_at;
+
+-- name: DeleteServerDevSudoUser :exec
+DELETE FROM server_dev_sudo_users
+WHERE server_id = $1
+  AND username = $2;
+
+-- name: ReplaceServerDevSudoUsers :exec
+WITH desired(username) AS (
+    SELECT unnest(sqlc.arg(usernames)::text[])
+),
+deleted AS (
+    DELETE FROM server_dev_sudo_users
+    WHERE server_id = sqlc.arg(server_id)::uuid
+      AND username NOT IN (SELECT username FROM desired)
+)
+INSERT INTO server_dev_sudo_users (server_id, username)
+SELECT sqlc.arg(server_id)::uuid, desired.username
+FROM desired
+ON CONFLICT (server_id, username) DO UPDATE
+SET updated_at = now();
+
 -- name: ListProjects :many
 SELECT p.id, p.name, p.slug, p.description, p.created_at, p.updated_at, p.default_registry_id,
        cr.name AS default_registry_name

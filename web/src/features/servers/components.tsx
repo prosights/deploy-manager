@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { LogOut, Terminal as TerminalIcon, Wifi } from 'lucide-react'
+import { Check, LogOut, Pencil, Plus, RefreshCw, Terminal as TerminalIcon, Trash2, Wifi, X } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { PanelError } from '../../components/ui/error-message'
 import { Panel } from '../../components/ui/panel'
 import { SelectInput } from '../../components/ui/select-input'
 import { TextInput } from '../../components/ui/text-input'
-import { webSocketURL, type Application, type Server, type TailscaleDevicesResponse } from '../../lib/api'
+import { webSocketURL, type Application, type Server, type ServerDevUsersResponse, type TailscaleDevicesResponse } from '../../lib/api'
 import { percent, statusTone } from '../status'
 
 export type ServerFormState = {
@@ -203,6 +203,150 @@ export function ServerList({ servers, checkResults, isChecking, onCheck, onOpenC
         </table>
       </div>
       {servers.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No servers found.</div>}
+    </Panel>
+  )
+}
+
+type ServerDevUsersPanelProps = {
+  servers: Server[]
+  selectedServerID: string
+  users?: ServerDevUsersResponse
+  pending: boolean
+  loading: boolean
+  errorMessage?: string
+  onSelectServer: (serverID: string) => void
+  onAdd: (username: string) => void
+  onUpdate: (currentUsername: string, username: string) => void
+  onDelete: (username: string) => void
+  onApply: () => void
+}
+
+export function ServerDevUsersPanel({
+  servers,
+  selectedServerID,
+  users,
+  pending,
+  loading,
+  errorMessage,
+  onSelectServer,
+  onAdd,
+  onUpdate,
+  onDelete,
+  onApply,
+}: ServerDevUsersPanelProps) {
+  const [username, setUsername] = useState('')
+  const [editingUser, setEditingUser] = useState('')
+  const [editingValue, setEditingValue] = useState('')
+  const selectedServer = servers.find((server) => server.id === selectedServerID)
+  const canSubmit = Boolean(username.trim()) && !pending && Boolean(selectedServerID)
+
+  function submit() {
+    const value = username.trim()
+    if (!value) {
+      return
+    }
+    onAdd(value)
+    setUsername('')
+  }
+
+  function startEditing(user: string) {
+    setEditingUser(user)
+    setEditingValue(user)
+  }
+
+  function submitEdit() {
+    const value = editingValue.trim()
+    if (!editingUser || !value) {
+      return
+    }
+    onUpdate(editingUser, value)
+    setEditingUser('')
+    setEditingValue('')
+  }
+
+  return (
+    <Panel
+      title="Dev sudo users"
+      action={
+        <Button variant="ghost" disabled={pending || !selectedServerID} onClick={onApply}>
+          <RefreshCw className="size-4" />
+          Apply
+        </Button>
+      }
+    >
+      <div className="grid gap-3 p-4 md:grid-cols-[240px_1fr_auto]">
+        <SelectInput label="Server" value={selectedServerID} onChange={onSelectServer} disabled={servers.length === 0}>
+          {servers.map((server) => (
+            <option key={server.id} value={server.id}>{server.name}</option>
+          ))}
+        </SelectInput>
+        <TextInput label="Username" value={username} onChange={setUsername} placeholder="narasaka" disabled={!selectedServerID || pending} />
+        <div className="flex items-end">
+          <Button variant="primary" disabled={!canSubmit} onClick={submit}>
+            <Plus className="size-4" />
+            Add user
+          </Button>
+        </div>
+      </div>
+      <div className="border-t px-4 py-3 text-xs text-muted">
+        {selectedServer ? `${selectedServer.name} · ${users?.path ?? '/srv/deploy-manager/ops/dev-sudo-users.txt'}` : 'Select a server'}
+      </div>
+      {errorMessage && <PanelError message={errorMessage} />}
+      <div className="overflow-x-auto border-t">
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs text-muted">
+            <tr>
+              <th className="px-4 py-3 font-medium">Username</th>
+              <th className="px-4 py-3 font-medium">Access</th>
+              <th className="px-4 py-3 font-medium">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(users?.users ?? []).map((user) => (
+              <tr key={user} className="border-t">
+                <td className="px-4 py-3 font-mono text-xs text-ink">
+                  {editingUser === user ? (
+                    <input
+                      aria-label={`Edit ${user}`}
+                      className="h-9 w-full max-w-60 rounded-md border bg-background px-3 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      value={editingValue}
+                      onChange={(event) => setEditingValue(event.target.value)}
+                    />
+                  ) : user}
+                </td>
+                <td className="px-4 py-3 text-muted">sudo / docker / deployers</td>
+                <td className="px-4 py-3">
+                  {editingUser === user ? (
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="secondary" disabled={pending || !editingValue.trim()} onClick={submitEdit}>
+                        <Check className="size-4" />
+                        Update
+                      </Button>
+                      <Button variant="ghost" disabled={pending} onClick={() => setEditingUser('')}>
+                        <X className="size-4" />
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="ghost" disabled={pending} onClick={() => startEditing(user)}>
+                        <Pencil className="size-4" />
+                        Rename
+                      </Button>
+                      <Button variant="ghost" disabled={pending} onClick={() => onDelete(user)}>
+                        <Trash2 className="size-4" />
+                        Remove
+                      </Button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!loading && (users?.users.length ?? 0) === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No dev sudo users found.</div>}
+      {loading && <div className="border-t px-4 py-6 text-sm text-muted">Loading users...</div>}
     </Panel>
   )
 }

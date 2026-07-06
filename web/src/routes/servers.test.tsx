@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { checkServer, createServer } from '../lib/api'
+import { addServerDevUser, checkServer, createServer, deleteServerDevUser } from '../lib/api'
 import { useUiStore } from '../store/ui'
 import { ServersRoute } from './servers'
 
@@ -36,6 +36,31 @@ vi.mock('../lib/api', () => ({
     docker_error: 'docker unavailable',
   })),
   createServer: vi.fn(async (input) => input),
+  listServerDevUsers: vi.fn(async () => ({
+    users: ['narasaka', 'rootsec1'],
+    path: '/srv/deploy-manager/ops/dev-sudo-users.txt',
+    script_path: '/srv/deploy-manager/ops/provision-dev-sudo-users.sh',
+  })),
+  addServerDevUser: vi.fn(async (_serverID, username) => ({
+    users: ['narasaka', 'rootsec1', username],
+    path: '/srv/deploy-manager/ops/dev-sudo-users.txt',
+    script_path: '/srv/deploy-manager/ops/provision-dev-sudo-users.sh',
+  })),
+  updateServerDevUser: vi.fn(async (_serverID, _currentUsername, username) => ({
+    users: ['narasaka', username],
+    path: '/srv/deploy-manager/ops/dev-sudo-users.txt',
+    script_path: '/srv/deploy-manager/ops/provision-dev-sudo-users.sh',
+  })),
+  deleteServerDevUser: vi.fn(async (_serverID, username) => ({
+    users: ['narasaka', 'rootsec1'].filter((user) => user !== username),
+    path: '/srv/deploy-manager/ops/dev-sudo-users.txt',
+    script_path: '/srv/deploy-manager/ops/provision-dev-sudo-users.sh',
+  })),
+  applyServerDevUsers: vi.fn(async () => ({
+    users: ['narasaka', 'rootsec1'],
+    path: '/srv/deploy-manager/ops/dev-sudo-users.txt',
+    script_path: '/srv/deploy-manager/ops/provision-dev-sudo-users.sh',
+  })),
   webSocketURL: vi.fn(() => 'ws://127.0.0.1:5173/api/servers/server_1/terminal'),
 }))
 
@@ -258,6 +283,32 @@ describe('ServersRoute', () => {
     expect(await screen.findByText('SSH ok')).toBeInTheDocument()
     expect(screen.getByText('Docker failed')).toBeInTheDocument()
     expect(screen.getByText('docker unavailable')).toBeInTheDocument()
+  })
+
+  it('manages dev sudo users from the shared server file', async () => {
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ServersRoute />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('narasaka')).toBeInTheDocument()
+    expect(screen.getByText(/\/srv\/deploy-manager\/ops\/dev-sudo-users\.txt/)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'alihussaini' } })
+    fireEvent.click(screen.getByRole('button', { name: /add user/i }))
+
+    await waitFor(() => {
+      expect(addServerDevUser).toHaveBeenCalledWith('server_1', 'alihussaini')
+    })
+
+    fireEvent.click(screen.getAllByRole('button', { name: /remove/i })[0])
+
+    await waitFor(() => {
+      expect(deleteServerDevUser).toHaveBeenCalledWith('server_1', 'narasaka')
+    })
   })
 
   it('opens a literal terminal console from the server row', async () => {

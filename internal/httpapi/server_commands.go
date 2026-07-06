@@ -24,6 +24,8 @@ type sshRemoteCommandRunner struct {
 	signer sshutil.SignerSource
 }
 
+type localCommandRunner struct{}
+
 type serverCommandRequest struct {
 	Command string `json:"command"`
 }
@@ -97,6 +99,10 @@ func (r sshRemoteCommandRunner) Run(ctx context.Context, server db.Server, comma
 		return "", err
 	}
 	return sshutil.NewClient(server.Hostname, server.SshPort, server.SshUser, signer).Run(ctx, command)
+}
+
+func (r localCommandRunner) Run(ctx context.Context, _ db.Server, command string) (string, error) {
+	return sshutil.NewLocalClient().Run(ctx, command)
 }
 
 func normalizeServerCommand(command string) (string, error) {

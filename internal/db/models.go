@@ -224,3 +224,11 @@ type Server struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
+
+type ServerDevSudoUser struct {
+	ID        pgtype.UUID        `json:"id"`
+	ServerID  pgtype.UUID        `json:"server_id"`
+	Username  string             `json:"username"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}

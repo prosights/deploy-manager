@@ -723,6 +723,22 @@ func (q *Queries) DeleteProxyRoute(ctx context.Context, id pgtype.UUID) error {
 	return err
 }
 
+const deleteServerDevSudoUser = `-- name: DeleteServerDevSudoUser :exec
+DELETE FROM server_dev_sudo_users
+WHERE server_id = $1
+  AND username = $2
+`
+
+type DeleteServerDevSudoUserParams struct {
+	ServerID pgtype.UUID `json:"server_id"`
+	Username string      `json:"username"`
+}
+
+func (q *Queries) DeleteServerDevSudoUser(ctx context.Context, arg DeleteServerDevSudoUserParams) error {
+	_, err := q.db.Exec(ctx, deleteServerDevSudoUser, arg.ServerID, arg.Username)
+	return err
+}
+
 const failRunningDeploymentsForRecovery = `-- name: FailRunningDeploymentsForRecovery :many
 WITH failed_deployments AS (
     UPDATE deployments
@@ -2310,6 +2326,39 @@ func (q *Queries) ListRecentDeploymentLogs(ctx context.Context, arg ListRecentDe
 	return items, nil
 }
 
+const listServerDevSudoUsers = `-- name: ListServerDevSudoUsers :many
+SELECT id, server_id, username, created_at, updated_at
+FROM server_dev_sudo_users
+WHERE server_id = $1
+ORDER BY username
+`
+
+func (q *Queries) ListServerDevSudoUsers(ctx context.Context, serverID pgtype.UUID) ([]ServerDevSudoUser, error) {
+	rows, err := q.db.Query(ctx, listServerDevSudoUsers, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ServerDevSudoUser{}
+	for rows.Next() {
+		var i ServerDevSudoUser
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServerID,
+			&i.Username,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listServers = `-- name: ListServers :many
 SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM servers
@@ -2445,6 +2494,60 @@ func (q *Queries) MarkProxyRouteFailed(ctx context.Context, id pgtype.UUID) (Pro
 		&i.GreenUpstreamUrl,
 	)
 	return i, err
+}
+
+const renameServerDevSudoUser = `-- name: RenameServerDevSudoUser :one
+UPDATE server_dev_sudo_users
+SET username = $3,
+    updated_at = now()
+WHERE server_id = $1
+  AND username = $2
+RETURNING id, server_id, username, created_at, updated_at
+`
+
+type RenameServerDevSudoUserParams struct {
+	ServerID   pgtype.UUID `json:"server_id"`
+	Username   string      `json:"username"`
+	Username_2 string      `json:"username_2"`
+}
+
+func (q *Queries) RenameServerDevSudoUser(ctx context.Context, arg RenameServerDevSudoUserParams) (ServerDevSudoUser, error) {
+	row := q.db.QueryRow(ctx, renameServerDevSudoUser, arg.ServerID, arg.Username, arg.Username_2)
+	var i ServerDevSudoUser
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Username,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const replaceServerDevSudoUsers = `-- name: ReplaceServerDevSudoUsers :exec
+WITH desired(username) AS (
+    SELECT unnest($2::text[])
+),
+deleted AS (
+    DELETE FROM server_dev_sudo_users
+    WHERE server_id = $1::uuid
+      AND username NOT IN (SELECT username FROM desired)
+)
+INSERT INTO server_dev_sudo_users (server_id, username)
+SELECT $1::uuid, desired.username
+FROM desired
+ON CONFLICT (server_id, username) DO UPDATE
+SET updated_at = now()
+`
+
+type ReplaceServerDevSudoUsersParams struct {
+	ServerID  pgtype.UUID `json:"server_id"`
+	Usernames []string    `json:"usernames"`
+}
+
+func (q *Queries) ReplaceServerDevSudoUsers(ctx context.Context, arg ReplaceServerDevSudoUsersParams) error {
+	_, err := q.db.Exec(ctx, replaceServerDevSudoUsers, arg.ServerID, arg.Usernames)
+	return err
 }
 
 const startQueuedDeployment = `-- name: StartQueuedDeployment :one
@@ -3026,6 +3129,32 @@ func (q *Queries) UpsertDeploymentSlot(ctx context.Context, arg UpsertDeployment
 		&i.ImageDigest,
 		&i.Status,
 		&i.PromotedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertServerDevSudoUser = `-- name: UpsertServerDevSudoUser :one
+INSERT INTO server_dev_sudo_users (server_id, username)
+VALUES ($1, $2)
+ON CONFLICT (server_id, username) DO UPDATE
+SET updated_at = now()
+RETURNING id, server_id, username, created_at, updated_at
+`
+
+type UpsertServerDevSudoUserParams struct {
+	ServerID pgtype.UUID `json:"server_id"`
+	Username string      `json:"username"`
+}
+
+func (q *Queries) UpsertServerDevSudoUser(ctx context.Context, arg UpsertServerDevSudoUserParams) (ServerDevSudoUser, error) {
+	row := q.db.QueryRow(ctx, upsertServerDevSudoUser, arg.ServerID, arg.Username)
+	var i ServerDevSudoUser
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.Username,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
