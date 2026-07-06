@@ -1,6 +1,12 @@
 name: Dependabot Slack notification
 
 on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: Message to send to Slack
+        required: false
+        default: Deploy Manager Dependabot Slack notification smoke test.
   pull_request_target:
     types:
       - opened
@@ -12,12 +18,14 @@ permissions:
 
 jobs:
   notify:
-    if: ${{ github.actor == 'dependabot[bot]' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.actor == 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - name: Send to code-review
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CODE_REVIEW_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_MESSAGE: ${{ github.event.inputs.message || '' }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -30,14 +38,13 @@ jobs:
             exit 1
           fi
 
-          payload=$(jq -n \
-            --arg repo "$REPOSITORY" \
-            --arg title "$PR_TITLE" \
-            --arg url "$PR_URL" \
-            --arg number "$PR_NUMBER" \
-            '{
-              text: ("Dependabot opened PR #" + $number + " in " + $repo + ": " + $title + " " + $url)
-            }')
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            text="${MANUAL_MESSAGE:-Deploy Manager Dependabot Slack notification smoke test.}"
+          else
+            text="Dependabot opened PR #${PR_NUMBER} in ${REPOSITORY}: ${PR_TITLE} ${PR_URL}"
+          fi
+
+          payload=$(jq -n --arg text "$text" '{ text: $text }')
 
           curl --fail-with-body -X POST \
             -H "Content-Type: application/json" \
