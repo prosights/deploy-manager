@@ -473,6 +473,12 @@ export type InstanceSettings = {
   docs_url: string
 }
 
+export type AppVersion = {
+  version: string
+  commit_sha: string
+  build_time: string
+}
+
 export type UpdateSettingsInput = {
   name: string
   short_name: string

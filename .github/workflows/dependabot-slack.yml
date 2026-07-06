@@ -26,8 +26,8 @@ jobs:
           set -euo pipefail
 
           if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
-            echo "SLACK_CODE_REVIEW_WEBHOOK_URL is not configured; skipping Slack notification."
-            exit 0
+            echo "SLACK_CODE_REVIEW_WEBHOOK_URL is not configured; Dependabot Slack notification cannot be delivered." >&2
+            exit 1
           fi
 
           payload=$(jq -n \

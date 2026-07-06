@@ -102,3 +102,13 @@ html.light .logo-mark {
 .terminal-shell .xterm-screen {
   width: 100% !important;
 }
+
+.terminal-shell .xterm-cursor,
+.terminal-shell .xterm-cursor-blink {
+  animation: none !important;
+  opacity: 1 !important;
+}
+
+.terminal-shell .xterm-helper-textarea {
+  caret-color: transparent;
+}

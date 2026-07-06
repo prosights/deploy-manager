@@ -77,6 +77,11 @@ jobs:
           fi
 
           short_sha="${commit_sha:0:12}"
+          build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          version="${REF_NAME:-$branch}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$branch" = "main" ]; then
+            version="main-${GITHUB_RUN_NUMBER}-${short_sha}"
+          fi
           image_name="${image_ref%:*}"
           tag_list="$image_ref"
           tag_list="$tag_list"$'\n'"$image_name:sha-$short_sha"
@@ -95,6 +100,9 @@ jobs:
             printf '%s\n' "$tag_list" | awk 'NF && !seen[$0]++'
             echo EOF
             echo "image_ref=$image_ref"
+            echo "version=$version"
+            echo "commit_sha=$commit_sha"
+            echo "build_time=$build_time"
           } >> "$GITHUB_OUTPUT"
 
       - id: auth
@@ -120,6 +128,10 @@ jobs:
           file: ${{ inputs.dockerfile || 'Dockerfile' }}
           push: true
           tags: ${{ steps.image.outputs.tags }}
+          build-args: |
+            APP_VERSION=${{ steps.image.outputs.version }}
+            APP_COMMIT_SHA=${{ steps.image.outputs.commit_sha }}
+            APP_BUILD_TIME=${{ steps.image.outputs.build_time }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -1,9 +1,14 @@
 import { queryOptions } from '@tanstack/react-query'
-import { api, getDopplerStatus, getGitHubStatus, listBuildRuns, listDeploymentLogs, listDeploymentSlots, listGitHubRepositories, type Application, type AuditEvent, type BuildRun, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type DeploymentSlot, type DopplerIntegrationStatus, type Environment, type GitHubIntegrationStatus, type GitHubRepository, type InstanceSettings, type Project, type ProxyRoute, type Server, type TailscaleDevicesResponse } from './api'
+import { api, getDopplerStatus, getGitHubStatus, listBuildRuns, listDeploymentLogs, listDeploymentSlots, listGitHubRepositories, type Application, type AppVersion, type AuditEvent, type BuildRun, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type DeploymentSlot, type DopplerIntegrationStatus, type Environment, type GitHubIntegrationStatus, type GitHubRepository, type InstanceSettings, type Project, type ProxyRoute, type Server, type TailscaleDevicesResponse } from './api'
 
 export const settingsQuery = queryOptions({
   queryKey: ['settings'],
   queryFn: ({ signal }) => api<InstanceSettings>('/api/settings', { signal }),
+})
+
+export const appVersionQuery = queryOptions({
+  queryKey: ['app-version'],
+  queryFn: ({ signal }) => api<AppVersion>('/api/version', { signal }),
 })
 
 export const auditEventsQuery = queryOptions({

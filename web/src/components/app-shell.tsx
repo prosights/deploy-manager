@@ -1,10 +1,10 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
 import { Bell, Cable, ChevronLeft, Container, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Layers3, Monitor, Moon, Package, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
-import { useSuspenseQueries } from '@tanstack/react-query'
+import { useQuery, useSuspenseQueries } from '@tanstack/react-query'
 import type { CSSProperties } from 'react'
 import { Suspense, useEffect, useState } from 'react'
 import type { InstanceSettings } from '../lib/api'
-import { environmentsQuery, projectsQuery, settingsQuery } from '../lib/queries'
+import { appVersionQuery, environmentsQuery, projectsQuery, settingsQuery } from '../lib/queries'
 import { nextTheme, useUiStore } from '../store/ui'
 import { Button } from './ui/button'
 import { cn } from '../lib/cn'
@@ -45,6 +45,7 @@ export function AppShell() {
   const [settingsResult, projectsResult, environmentsResult] = useSuspenseQueries({
     queries: [settingsQuery, projectsQuery, environmentsQuery],
   })
+  const { data: appVersion } = useQuery(appVersionQuery)
   const settings: InstanceSettings = settingsResult.data ?? defaultSettings
   const projects = projectsResult.data
   const environments = environmentsResult.data
@@ -76,8 +77,8 @@ export function AppShell() {
   }, [settings.favicon_url, settings.meta_description, settings.name])
 
   return (
-    <div className="flex min-h-screen bg-background text-ink" style={brandStyle}>
-      <aside className={cn('flex border-r bg-surface transition-[width] duration-200', collapsed ? 'w-[72px]' : 'w-64')}>
+    <div className="grid min-h-screen bg-background text-ink" style={{ ...brandStyle, gridTemplateColumns: collapsed ? '72px minmax(0,1fr)' : '272px minmax(0,1fr)' }}>
+      <aside className="sticky top-0 flex h-screen min-h-0 border-r bg-surface">
         <div className="flex w-full flex-col">
           <div className="flex h-14 items-center gap-3 border-b px-4">
             <div className="flex size-8 items-center justify-center">
@@ -138,7 +139,15 @@ export function AppShell() {
               )
             })}
           </nav>
-          <div className="border-t p-3">
+          <div className="mt-auto space-y-2 border-t p-3">
+            <div className={cn('rounded-md border bg-background/70 px-2 py-2 text-xs text-muted', collapsed && 'px-1 text-center')} title={versionTitle(appVersion?.version, appVersion?.commit_sha)}>
+              <div className="truncate font-mono font-medium text-ink">{collapsed ? shortVersionLabel(appVersion?.version) : versionLabel(appVersion?.version)}</div>
+              {!collapsed && (
+                <div className="mt-0.5 truncate font-mono">
+                  {appVersion?.commit_sha ? appVersion.commit_sha.slice(0, 12) : 'local build'}
+                </div>
+              )}
+            </div>
             <Button variant="ghost" className="w-full justify-start" onClick={toggleSidebar} aria-label="Toggle sidebar">
               <ChevronLeft className={cn('size-4 transition-transform', collapsed && 'rotate-180')} />
               {!collapsed && 'Collapse'}
@@ -146,7 +155,7 @@ export function AppShell() {
           </div>
         </div>
       </aside>
-      <main className="min-w-0 flex-1">
+      <main className="min-w-0">
         <header className="flex h-14 items-center justify-between gap-4 border-b bg-background/95 px-5">
           <div className="flex min-w-0 items-center gap-3">
             <GitBranch className="size-4 text-muted" aria-hidden="true" />
@@ -179,7 +188,7 @@ export function AppShell() {
             <span className="text-sm text-muted">All systems auditable</span>
           </div>
         </header>
-        <div className="p-5">
+        <div className="mx-auto w-full max-w-[1760px] p-5">
           <Suspense fallback={<DeferredFallback />}>
             <Outlet />
           </Suspense>
@@ -202,7 +211,26 @@ function projectSectionHref(projectID: string, section: string): string {
   return `/projects?project=${encodeURIComponent(projectID)}#${section}`
 }
 
-// ponytail: renders nothing for 150ms so fast suspense resolves invisibly
+function versionLabel(version?: string): string {
+  return version ? `v ${version}` : 'v local'
+}
+
+function shortVersionLabel(version?: string): string {
+  if (!version) {
+    return 'v'
+  }
+  if (version.startsWith('main-')) {
+    return `#${version.split('-')[1] ?? version.slice(0, 4)}`
+  }
+  return version.slice(0, 6)
+}
+
+function versionTitle(version?: string, commitSHA?: string): string {
+  const label = versionLabel(version)
+  return commitSHA ? `${label} ${commitSHA}` : label
+}
+
+// Renders nothing for 150ms so fast suspense resolves invisibly.
 function DeferredFallback() {
   const [show, setShow] = useState(false)
   useEffect(() => {

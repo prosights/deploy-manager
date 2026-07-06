@@ -84,6 +84,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 		// webhook, which authenticates itself with an HMAC signature.
 		r.Get("/healthz", server.health)
 		r.Get("/readyz", server.readyz)
+		r.Get("/version", server.version)
 		r.Post("/webhooks/github", server.githubWebhook)
 		r.Get("/github/install/callback", server.githubInstallCallback)
 
