@@ -9,6 +9,7 @@ import (
 	"deploy-manager/internal/connectors"
 	"deploy-manager/internal/db"
 	"deploy-manager/internal/deployments"
+	"deploy-manager/internal/githubconnector"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -46,7 +47,15 @@ type ProxyApplier interface {
 }
 
 type GitHubWebhookConfig struct {
-	Secret string
+	Secret  string
+	AppSlug string
+	App     GitHubAppRepositorySource
+}
+
+type GitHubAppRepositorySource interface {
+	ListInstallationRepositories(context.Context, string) ([]githubconnector.AppRepository, error)
+	ListRepositoryContents(context.Context, string, string, string, string) ([]githubconnector.RepositoryContent, error)
+	DispatchWorkflow(context.Context, string, string, string, string, map[string]string) error
 }
 
 type AuthConfig struct {
@@ -76,6 +85,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 		r.Get("/healthz", server.health)
 		r.Get("/readyz", server.readyz)
 		r.Post("/webhooks/github", server.githubWebhook)
+		r.Get("/github/install/callback", server.githubInstallCallback)
 
 		r.Group(func(r chi.Router) {
 			if !auth.Disabled {
@@ -108,6 +118,8 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Post("/deployments/{deploymentID}/retry", server.retryDeployment)
 			r.Get("/deployments/{deploymentID}/logs", server.listDeploymentLogs)
 			r.Get("/deployments/{deploymentID}/events", server.streamDeploymentLogs)
+			r.Get("/builds", server.listBuildRuns)
+			r.Post("/builds/{buildID}/complete", server.completeBuildRun)
 			r.Get("/credentials", server.listCredentials)
 			r.Post("/credentials/inventory", server.upsertCredentialInventory)
 			r.Post("/object-storage/inventory", server.upsertObjectStorageInventory)
@@ -115,7 +127,13 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Get("/connectors", server.listConnectors)
 			r.Post("/connectors", server.upsertConnector)
 			r.Post("/connectors/{connectorID}/sync", server.syncConnector)
+			r.Post("/connectors/{connectorID}/github/repositories/sync", server.syncGitHubConnectorRepositories)
+			r.Post("/connectors/{connectorID}/github/builds/dispatch", server.dispatchGitHubBuild)
+			r.Get("/github/status", server.githubStatus)
 			r.Get("/github/repositories", server.listGitHubRepositories)
+			r.Get("/github/repositories/detect", server.detectGitHubRepositoryServices)
+			r.Post("/projects/{projectID}/github/import", server.importGitHubRepositoryServices)
+			r.Get("/doppler/status", server.dopplerStatus)
 			r.Get("/container-registries", server.listContainerRegistries)
 			r.Post("/container-registries", server.upsertContainerRegistry)
 			r.Get("/proxy-routes", server.listProxyRoutes)

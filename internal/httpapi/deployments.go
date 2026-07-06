@@ -64,7 +64,7 @@ func (s Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy); err != nil {
+	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy, input.ImageRef); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -132,7 +132,7 @@ func (s Server) retryDeployment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy); err != nil {
+	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy, input.ImageRef); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -185,7 +185,7 @@ func (s Server) rollbackApplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy); err != nil {
+	if err := s.validateDeploymentTarget(r.Context(), input.ApplicationID, input.Strategy, input.ImageRef); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -266,7 +266,7 @@ func retryDeploymentInput(source db.Deployment, actor string) (db.CreateDeployme
 	return normalizeCreateDeployment(db.CreateDeploymentParams{
 		ApplicationID: source.ApplicationID,
 		Trigger:       "retry",
-		Strategy:      source.Strategy,
+		Strategy:      "blue_green",
 		CommitSha:     source.CommitSha,
 		ImageRef:      source.ImageRef,
 		ImageDigest:   source.ImageDigest,
@@ -274,22 +274,44 @@ func retryDeploymentInput(source db.Deployment, actor string) (db.CreateDeployme
 	})
 }
 
-func (s Server) validateDeploymentTarget(ctx context.Context, applicationID pgtype.UUID, strategy string) error {
+func (s Server) validateDeploymentTarget(ctx context.Context, applicationID pgtype.UUID, strategy string, imageRef pgtype.Text) error {
 	if strategy != "blue_green" {
-		return nil
+		return validationError("deployment strategy must be blue_green")
 	}
 	application, err := s.queries.GetApplication(ctx, applicationID)
 	if err != nil {
 		return createDeploymentError(err)
 	}
+	if err := validateDeploymentSource(application, imageRef); err != nil {
+		return err
+	}
 	return validateBlueGreenDeploymentTarget(application)
 }
 
+// validateDeploymentSource enforces that every deployment has a buildable or
+// pullable source: either a pinned image_ref (artifact deploy) or a repository
+// plus compose path (source deploy built on the target). Without one of these
+// there is nothing to run and no rollback point to record.
+func validateDeploymentSource(application db.Application, imageRef pgtype.Text) error {
+	if imageRef.Valid && strings.TrimSpace(imageRef.String) != "" {
+		return nil
+	}
+	if application.RepositoryUrl.Valid && strings.TrimSpace(application.RepositoryUrl.String) != "" &&
+		strings.TrimSpace(application.ComposePath) != "" {
+		return nil
+	}
+	return validationError("deployment requires an image_ref or a repository_url with compose_path so it can be built")
+}
+
 func validateBlueGreenDeploymentTarget(application db.Application) error {
-	if !application.HealthCheckUrl.Valid || !strings.Contains(application.HealthCheckUrl.String, "{color}") {
+	return validateBlueGreenHealthCheck(application.HealthCheckUrl)
+}
+
+func validateBlueGreenHealthCheck(healthCheckURL pgtype.Text) error {
+	if !healthCheckURL.Valid || !strings.Contains(healthCheckURL.String, "{color}") {
 		return validationError("blue_green deployments require a health_check_url with {color}")
 	}
-	if err := validateHealthCheckURL(application.HealthCheckUrl.String); err != nil {
+	if err := validateHealthCheckURL(healthCheckURL.String); err != nil {
 		return validationError(err.Error())
 	}
 	return nil
@@ -325,10 +347,10 @@ func normalizeCreateDeployment(input db.CreateDeploymentParams) (db.CreateDeploy
 		return input, validationError("deployment trigger must be manual, github_push, connector_sync, retry, or rollback")
 	}
 	if input.Strategy == "" {
-		input.Strategy = "rolling"
+		input.Strategy = "blue_green"
 	}
 	if !validDeploymentStrategy(input.Strategy) {
-		return input, validationError("deployment strategy must be rolling or blue_green")
+		return input, validationError("deployment strategy must be blue_green")
 	}
 	input.CommitSha = blankTextAsNull(input.CommitSha)
 	if input.CommitSha.Valid && !deployments.ValidCommitSHA(input.CommitSha.String) {
@@ -367,10 +389,5 @@ func validImageRef(value string) bool {
 }
 
 func validDeploymentStrategy(strategy string) bool {
-	switch strategy {
-	case "rolling", "blue_green":
-		return true
-	default:
-		return false
-	}
+	return strategy == "blue_green"
 }

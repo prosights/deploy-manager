@@ -210,7 +210,7 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 			return fmt.Errorf("%s: %w", step.label, err)
 		}
 	}
-	if target.Strategy == "blue_green" && deploymentImageRef(target) != "" {
+	if target.Strategy == "blue_green" && blueGreenSlotTracked(target) {
 		if err := r.upsertSlot(ctx, deployment, target, targetColor, "standby"); err != nil {
 			return err
 		}
@@ -218,7 +218,7 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 	if err := r.applyProxyRoutes(ctx, deployment, target, client, targetColor); err != nil {
 		return err
 	}
-	if target.Strategy == "blue_green" && deploymentImageRef(target) != "" {
+	if target.Strategy == "blue_green" && blueGreenSlotTracked(target) {
 		if _, err := r.queries.ActivateDeploymentSlot(ctx, db.ActivateDeploymentSlotParams{
 			ApplicationID: target.ApplicationID,
 			ServerID:      target.ServerID,
@@ -233,6 +233,9 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 
 func deploymentSSHClient(ctx context.Context, target db.GetDeploymentTargetRow, signerSource sshutil.SignerSource) (sshutil.Client, error) {
 	if target.ConnectionMode == sshutil.ConnectionModeTailscaleSSH {
+		if sshutil.IsLocalTailscaleHost(ctx, target.Hostname) {
+			return sshutil.NewLocalClient(), nil
+		}
 		return sshutil.NewTailscaleSSHClient(target.Hostname, target.SshPort, target.SshUser), nil
 	}
 	if signerSource == nil {
@@ -308,7 +311,7 @@ func (r Runner) upsertSlot(ctx context.Context, deployment db.Deployment, target
 		ServerID:      target.ServerID,
 		Color:         color,
 		DeploymentID:  deployment.ID,
-		ImageRef:      deploymentImageRef(target),
+		ImageRef:      slotRollbackRef(target),
 		ImageDigest:   target.ImageDigest,
 		Status:        status,
 	})
@@ -316,6 +319,24 @@ func (r Runner) upsertSlot(ctx context.Context, deployment db.Deployment, target
 		return fmt.Errorf("record deployment slot: %w", err)
 	}
 	return nil
+}
+
+// blueGreenSlotTracked reports whether a blue/green deployment records a
+// rollback slot. Artifact deploys track by image_ref; source deploys (built on
+// the target from a repo) track by commit_sha instead, so both always leave a
+// standby slot to roll back to.
+func blueGreenSlotTracked(target db.GetDeploymentTargetRow) bool {
+	return slotRollbackRef(target) != ""
+}
+
+// slotRollbackRef is the identity stored in a deployment slot so a later
+// rollback knows what to restore: the pinned image_ref when present, otherwise
+// the commit_sha the target was built from.
+func slotRollbackRef(target db.GetDeploymentTargetRow) string {
+	if ref := deploymentImageRef(target); ref != "" {
+		return ref
+	}
+	return strings.TrimSpace(target.CommitSha.String)
 }
 
 func (r Runner) checkColorHealth(ctx context.Context, target db.GetDeploymentTargetRow, client remoteRunner, color string) error {

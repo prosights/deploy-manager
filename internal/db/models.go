@@ -54,6 +54,26 @@ type AuditEvent struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type BuildRun struct {
+	ID            pgtype.UUID        `json:"id"`
+	Provider      string             `json:"provider"`
+	ConnectorID   pgtype.UUID        `json:"connector_id"`
+	ApplicationID pgtype.UUID        `json:"application_id"`
+	Repository    string             `json:"repository"`
+	Branch        string             `json:"branch"`
+	WorkflowID    string             `json:"workflow_id"`
+	Status        string             `json:"status"`
+	CommitSha     pgtype.Text        `json:"commit_sha"`
+	ImageRef      pgtype.Text        `json:"image_ref"`
+	ImageDigest   pgtype.Text        `json:"image_digest"`
+	ExternalUrl   pgtype.Text        `json:"external_url"`
+	ErrorMessage  pgtype.Text        `json:"error_message"`
+	StartedAt     pgtype.Timestamptz `json:"started_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ConnectorAccount struct {
 	ID              pgtype.UUID        `json:"id"`
 	Provider        string             `json:"provider"`

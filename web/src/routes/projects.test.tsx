@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createEnvironment, createProject, deleteApplication, deleteEnvironment, deleteProject, deleteProxyRoute, updateProject } from '../lib/api'
+import { createApplication, createEnvironment, createProject, deleteApplication, deleteEnvironment, deleteProject, deleteProxyRoute, updateProject } from '../lib/api'
 import { ProjectsRoute } from './projects'
 
 vi.mock('../lib/api', () => ({
@@ -111,6 +111,20 @@ vi.mock('../lib/queries', () => ({
     queryKey: ['container-registries'],
     queryFn: async () => [],
   },
+  githubRepositoriesQuery: {
+    queryKey: ['github-repositories'],
+    queryFn: async () => [
+      {
+        connector_id: 'connector_github',
+        connector_name: 'GitHub',
+        installation_id: '123456',
+        repository: 'prosights/recreate',
+        branch: 'release/2026-07',
+        clone_url: 'https://github.com/prosights/recreate.git',
+        web_url: 'https://github.com/prosights/recreate',
+      },
+    ],
+  },
   proxyRoutesQuery: {
     queryKey: ['proxy-routes'],
     queryFn: async () => [
@@ -205,6 +219,29 @@ describe('ProjectsRoute', () => {
     expect(await screen.findByText('API')).toBeInTheDocument()
     expect(screen.getAllByText('api.example.com').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('api / prd')).toBeInTheDocument()
+  })
+
+  it('creates service placements from connected github repositories', async () => {
+    window.location.hash = '#targets'
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <ProjectsRoute />
+      </QueryClientProvider>,
+    )
+
+    fireEvent.change(await screen.findByLabelText('GitHub repo'), { target: { value: 'https://github.com/prosights/recreate.git' } })
+    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'recreate' } })
+    fireEvent.click(screen.getByRole('button', { name: /^add$/i }))
+
+    await waitFor(() => {
+      expect(createApplication).toHaveBeenCalledWith(expect.objectContaining({
+        repository_url: 'https://github.com/prosights/recreate.git',
+        branch: 'release/2026-07',
+        name: 'recreate',
+      }))
+    })
   })
 
   it('deletes project-owned resources from project screens', async () => {

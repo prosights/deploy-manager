@@ -6,6 +6,7 @@ import (
 
 	"deploy-manager/internal/auditlog"
 	"deploy-manager/internal/db"
+	"deploy-manager/internal/githubconnector"
 )
 
 var allowedConnectorProviders = map[string]struct{}{
@@ -34,9 +35,37 @@ func normalizeConnectorAccount(input db.UpsertConnectorAccountParams) (db.Upsert
 	if err != nil {
 		return db.UpsertConnectorAccountParams{}, err
 	}
+	if err := validateConnectorConfig(input.Provider, config); err != nil {
+		return db.UpsertConnectorAccountParams{}, err
+	}
 	input.Config = config
 
 	return input, nil
+}
+
+func validateConnectorConfig(provider string, config []byte) error {
+	switch provider {
+	case "github":
+		cfg, err := githubconnector.ParseConfig(config)
+		if err != nil {
+			return validationError("github connector config " + err.Error())
+		}
+		if cfg.InstallationID == "" && len(cfg.Repositories) == 0 {
+			return validationError("github connector config requires installation_id or repositories")
+		}
+	case "doppler":
+		cfg := struct {
+			Project string `json:"project"`
+			Config  string `json:"config"`
+		}{}
+		if err := json.Unmarshal(config, &cfg); err != nil {
+			return validationError("doppler connector config must be a JSON object")
+		}
+		if strings.TrimSpace(cfg.Project) == "" || strings.TrimSpace(cfg.Config) == "" {
+			return validationError("doppler connector config requires project and config")
+		}
+	}
+	return nil
 }
 
 func normalizeConnectorConfig(raw []byte) ([]byte, error) {

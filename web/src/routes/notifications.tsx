@@ -29,19 +29,19 @@ const notificationProviders: Array<{
   provider: NotificationProvider
   title: string
   description: string
-  env: string[]
+  secretSource: string
 }> = [
   {
     provider: 'slack',
     title: 'Slack',
     description: 'Post deployment started, succeeded, failed, and rollback events to an operations channel.',
-    env: ['SLACK_WEBHOOK_URL'],
+    secretSource: 'Server-side Slack webhook',
   },
   {
     provider: 'resend',
     title: 'Email via Resend',
     description: 'Send production deployment and rollback emails through Resend.',
-    env: ['RESEND_API_KEY', 'RESEND_FROM_EMAIL'],
+    secretSource: 'Server-side Resend credentials',
   },
 ]
 
@@ -202,9 +202,7 @@ function NotificationDestinationForm({
           Enabled
         </label>
         <div className="rounded-md border bg-background p-3 text-xs leading-5 text-muted">
-          Secret source: {selectedProvider.env.map((value) => (
-            <span key={value} className="mx-1 rounded bg-panel px-1.5 py-0.5 font-mono">{value}</span>
-          ))}
+          Secret source: <span className="font-medium text-ink">{selectedProvider.secretSource}</span>
         </div>
         <Button variant="primary" disabled={isSaving || !form.name}>
           {isSaving ? 'Saving...' : 'Save destination'}

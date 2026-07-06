@@ -11,7 +11,6 @@ import { statusTone } from '../status'
 type DeploymentQueuePanelProps = {
   applications: Application[]
   target?: Application
-  strategy: 'rolling' | 'blue_green'
   commitSha: string
   imageRef: string
   imageName: string
@@ -23,7 +22,6 @@ type DeploymentQueuePanelProps = {
   isQueueing: boolean
   isRollingBack: boolean
   onApplicationChange: (applicationID: string) => void
-  onStrategyChange: (strategy: 'rolling' | 'blue_green') => void
   onCommitShaChange: (commitSha: string) => void
   onImageRefChange: (imageRef: string) => void
   onRegistryChange: (registryID: string) => void
@@ -38,7 +36,6 @@ type DeploymentQueuePanelProps = {
 export function DeploymentQueuePanel({
   applications,
   target,
-  strategy,
   commitSha,
   imageRef,
   imageName,
@@ -50,7 +47,6 @@ export function DeploymentQueuePanel({
   isQueueing,
   isRollingBack,
   onApplicationChange,
-  onStrategyChange,
   onCommitShaChange,
   onImageRefChange,
   onRegistryChange,
@@ -61,9 +57,9 @@ export function DeploymentQueuePanel({
   onQueue,
   onRollback,
 }: DeploymentQueuePanelProps) {
-  const blueGreenError = strategy === 'blue_green' ? blueGreenHealthCheckError(target?.health_check_url ?? '') : ''
+  const blueGreenError = blueGreenHealthCheckError(target?.health_check_url ?? '')
   const blueGreenReady = blueGreenError === ''
-  const rollbackError = blueGreenHealthCheckError(target?.health_check_url ?? '')
+  const rollbackError = blueGreenError
   const rollbackReady = rollbackError === ''
 
   return (
@@ -74,10 +70,10 @@ export function DeploymentQueuePanel({
             <option key={application.id} value={application.id}>{application.name} / {application.server_name}</option>
           ))}
         </SelectInput>
-        <SelectInput label="Strategy" value={strategy} onChange={(value) => onStrategyChange(value as 'rolling' | 'blue_green')}>
-          <option value="rolling">Rolling</option>
-          <option value="blue_green">Blue-green</option>
-        </SelectInput>
+        <div className="flex flex-col justify-end">
+          <span className="mb-1 text-xs font-medium text-muted">Strategy</span>
+          <span className="rounded-md border bg-panel px-3 py-2 text-sm text-ink">Blue-green</span>
+        </div>
         <TextInput label="Commit SHA" value={commitSha} onChange={onCommitShaChange} placeholder="optional" />
         <TextInput label="Actor" value={actor} onChange={onActorChange} placeholder="optional" />
       </div>
@@ -113,21 +109,19 @@ export function DeploymentQueuePanel({
       {!selectedRegistry && (
         <div className="grid gap-3 border-t p-4 md:grid-cols-[minmax(280px,1fr)]">
           <TextInput label="Manual image ref" value={imageRef} onChange={onImageRefChange} placeholder="us-east1-docker.pkg.dev/project/repo/image:tag" />
+          {canBuildFromSource(target) && !imageRef.trim() && (
+            <p className="text-xs text-muted">
+              Leave blank to build from the application repository (<span className="font-mono text-ink">{target?.repository_url}</span>) on the target server using <span className="font-mono text-ink">{target?.compose_path}</span>.
+            </p>
+          )}
         </div>
       )}
-      {strategy === 'blue_green' && (
-        <div className="border-t px-4 py-3 text-sm text-muted">
-          Blue-green compose targets must use <span className="font-mono text-ink">DEPLOY_COLOR</span> for color-specific service names, labels, or ports, and the application health check URL must include <span className="font-mono text-ink">{'{color}'}</span>.
-        </div>
-      )}
+      <div className="border-t px-4 py-3 text-sm text-muted">
+        Blue-green compose targets must use <span className="font-mono text-ink">DEPLOY_COLOR</span> for color-specific service names, labels, or ports, and the application health check URL must include <span className="font-mono text-ink">{'{color}'}</span>.
+      </div>
       {blueGreenError && (
         <div className="border-t px-4 py-3 text-sm text-danger">
           {blueGreenError}
-        </div>
-      )}
-      {target && !rollbackReady && strategy !== 'blue_green' && (
-        <div className="border-t px-4 py-3 text-sm text-muted">
-          Rollback is available after the target has a color-aware health check URL.
         </div>
       )}
     </Panel>
@@ -149,6 +143,10 @@ function registryBasePath(registry: ContainerRegistry): string {
 
 function cleanImagePath(value: string): string {
   return value.trim().replace(/^\/+|\/+$/g, '')
+}
+
+function canBuildFromSource(target: Application | undefined): boolean {
+  return Boolean(target?.repository_url?.trim() && target?.compose_path?.trim())
 }
 
 function blueGreenHealthCheckError(value: string): string {

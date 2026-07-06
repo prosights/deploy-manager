@@ -137,6 +137,52 @@ Primary request flow:
 4. Deployment output is stored in PostgreSQL, published through Redis-backed `LogBus`, and streamed to the UI over Server-Sent Events.
 5. Connectors keep credential, permission, usage, runtime variable, and object-storage inventory behind explicit provider boundaries; Deploy Manager stores references and metadata, not private secret values.
 
+## GitHub and Builds
+
+GitHub integration is intentionally split into three layers:
+
+1. **Repository access**: GitHub connector config stores repository metadata such as `owner/repo`, branch, and optional GitHub App installation ID. It must not store app private keys, OAuth secrets, webhook secrets, deploy keys, or tokens.
+2. **Push sync**: GitHub sends signed `push` events to `/api/webhooks/github`. Deploy Manager verifies `X-Hub-Signature-256` and matches the pushed repository and branch to applications with `github_auto_deploy=true`.
+3. **Image builds**: build execution stays behind a provider boundary. When a matching GitHub connector owns the repository, Deploy Manager dispatches a GitHub Actions workflow through the GitHub App installation token. The workflow owns Docker build/push and reports an `image_ref` back for deployment. Apps without a matching connector can still fall back to source-build-on-target from their repository and Compose path.
+
+GitHub App repository sync requires server-side GitHub App credentials only. Set the app id and private key through the runtime environment or a private key file path. The database stores the installation id and repository metadata, not GitHub tokens or private keys. Repository build dispatch defaults to the workflow file `deploy-manager-build.yml` on the connected branch.
+
+Each connected repository can also carry build metadata:
+
+```json
+{
+  "repository": "prosights/recreate",
+  "branch": "main",
+  "workflow_id": "deploy-manager-build.yml",
+  "build_context": ".",
+  "dockerfile": "Dockerfile",
+  "image_ref": "us-docker.pkg.dev/prosights/recreate/recreate:main",
+  "runner": "ubuntu-latest"
+}
+```
+
+When a build is dispatched, Deploy Manager creates a `build_runs` row, passes `deploy_manager_build_id` plus the repository build metadata into GitHub Actions, and waits for the workflow to call `POST /api/builds/{buildID}/complete` with the pushed image reference. A successful callback matches applications by `repository_url` and branch, then queues blue/green deployments with that `image_ref`. The callback is protected by the normal API auth header in production; keep `DEPLOY_MANAGER_API_TOKEN` as a GitHub Actions secret, not in Deploy Manager connector config.
+
+To connect two repositories, add both repositories to a GitHub connector with their installation id, branch, workflow file, image ref, build context, Dockerfile, and runner. Then create or update the applications for those repos with the same branch and `github_auto_deploy=true`.
+
+For Google Artifact Registry, copy `docs/workflows/deploy-manager-build-gar.yml` into each application repo as `.github/workflows/deploy-manager-build.yml`. Configure the repo with:
+
+- GitHub variables: `DEPLOY_MANAGER_API_URL`, `GAR_REGISTRY_HOST`
+- GitHub secrets: `DEPLOY_MANAGER_API_TOKEN`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`
+
+The workflow uses GitHub OIDC to obtain a short-lived Google token and push to Artifact Registry. Do not add service-account JSON, registry passwords, or GitHub tokens to Deploy Manager.
+
+For GHCR, copy `examples/deploy-manager-build.yml` instead. Configure GitHub variables `REGISTRY_HOST=ghcr.io` and `DEPLOY_MANAGER_API_URL`, configure GitHub secret `DEPLOY_MANAGER_API_TOKEN`, and set the connector `image_ref` to the exact GHCR image tag Deploy Manager should deploy.
+
+For the first build provider, prefer one of these two paths:
+
+- **GitHub larger runners** for the fastest first integration when repositories already live in GitHub. GitHub bills larger runners only while jobs execute, with no charge for an idle larger runner, and publishes Linux larger runner sizes from 4 to 96 cores.
+- **Google Cloud Build high-CPU** when pushing to Google Artifact Registry is the priority. Cloud Build publishes on-demand high-CPU build machines such as 8 vCPU and 32 vCPU builders with per-minute pricing.
+
+See `docs/build-provider-decision.md` for the current build-provider recommendation.
+
+Keep the build-provider choice out of projects. Projects should reference applications, repositories, environments, registries, and VM targets; a separate build connector/provider should create an image, push it to the configured registry, then queue a deployment with `image_ref`.
+
 ## Local Development
 
 ```bash

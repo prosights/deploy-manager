@@ -146,6 +146,10 @@ func (c sshHealthCheck) Check(ctx context.Context, server db.Server) (sshutil.He
 }
 
 func (c dockerEngineCheck) Check(ctx context.Context, server db.Server) (dockerx.EngineStatus, error) {
+	host := dockerx.SSHHost(server.SshUser, server.Hostname, server.SshPort)
+	if server.ConnectionMode == sshutil.ConnectionModeTailscaleSSH && sshutil.IsLocalTailscaleHost(ctx, server.Hostname) {
+		host = "local:///var/run/docker.sock"
+	}
 	client, err := sshutil.ServerClient(ctx, server, c.signer)
 	if err != nil {
 		return dockerx.EngineStatus{}, err
@@ -159,7 +163,7 @@ func (c dockerEngineCheck) Check(ctx context.Context, server db.Server) (dockerx
 		return dockerx.EngineStatus{}, err
 	}
 	return dockerx.EngineStatus{
-		Host:       dockerx.SSHHost(server.SshUser, server.Hostname, server.SshPort),
+		Host:       host,
 		APIVersion: apiVersion,
 		OSType:     osType,
 	}, nil

@@ -233,9 +233,11 @@ export function ServerTerminalPanel({
   const selectedServer = servers.find((server) => server.id === selectedServerID)
   const serverApplications = applications.filter((application) => application.server_id === selectedServerID)
   const selectedApplication = serverApplications.find((application) => application.id === selectedApplicationID)
+  const selectedServerName = selectedServer?.name ?? ''
+  const selectedApplicationDirectory = selectedApplication?.remote_directory ?? ''
 
   useEffect(() => {
-    if (!isOpen || !selectedServer || !selectedApplication || !terminalRef.current) {
+    if (!isOpen || !selectedServerName || !selectedApplicationDirectory || !terminalRef.current) {
       setStatus('idle')
       return
     }
@@ -274,9 +276,9 @@ export function ServerTerminalPanel({
     terminal.open(terminalRef.current)
     fitAddon.fit()
     terminal.focus()
-    terminal.writeln(`Connecting to ${selectedServer.name}:${selectedApplication.remote_directory}...`)
+    terminal.writeln(`Connecting to ${selectedServerName}:${selectedApplicationDirectory}...`)
 
-    const socket = new WebSocket(webSocketURL(`/api/servers/${selectedServer.id}/terminal?application_id=${encodeURIComponent(selectedApplication.id)}`))
+    const socket = new WebSocket(webSocketURL(`/api/servers/${selectedServerID}/terminal?application_id=${encodeURIComponent(selectedApplicationID)}`))
     const sendResize = () => {
       fitAddon.fit()
       socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }))
@@ -316,7 +318,7 @@ export function ServerTerminalPanel({
       socket.close()
       terminal.dispose()
     }
-  }, [isOpen, selectedServer, selectedApplication])
+  }, [isOpen, selectedApplicationDirectory, selectedApplicationID, selectedServerID, selectedServerName])
 
   if (!isOpen) {
     return null

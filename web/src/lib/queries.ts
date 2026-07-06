@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import { api, listDeploymentLogs, type Application, type AuditEvent, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type Environment, type InstanceSettings, type Project, type ProxyRoute, type Server, type TailscaleDevicesResponse } from './api'
+import { api, getDopplerStatus, getGitHubStatus, listBuildRuns, listDeploymentLogs, listGitHubRepositories, type Application, type AuditEvent, type BuildRun, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type DopplerIntegrationStatus, type Environment, type GitHubIntegrationStatus, type GitHubRepository, type InstanceSettings, type Project, type ProxyRoute, type Server, type TailscaleDevicesResponse } from './api'
 
 export const settingsQuery = queryOptions({
   queryKey: ['settings'],
@@ -41,6 +41,11 @@ export const deploymentsQuery = queryOptions({
   queryFn: ({ signal }) => api<Deployment[]>('/api/deployments?limit=200', { signal }),
 })
 
+export const buildRunsQuery = queryOptions({
+  queryKey: ['build-runs'],
+  queryFn: ({ signal }) => listBuildRuns({ signal }) as Promise<BuildRun[]>,
+})
+
 export function deploymentLogsQuery(deploymentID: string) {
   return queryOptions({
     queryKey: ['deployments', deploymentID, 'logs'],
@@ -63,6 +68,21 @@ export function credentialDetailQuery(credentialID: string) {
 export const connectorsQuery = queryOptions({
   queryKey: ['connectors'],
   queryFn: ({ signal }) => api<ConnectorAccount[]>('/api/connectors', { signal }),
+})
+
+export const githubRepositoriesQuery = queryOptions({
+  queryKey: ['github-repositories'],
+  queryFn: ({ signal }) => listGitHubRepositories({ signal }) as Promise<GitHubRepository[]>,
+})
+
+export const githubStatusQuery = queryOptions({
+  queryKey: ['github-status'],
+  queryFn: ({ signal }) => getGitHubStatus({ signal }) as Promise<GitHubIntegrationStatus>,
+})
+
+export const dopplerStatusQuery = queryOptions({
+  queryKey: ['doppler-status'],
+  queryFn: ({ signal }) => getDopplerStatus({ signal }) as Promise<DopplerIntegrationStatus>,
 })
 
 export const containerRegistriesQuery = queryOptions({

@@ -35,7 +35,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	}
 	stepOptions := resolveRemoteStepOptions(target, options)
 	if stepOptions.imageRef != "" {
-		variables = appendArtifactVariables(variables, stepOptions)
+		variables = appendArtifactVariables(variables, target, stepOptions)
 	}
 
 	remoteDir := stringutil.ShellQuote(target.RemoteDirectory)
@@ -81,20 +81,36 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 		steps = append(steps, blueGreenSteps(target, stepOptions)...)
 	} else {
 		project := stringutil.ShellQuote(projectSlug(target.ApplicationName))
-		steps = append(steps,
-			composeConfigStep(remoteDir, composePath),
-			remoteStep{
+		steps = append(steps, composeConfigStep(remoteDir, composePath))
+		if isSourceDeploy(target) {
+			steps = append(steps, remoteStep{
+				label:   "Building compose images",
+				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s build --pull", remoteDir, project, composePath),
+			})
+		} else {
+			steps = append(steps, remoteStep{
 				label:   "Pulling compose images",
 				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s pull", remoteDir, project, composePath),
-			},
-			remoteStep{
-				label:   "Starting compose stack",
-				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s up -d --remove-orphans", remoteDir, project, composePath),
-			},
-		)
+			})
+		}
+		steps = append(steps, remoteStep{
+			label:   "Starting compose stack",
+			command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s up -d --remove-orphans", remoteDir, project, composePath),
+		})
 	}
 
 	return steps, nil
+}
+
+// isSourceDeploy reports whether the image must be built from the synced
+// repository on the target (no pinned image_ref) rather than pulled from a
+// registry. Building on the target keeps Phase 1 free of registry and
+// ephemeral-builder infrastructure.
+func isSourceDeploy(target db.GetDeploymentTargetRow) bool {
+	if deploymentImageRef(target) != "" {
+		return false
+	}
+	return target.RepositoryUrl.Valid && strings.TrimSpace(target.RepositoryUrl.String) != ""
 }
 
 func resolveRemoteStepOptions(target db.GetDeploymentTargetRow, options []remoteStepOptions) remoteStepOptions {
@@ -108,14 +124,58 @@ func resolveRemoteStepOptions(target db.GetDeploymentTargetRow, options []remote
 	return remoteStepOptions{imageRef: deploymentImageRef(target)}
 }
 
-func appendArtifactVariables(variables []connectors.RuntimeVariable, options remoteStepOptions) []connectors.RuntimeVariable {
-	next := make([]connectors.RuntimeVariable, 0, len(variables)+2)
+func appendArtifactVariables(variables []connectors.RuntimeVariable, target db.GetDeploymentTargetRow, options remoteStepOptions) []connectors.RuntimeVariable {
+	next := make([]connectors.RuntimeVariable, 0, len(variables)+4)
 	next = append(next, variables...)
 	next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_IMAGE", Value: options.imageRef})
+	if tag := imageTag(options.imageRef); tag != "" {
+		next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_IMAGE_TAG", Value: tag})
+		if key := applicationImageTagKey(target.ApplicationName); key != "" {
+			next = append(next, connectors.RuntimeVariable{Key: key, Value: tag})
+		}
+	}
 	if options.targetColor != "" {
 		next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_COLOR", Value: options.targetColor})
 	}
 	return next
+}
+
+func imageTag(imageRef string) string {
+	imageRef = strings.TrimSpace(imageRef)
+	if imageRef == "" || strings.Contains(imageRef, "@sha256:") {
+		return ""
+	}
+	lastSlash := strings.LastIndex(imageRef, "/")
+	lastColon := strings.LastIndex(imageRef, ":")
+	if lastColon <= lastSlash || lastColon == len(imageRef)-1 {
+		return ""
+	}
+	return imageRef[lastColon+1:]
+}
+
+func applicationImageTagKey(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	var builder strings.Builder
+	lastUnderscore := false
+	for _, char := range strings.ToUpper(name) {
+		if (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') {
+			builder.WriteRune(char)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore && builder.Len() > 0 {
+			builder.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	key := strings.Trim(builder.String(), "_")
+	if key == "" {
+		return ""
+	}
+	return key + "_IMAGE_TAG"
 }
 
 func validateRemoteTarget(target db.GetDeploymentTargetRow) error {
@@ -233,15 +293,22 @@ func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions)
 			command: fmt.Sprintf("cd %s && printf %%s %s > .deploy-manager-next-color", remoteDir, targetColor),
 		},
 		composeConfigStep(remoteDir, composePath),
-		{
+	}
+	if isSourceDeploy(target) {
+		steps = append(steps, remoteStep{
+			label:   "Building next color images",
+			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s build --pull", remoteDir, colorPortCommand(), project, composePath),
+		})
+	} else {
+		steps = append(steps, remoteStep{
 			label:   "Pulling next color images",
 			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s pull", remoteDir, colorPortCommand(), project, composePath),
-		},
-		{
-			label:   "Starting next color stack",
-			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s up -d --remove-orphans", remoteDir, colorPortCommand(), project, composePath),
-		},
+		})
 	}
+	steps = append(steps, remoteStep{
+		label:   "Starting next color stack",
+		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s up -d --remove-orphans", remoteDir, colorPortCommand(), project, composePath),
+	})
 	steps = append(steps, remoteStep{
 		label:   "Checking next color health",
 		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 \"$url\" >/dev/null", remoteDir, colorPortCommand(), stringutil.ShellQuote(target.HealthCheckUrl.String)),

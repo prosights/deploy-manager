@@ -15,12 +15,14 @@ import {
   createEnvironment,
   createProject,
   createProxyRoute,
+  detectGitHubRepositoryServices,
   deleteApplication,
   deleteEnvironment,
   deleteProject,
   deleteProxyRoute,
   updateProject,
   updateProjectRegistry,
+  importGitHubRepositoryServices,
   upsertContainerRegistry,
   type Application,
   type ContainerRegistry,
@@ -29,13 +31,15 @@ import {
   type CreateProjectInput,
   type CreateProxyRouteInput,
   type Environment,
+  type GitHubDetectedService,
+  type GitHubRepository,
   type Project,
   type ProxyRoute as ProxyRouteRecord,
   type Server as ServerRecord,
   type UpsertContainerRegistryInput,
 } from '../lib/api'
 import { validateDomain } from '../lib/domains'
-import { applicationsQuery, containerRegistriesQuery, environmentsQuery, projectsQuery, proxyRoutesQuery, serversQuery } from '../lib/queries'
+import { applicationsQuery, containerRegistriesQuery, environmentsQuery, githubRepositoriesQuery, projectsQuery, proxyRoutesQuery, serversQuery } from '../lib/queries'
 import { validateHealthCheckURL } from '../lib/urls'
 
 type ProjectSection = 'overview' | 'environments' | 'services' | 'targets' | 'registry' | 'routes' | 'settings'
@@ -66,6 +70,12 @@ type TargetForm = {
   health_check_url: string
   doppler_project: string
   doppler_config: string
+}
+
+type ServiceImportForm = {
+  repository_key: string
+  environment_id: string
+  server_id: string
 }
 
 type RegistryForm = {
@@ -109,8 +119,9 @@ export function ProjectsRoute() {
     { data: servers },
     { data: registries },
     { data: proxyRoutes },
+    { data: githubRepositories },
   ] = useSuspenseQueries({
-    queries: [projectsQuery, environmentsQuery, applicationsQuery, serversQuery, containerRegistriesQuery, proxyRoutesQuery],
+    queries: [projectsQuery, environmentsQuery, applicationsQuery, serversQuery, containerRegistriesQuery, proxyRoutesQuery, githubRepositoriesQuery],
   })
   const [selectedProjectID, setSelectedProjectID] = useState(projectIDFromSearch(window.location.search) || projects[0]?.id || '')
   const [section, setSection] = useState<ProjectSection>(() => sectionFromHash(window.location.hash))
@@ -187,6 +198,7 @@ export function ProjectsRoute() {
           servers={servers}
           registries={registries}
           proxyRoutes={projectRoutes}
+          githubRepositories={githubRepositories}
           projectForm={projectForm}
           isCreatingProject={createProjectMutation.isPending}
           projectActionError={createProjectMutation.error?.message ?? deleteProjectMutation.error?.message}
@@ -277,6 +289,7 @@ function ProjectWorkspace({
   servers,
   registries,
   proxyRoutes,
+  githubRepositories,
   projectForm,
   isCreatingProject,
   projectActionError,
@@ -293,6 +306,7 @@ function ProjectWorkspace({
   servers: ServerRecord[]
   registries: ContainerRegistry[]
   proxyRoutes: ProxyRouteRecord[]
+  githubRepositories: GitHubRepository[]
   projectForm: ProjectForm
   isCreatingProject: boolean
   projectActionError?: string
@@ -322,7 +336,7 @@ function ProjectWorkspace({
       )}
       {section === 'environments' && <ProjectEnvironments project={project} environments={environments} applications={applications} />}
       {section === 'services' && <ProjectServices project={project} environments={environments} applications={applications} />}
-      {section === 'targets' && <ProjectTargets project={project} environments={environments} applications={applications} servers={servers} />}
+      {section === 'targets' && <ProjectTargets project={project} environments={environments} applications={applications} servers={servers} githubRepositories={githubRepositories} />}
       {section === 'registry' && <ProjectRegistry project={project} registries={registries} />}
       {section === 'routes' && <ProjectRoutes applications={applications} routes={proxyRoutes} />}
       {section === 'settings' && <ProjectSettings project={project} />}
@@ -528,7 +542,7 @@ function ProjectSwitcher({
         }}
       >
         <TextInput label="New app" value={projectForm.name} onChange={(name) => onProjectFormChange({ name, slug: slugify(name), description: projectForm.description })} required placeholder="recreate" />
-        <Button variant="primary" disabled={isSaving || !projectForm.name || !projectForm.slug}>
+        <Button className="mt-3" variant="primary" disabled={isSaving || !projectForm.name || !projectForm.slug}>
           <Plus className="size-4" />
           {isSaving ? 'Saving...' : 'Create app'}
         </Button>
@@ -616,11 +630,28 @@ function ProjectServices({ project, environments, applications }: { project: Pro
   )
 }
 
-function ProjectTargets({ project, environments, applications, servers }: { project: Project, environments: Environment[], applications: Application[], servers: ServerRecord[] }) {
+function ProjectTargets({
+  project,
+  environments,
+  applications,
+  servers,
+  githubRepositories,
+}: {
+  project: Project
+  environments: Environment[]
+  applications: Application[]
+  servers: ServerRecord[]
+  githubRepositories: GitHubRepository[]
+}) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState<TargetForm>(defaultTargetForm(environments[0]?.id, servers[0]?.id))
+  const [importForm, setImportForm] = useState<ServiceImportForm>(defaultServiceImportForm(githubRepositories, environments[0]?.id, servers[0]?.id))
+  const [detectedServices, setDetectedServices] = useState<GitHubDetectedService[]>([])
+  const [selectedServices, setSelectedServices] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string>()
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const repoOptions = uniqueGitHubRepositories(githubRepositories)
+  const selectedImportRepo = repoOptions.find((repository) => githubRepositoryKey(repository) === importForm.repository_key)
   const create = useMutation({
     mutationFn: () => createApplication(targetInput(form)),
     onSuccess: async () => {
@@ -629,11 +660,123 @@ function ProjectTargets({ project, environments, applications, servers }: { proj
       await queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey })
     },
   })
+  const detect = useMutation({
+    mutationFn: () => {
+      if (!selectedImportRepo) {
+        throw new Error('Select a GitHub repository first.')
+      }
+      return detectGitHubRepositoryServices({
+        connector_id: selectedImportRepo.connector_id,
+        repository: selectedImportRepo.repository,
+        branch: selectedImportRepo.branch,
+      })
+    },
+    onSuccess: (result) => {
+      setDetectedServices(result.services)
+      setSelectedServices(new Set(result.services.map((service) => service.name)))
+      setError(undefined)
+    },
+  })
+  const importServices = useMutation({
+    mutationFn: async () => {
+      if (!selectedImportRepo) {
+        throw new Error('Select a GitHub repository first.')
+      }
+      const services = detectedServices.filter((service) => selectedServices.has(service.name))
+      if (!importForm.environment_id || !importForm.server_id || services.length === 0) {
+        throw new Error('Select an environment, VM target, and at least one service.')
+      }
+      return importGitHubRepositoryServices(project.id, {
+        connector_id: selectedImportRepo.connector_id,
+        repository: selectedImportRepo.repository,
+        branch: selectedImportRepo.branch,
+        environment_id: importForm.environment_id,
+        server_id: importForm.server_id,
+        services: services.map((service) => service.name),
+      })
+    },
+    onSuccess: async () => {
+      setDetectedServices([])
+      setSelectedServices(new Set())
+      setError(undefined)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey }),
+        queryClient.invalidateQueries({ queryKey: githubRepositoriesQuery.queryKey }),
+      ])
+    },
+  })
   const projectEnvironmentIDs = new Set(environments.map((environment) => environment.id))
   const validEnvironmentID = projectEnvironmentIDs.has(form.environment_id) ? form.environment_id : environments[0]?.id ?? ''
   const selectedEnvironment = environments.find((environment) => environment.id === validEnvironmentID)
+  const selectedRepository = githubRepositories.find((repository) => repository.clone_url === form.repository_url)
   return (
     <div className="space-y-5">
+      <Panel title="Import from GitHub">
+        <div className="grid gap-4 p-4 lg:grid-cols-[1fr_auto]">
+          <div className="grid gap-3 md:grid-cols-3">
+            <SelectInput
+              label="Repository"
+              value={importForm.repository_key}
+              onChange={(repository_key) => {
+                setImportForm((state) => ({ ...state, repository_key }))
+                setDetectedServices([])
+                setSelectedServices(new Set())
+              }}
+            >
+              <option value="" disabled>Select repository</option>
+              {repoOptions.map((repository) => (
+                <option key={githubRepositoryKey(repository)} value={githubRepositoryKey(repository)}>
+                  {repository.repository}#{repository.branch}
+                </option>
+              ))}
+            </SelectInput>
+            <SelectInput label="Environment" value={importForm.environment_id} onChange={(environment_id) => setImportForm((state) => ({ ...state, environment_id }))}>
+              <option value="" disabled>Select environment</option>
+              {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name}</option>)}
+            </SelectInput>
+            <SelectInput label="VM target" value={importForm.server_id} onChange={(server_id) => setImportForm((state) => ({ ...state, server_id }))}>
+              <option value="" disabled>Select server</option>
+              {servers.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
+            </SelectInput>
+          </div>
+          <div className="flex items-end gap-2">
+            <Button type="button" variant="ghost" disabled={detect.isPending || !selectedImportRepo} onClick={() => detect.mutate()}>
+              {detect.isPending ? 'Detecting...' : 'Detect services'}
+            </Button>
+            <Button type="button" variant="primary" disabled={importServices.isPending || selectedServices.size === 0 || !importForm.environment_id || !importForm.server_id} onClick={() => importServices.mutate()}>
+              {importServices.isPending ? 'Creating...' : 'Create services'}
+            </Button>
+          </div>
+        </div>
+        {detectedServices.length > 0 && (
+          <div className="border-t p-4">
+            <div className="mb-3 text-sm font-medium text-ink">Detected services</div>
+            <div className="grid gap-2 md:grid-cols-3">
+              {detectedServices.map((service) => (
+                <label key={service.name} className="flex items-start gap-3 rounded-md border bg-background p-3 text-sm">
+                  <input
+                    className="mt-1"
+                    type="checkbox"
+                    checked={selectedServices.has(service.name)}
+                    onChange={(event) => setSelectedServices((current) => {
+                      const next = new Set(current)
+                      if (event.target.checked) next.add(service.name)
+                      else next.delete(service.name)
+                      return next
+                    })}
+                  />
+                  <span>
+                    <span className="block font-medium text-ink">{service.name}</span>
+                    <span className="mt-1 block font-mono text-xs text-muted">{service.compose_path}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        {repoOptions.length === 0 && <div className="border-t px-4 py-3 text-sm text-muted">Connect GitHub first, then sync repositories.</div>}
+        {(detect.error || importServices.error) && <div className="border-t px-4 py-3"><InlineError message={detect.error?.message ?? importServices.error?.message ?? 'GitHub import failed.'} /></div>}
+      </Panel>
       <Panel title="Place service on a VM">
         <form
           className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-[180px_220px_1fr_220px_auto]"
@@ -669,7 +812,25 @@ function ProjectTargets({ project, environments, applications, servers }: { proj
             <option value="" disabled>Select server</option>
             {servers.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
           </SelectInput>
-          <TextInput label="GitHub repo" value={form.repository_url} onChange={(repository_url) => setForm((state) => ({ ...state, repository_url }))} placeholder="https://github.com/org/recreate" />
+          <SelectInput
+            label="GitHub repo"
+            value={selectedRepository?.clone_url ?? ''}
+            onChange={(cloneURL) => {
+              const repository = githubRepositories.find((item) => item.clone_url === cloneURL)
+              setForm((state) => ({
+                ...state,
+                repository_url: repository?.clone_url ?? state.repository_url,
+                branch: repository?.branch ?? state.branch,
+              }))
+            }}
+          >
+            <option value="">Manual repo URL</option>
+            {githubRepositories.map((repository) => (
+              <option key={`${repository.connector_id}:${repository.repository}:${repository.branch}`} value={repository.clone_url}>
+                {repository.repository}#{repository.branch}
+              </option>
+            ))}
+          </SelectInput>
           <TextInput
             label="Service"
             value={form.name}
@@ -687,6 +848,7 @@ function ProjectTargets({ project, environments, applications, servers }: { proj
           </div>
           {advancedOpen && (
             <>
+              <TextInput label="Repository URL" value={form.repository_url} onChange={(repository_url) => setForm((state) => ({ ...state, repository_url }))} placeholder="https://github.com/org/recreate.git" />
               <TextInput label="Remote directory" value={form.remote_directory} onChange={(remote_directory) => setForm((state) => ({ ...state, remote_directory }))} required placeholder="/srv/deploy-manager/apps/production/recreate" />
               <TextInput label="Branch" value={form.branch} onChange={(branch) => setForm((state) => ({ ...state, branch }))} />
               <TextInput label="Compose path" value={form.compose_path} onChange={(compose_path) => setForm((state) => ({ ...state, compose_path }))} />
@@ -1164,6 +1326,14 @@ function defaultTargetForm(environmentID = '', serverID = ''): TargetForm {
   }
 }
 
+function defaultServiceImportForm(repositories: GitHubRepository[], environmentID = '', serverID = ''): ServiceImportForm {
+  return {
+    repository_key: repositories[0] ? githubRepositoryKey(repositories[0]) : '',
+    environment_id: environmentID,
+    server_id: serverID,
+  }
+}
+
 function defaultRouteForm(application?: Application): RouteForm {
   return {
     application_id: application?.id ?? '',
@@ -1173,6 +1343,22 @@ function defaultRouteForm(application?: Application): RouteForm {
     green_upstream_url: '',
     tls_enabled: true,
   }
+}
+
+function uniqueGitHubRepositories(repositories: GitHubRepository[]): GitHubRepository[] {
+  const seen = new Set<string>()
+  const unique: GitHubRepository[] = []
+  for (const repository of repositories) {
+    const key = `${repository.connector_id}:${repository.repository}:${repository.branch}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(repository)
+  }
+  return unique
+}
+
+function githubRepositoryKey(repository: GitHubRepository): string {
+  return `${repository.connector_id}:${repository.repository}:${repository.branch}`
 }
 
 function projectInput(form: ProjectForm): CreateProjectInput {
@@ -1213,6 +1399,7 @@ function targetInput(form: TargetForm): CreateApplicationInput {
     health_check_url: optionalTrimmed(form.health_check_url),
     doppler_project: optionalTrimmed(form.doppler_project),
     doppler_config: optionalTrimmed(form.doppler_config),
+    github_auto_deploy: Boolean(optionalTrimmed(form.repository_url)),
   }
 }
 

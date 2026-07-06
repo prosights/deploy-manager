@@ -1,0 +1,97 @@
+name: Deploy Manager build
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_manager_build_id:
+        description: Deploy Manager build id
+        required: true
+      repository:
+        description: owner/repo
+        required: true
+      branch:
+        description: Branch that triggered the build
+        required: true
+      commit_sha:
+        description: Commit SHA to build
+        required: false
+      image_ref:
+        description: Full image reference to push
+        required: true
+      build_context:
+        description: Docker build context
+        required: false
+        default: .
+      dockerfile:
+        description: Dockerfile path
+        required: false
+        default: Dockerfile
+      runner:
+        description: Runner label or larger-runner label
+        required: false
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha || inputs.branch }}
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.GAR_REGISTRY_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ inputs.image_ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report success
+        if: success()
+        env:
+          DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}
+          DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          BUILD_ID: ${{ inputs.deploy_manager_build_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl --fail-with-body -X POST "$DEPLOY_MANAGER_API_URL/api/builds/$BUILD_ID/complete" \
+            -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"status\":\"succeeded\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"external_url\":\"$RUN_URL\"}"
+
+      - name: Report failure
+        if: failure()
+        env:
+          DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}
+          DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
+          BUILD_ID: ${{ inputs.deploy_manager_build_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl --fail-with-body -X POST "$DEPLOY_MANAGER_API_URL/api/builds/$BUILD_ID/complete" \
+            -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"status\":\"failed\",\"external_url\":\"$RUN_URL\",\"error_message\":\"GitHub Actions build failed\"}"

@@ -39,6 +39,10 @@ services:
       API_TOKEN: "${API_TOKEN:-}"
       AUTH_DISABLED: "${AUTH_DISABLED:-true}"
       GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET:-}"
+      GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
+      GITHUB_APP_SLUG: "${GITHUB_APP_SLUG:-}"
+      GITHUB_APP_PRIVATE_KEY: "${GITHUB_APP_PRIVATE_KEY:-}"
+      GITHUB_APP_PRIVATE_KEY_PATH: "${GITHUB_APP_PRIVATE_KEY_PATH:-}"
       DOPPLER_PROJECT: "${DOPPLER_PROJECT:-}"
       DOPPLER_CONFIG: "${DOPPLER_CONFIG:-}"
       DOPPLER_TOKEN: "${DOPPLER_TOKEN:-}"
@@ -49,10 +53,15 @@ services:
       RESEND_TO_EMAIL: "${RESEND_TO_EMAIL:-}"
     ports:
       - "${APP_PORT:-8080}:8080"
+    group_add:
+      - "${DOCKER_GROUP_ID:-999}"
     volumes:
       # The container runs as the unprivileged "deploy" user whose home is
       # /home/deploy, so SSH keys must be mounted there (not /root/.ssh).
       - ~/.ssh:/home/deploy/.ssh:ro
+      - /srv/deploy-manager/apps:/srv/deploy-manager/apps
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
     depends_on:
       postgres:
         condition: service_healthy

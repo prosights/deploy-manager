@@ -1,427 +1,482 @@
-import { Check, Cloud, Copy, Radio, RefreshCw } from 'lucide-react'
+import { Check, ChevronRight, ExternalLink, GitBranch, Hammer, Key, RefreshCw, Rocket, X } from 'lucide-react'
 import { useState } from 'react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
-import { PanelError } from '../../components/ui/error-message'
 import { Panel } from '../../components/ui/panel'
-import { SelectInput } from '../../components/ui/select-input'
 import { TextInput } from '../../components/ui/text-input'
-import type { ConnectorAccount } from '../../lib/api'
+import { SelectInput } from '../../components/ui/select-input'
+import type { BuildRun, ContainerRegistry, DopplerIntegrationStatus, GitHubIntegrationStatus, GitHubRepository, UpsertContainerRegistryInput } from '../../lib/api'
+import { matchesSearch } from '../../lib/search'
+import { statusTone } from '../status'
 
-export type ConnectorFormState = {
-  provider: string
+// --- Integration card data ---
+
+type IntegrationCard = {
+  id: string
+  category: 'source' | 'secrets' | 'registry' | 'notifications'
   name: string
-  enabled: boolean
-  config: string
-}
-
-type ConnectorProvider = 'github' | 'doppler' | 'gcs' | 's3'
-
-type ProviderCard = {
-  provider: ConnectorProvider
-  title: string
   description: string
-  status: string
-  env: string[]
-  configHint: string
-  logo?: string
+  logo: string
+  connected: boolean
+  statusLabel: string
+  actionLabel?: string
+  actionHref?: string
+  configurable: boolean
+  missing?: string[]
 }
 
-const providerCards: ProviderCard[] = [
-  {
-    provider: 'github',
-    title: 'GitHub',
-    description: 'Connect repositories for deploy webhooks, deploy keys, and credential inventory.',
-    status: 'Deploy source',
-    env: ['GITHUB_WEBHOOK_SECRET'],
-    configHint: 'Repo and branch only. Secrets stay in GitHub or env.',
-    logo: '/branding/connectors/github.svg',
-  },
-  {
-    provider: 'doppler',
-    title: 'Doppler',
-    description: 'Resolve runtime env vars during deploy without storing secret values here.',
-    status: 'Secrets runtime',
-    env: ['DOPPLER_PROJECT', 'DOPPLER_CONFIG', 'DOPPLER_TOKEN'],
-    configHint: 'Project/config mapping only. Token stays in env.',
-    logo: '/branding/connectors/doppler.svg',
-  },
-  {
-    provider: 'gcs',
-    title: 'Google Cloud Storage',
-    description: 'Track Google Cloud project and GCS bucket access for deploy assets.',
-    status: 'Cloud inventory',
-    env: ['GOOGLE_APPLICATION_CREDENTIALS'],
-    configHint: 'Project and bucket metadata. Service account JSON stays outside.',
-  },
-  {
-    provider: 's3',
-    title: 'Amazon S3',
-    description: 'Track AWS bucket access and object storage credential inventory.',
-    status: 'Storage inventory',
-    env: ['AWS_PROFILE'],
-    configHint: 'Region and bucket metadata. Keys stay in AWS or env.',
-  },
-]
-
-export function defaultConnectorForm(): ConnectorFormState {
-  return {
-    provider: 'github',
-    name: 'GitHub',
-    enabled: true,
-    config: configTemplate('github'),
-  }
+function buildCards(github: GitHubIntegrationStatus, doppler: DopplerIntegrationStatus, registries: ContainerRegistry[]): IntegrationCard[] {
+  const hasRegistry = registries.some((r) => r.enabled)
+  return [
+    {
+      id: 'github',
+      category: 'source',
+      name: 'GitHub',
+      description: 'Push-to-deploy with GitHub Actions builds',
+      logo: '/branding/connectors/github.svg',
+      connected: github.app_configured && github.build_dispatch_enabled,
+      statusLabel: github.app_configured ? 'Connected' : 'Not connected',
+      actionLabel: github.app_configured ? undefined : 'Connect',
+      actionHref: github.install_url || undefined,
+      configurable: true,
+      missing: github.missing,
+    },
+    {
+      id: 'doppler',
+      category: 'secrets',
+      name: 'Doppler',
+      description: 'Runtime secrets synced at deploy time',
+      logo: '/branding/connectors/doppler.svg',
+      connected: doppler.ready,
+      statusLabel: doppler.ready ? 'Ready' : 'Not configured',
+      configurable: true,
+      missing: doppler.missing,
+    },
+    {
+      id: 'docker-registry',
+      category: 'registry',
+      name: 'Docker Registry',
+      description: 'Where built images are pushed and pulled from',
+      logo: '/branding/connectors/docker.svg',
+      connected: hasRegistry,
+      statusLabel: hasRegistry ? `${registries.filter((r) => r.enabled).length} configured` : 'Not configured',
+      configurable: true,
+    },
+    {
+      id: 'slack',
+      category: 'notifications',
+      name: 'Slack',
+      description: 'Deploy notifications to your team channel',
+      logo: '/branding/connectors/slack.svg',
+      connected: false,
+      statusLabel: 'Not configured',
+      configurable: true,
+    },
+  ]
 }
 
-function configTemplate(provider: string): string {
-  switch (provider) {
-    case 'github':
-      return JSON.stringify({ repositories: [{ repository: '', branch: 'main', credential_name: '', external_ref: '' }] }, null, 2)
-    case 'doppler':
-      return JSON.stringify({ project: '', config: '', applications: [] }, null, 2)
-    case 's3':
-      return JSON.stringify({ buckets: [{ credential_name: '', external_ref: '', bucket: '', permissions: [] }] }, null, 2)
-    case 'gcs':
-      return JSON.stringify({ project_id: '', buckets: [{ credential_name: '', external_ref: '', bucket: '', permissions: [] }] }, null, 2)
-    default:
-      return '{}'
-  }
+const categoryLabels: Record<string, string> = {
+  source: 'Deploy Sources',
+  secrets: 'Secrets & Variables',
+  registry: 'Container Registry',
+  notifications: 'Notifications',
 }
 
-function connectorProvider(value: string): ConnectorProvider {
-  if (['github', 'doppler', 'gcs', 's3'].includes(value)) {
-    return value as ConnectorProvider
-  }
-  return 'github'
+// --- Main integration grid ---
+
+type IntegrationGridProps = {
+  githubStatus: GitHubIntegrationStatus
+  dopplerStatus: DopplerIntegrationStatus
+  registries: ContainerRegistry[]
+  onSaveRegistry: (input: UpsertContainerRegistryInput) => void
+  isSavingRegistry: boolean
 }
 
-function ProviderIcon({ provider }: { provider: ConnectorProvider }) {
-  const card = providerCards.find((item) => item.provider === provider)
-  if (!card?.logo) {
-    return (
-      <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-background">
-        <Cloud className="size-4 text-muted" />
-      </span>
-    )
-  }
+export function IntegrationGrid({ githubStatus, dopplerStatus, registries, onSaveRegistry, isSavingRegistry }: IntegrationGridProps) {
+  const cards = buildCards(githubStatus, dopplerStatus, registries)
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const categories = ['source', 'secrets', 'registry', 'notifications'] as const
+
   return (
-    <span className="flex size-6 shrink-0 items-center justify-center rounded-md border bg-white">
-      <img className="max-h-4 max-w-4 object-contain" src={card.logo} alt="" />
-    </span>
+    <div className="space-y-6">
+      {categories.map((category) => {
+        const items = cards.filter((c) => c.category === category)
+        if (items.length === 0) return null
+        return (
+          <div key={category}>
+            <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted">{categoryLabels[category]}</h3>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {items.map((item) => (
+                <IntegrationCardView
+                  key={item.id}
+                  card={item}
+                  isExpanded={expanded === item.id}
+                  onToggle={() => setExpanded(expanded === item.id ? null : item.id)}
+                />
+              ))}
+            </div>
+            {items.some((item) => item.id === expanded) && (
+              <IntegrationDetail
+                card={items.find((item) => item.id === expanded)!}
+                githubStatus={githubStatus}
+                dopplerStatus={dopplerStatus}
+                registries={registries}
+                onSaveRegistry={onSaveRegistry}
+                isSavingRegistry={isSavingRegistry}
+                onClose={() => setExpanded(null)}
+              />
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
-function parseMetadata(value: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(value || '{}') as unknown
-    if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
-      return parsed as Record<string, unknown>
-    }
-  } catch {
-    // Keep the typed fields resilient while Advanced JSON is being edited.
-  }
-  return {}
-}
-
-function firstRecord(value: unknown): Record<string, unknown> {
-  if (!Array.isArray(value)) {
-    return {}
-  }
-  const first = value[0]
-  return first && !Array.isArray(first) && typeof first === 'object' ? first as Record<string, unknown> : {}
-}
-
-function firstString(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return ''
-  }
-  return stringValue(value[0])
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value : ''
-}
-
-type ConnectorFormProps = {
-  form: ConnectorFormState
-  isSaving: boolean
-  errorMessage?: string
-  onChange: (updates: Partial<ConnectorFormState>) => void
-  onSubmit: () => void
-}
-
-export function ConnectorForm({ form, isSaving, errorMessage, onChange, onSubmit }: ConnectorFormProps) {
-  const provider = connectorProvider(form.provider)
-  const selected = providerCards.find((card) => card.provider === provider) ?? providerCards[0]
-
+function IntegrationCardView({ card, isExpanded, onToggle }: { card: IntegrationCard; isExpanded: boolean; onToggle: () => void }) {
   return (
-    <Panel title="Add integration">
-      <div className="grid gap-3 border-b p-4 md:grid-cols-2 xl:grid-cols-3">
-        {providerCards.map((card) => (
-          <button
-            key={card.provider}
-            type="button"
-            className={`rounded-md border bg-background p-3 text-left transition-colors hover:bg-panel ${card.provider === provider ? 'border-accent bg-accent/10' : ''}`}
-            onClick={() => onChange({ provider: card.provider, name: card.title, config: configTemplate(card.provider) })}
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <ProviderIcon provider={card.provider} />
-                <div className="font-medium text-ink">{card.title}</div>
-              </div>
-              <Badge tone={card.provider === provider ? 'accent' : 'neutral'}>{card.status}</Badge>
-            </div>
-            <p className="mt-2 text-sm leading-5 text-muted">{card.description}</p>
-          </button>
+    <button
+      type="button"
+      onClick={card.actionHref ? undefined : onToggle}
+      className={`group relative flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-all ${
+        isExpanded ? 'border-accent bg-accent/5 shadow-sm' : 'bg-surface hover:border-accent/30 hover:shadow-sm'
+      } ${card.actionHref ? '' : 'cursor-pointer'}`}
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-white p-1.5">
+        <img className="h-full w-full object-contain" src={card.logo} alt="" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-ink">{card.name}</span>
+          {card.connected && <Check className="size-3.5 text-success" />}
+        </div>
+        <p className="truncate text-xs text-muted">{card.description}</p>
+      </div>
+      {card.actionHref ? (
+        <a
+          href={card.actionHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 inline-flex items-center gap-1 rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-surface hover:bg-ink/80"
+        >
+          {card.actionLabel}
+          <ExternalLink className="size-3" />
+        </a>
+      ) : (
+        <ChevronRight className={`size-4 shrink-0 text-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+      )}
+    </button>
+  )
+}
+
+// --- Expanded detail panels ---
+
+function IntegrationDetail({ card, githubStatus, dopplerStatus, registries, onSaveRegistry, isSavingRegistry, onClose }: {
+  card: IntegrationCard
+  githubStatus: GitHubIntegrationStatus
+  dopplerStatus: DopplerIntegrationStatus
+  registries: ContainerRegistry[]
+  onSaveRegistry: (input: UpsertContainerRegistryInput) => void
+  isSavingRegistry: boolean
+  onClose: () => void
+}) {
+  return (
+    <div className="mt-3 rounded-xl border bg-surface p-5">
+      <div className="mb-4 flex items-center justify-between">
+        <h4 className="font-semibold text-ink">{card.name} Configuration</h4>
+        <button type="button" onClick={onClose} className="rounded-md p-1 text-muted hover:bg-panel hover:text-ink">
+          <X className="size-4" />
+        </button>
+      </div>
+      {card.id === 'github' && <GitHubDetail status={githubStatus} />}
+      {card.id === 'doppler' && <DopplerDetail status={dopplerStatus} />}
+      {card.id === 'docker-registry' && <RegistryDetail registries={registries} onSave={onSaveRegistry} isSaving={isSavingRegistry} />}
+      {card.id === 'slack' && <SlackDetail />}
+    </div>
+  )
+}
+
+function GitHubDetail({ status }: { status: GitHubIntegrationStatus }) {
+  const items = [
+    { label: 'GitHub App', ok: status.app_configured },
+    { label: 'Repository sync', ok: status.repository_sync_enabled },
+    { label: 'Build dispatch', ok: status.build_dispatch_enabled },
+    { label: 'Webhook', ok: status.webhook_configured },
+  ]
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-center gap-2 rounded-md border px-3 py-2">
+            {item.ok
+              ? <Check className="size-3.5 text-success" />
+              : <X className="size-3.5 text-danger" />
+            }
+            <span className="text-sm text-ink">{item.label}</span>
+          </div>
         ))}
       </div>
-      <form
-        className="grid gap-4 p-4 lg:grid-cols-[1fr_240px]"
-        onSubmit={(event) => {
-          event.preventDefault()
-          onSubmit()
-        }}
-      >
-        <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-[1fr_140px]">
-            <TextInput label="Connection name" value={form.name} onChange={(name) => onChange({ name })} placeholder={selected.title} required />
-            <SelectInput label="Status" value={form.enabled ? 'true' : 'false'} onChange={(value) => onChange({ enabled: value === 'true' })}>
-              <option value="true">Enabled</option>
-              <option value="false">Disabled</option>
-            </SelectInput>
-          </div>
-          <ProviderFields provider={provider} config={form.config} onChange={(config) => onChange({ config })} />
-          <details className="rounded-md border bg-background">
-            <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-ink">Advanced metadata</summary>
-            <label className="block space-y-1 border-t p-3 text-xs text-muted">
-              <span>Metadata JSON</span>
-              <textarea
-                aria-label="Metadata JSON"
-                className="min-h-24 w-full resize-y rounded-md border bg-surface px-3 py-2 font-mono text-sm text-ink outline-none placeholder:text-muted/60 focus-visible:ring-2 focus-visible:ring-accent"
-                value={form.config}
-                onChange={(event) => onChange({ config: event.target.value })}
-                placeholder='{"default_branch":"main"}'
-              />
-            </label>
-          </details>
-          <Button variant="primary" disabled={isSaving || !form.provider || !form.name}>
-            {isSaving ? 'Saving...' : 'Save integration'}
-          </Button>
+      {status.missing.length > 0 && (
+        <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-3">
+          <p className="text-sm font-medium text-warning">Missing configuration</p>
+          <p className="mt-1 font-mono text-xs text-muted">{status.missing.join(', ')}</p>
         </div>
-        <div className="rounded-md border bg-background p-4">
-          <div className="flex items-center gap-2">
-            <ProviderIcon provider={provider} />
-            <div className="font-medium text-ink">{selected.title}</div>
-          </div>
-          <p className="mt-3 text-sm leading-6 text-muted">{selected.configHint}</p>
-          <div className="mt-4 text-xs font-medium text-muted">Secret source</div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {selected.env.map((variable) => (
-              <span key={variable} className="rounded-md bg-panel px-2 py-1 font-mono text-xs text-muted">{variable}</span>
-            ))}
-          </div>
-          <div className="mt-4 rounded-md bg-panel px-3 py-2 text-xs leading-5 text-muted">
-            This app stores connector metadata only. Tokens, webhooks, API keys, and private keys stay in environment variables or provider systems.
-          </div>
+      )}
+      {!status.app_configured && !status.install_url && (
+        <div className="rounded-md border px-4 py-3">
+          <p className="text-sm font-medium text-ink">GitHub App install link is not ready.</p>
+          <p className="mt-1 text-sm text-muted">
+            Set <code className="rounded bg-panel px-1 font-mono text-xs">GITHUB_APP_SLUG</code> on the Deploy Manager server to enable the one-click install button.
+            Repository sync and build dispatch also need the app ID and private key.
+          </p>
         </div>
+      )}
+      {!status.app_configured && status.install_url && (
+        <a
+          href={status.install_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 rounded-md bg-ink px-4 py-2 text-sm font-medium text-surface hover:bg-ink/80"
+        >
+          Install GitHub App
+          <ExternalLink className="size-3.5" />
+        </a>
+      )}
+      {status.app_configured && (
+        <p className="text-sm text-muted">GitHub App is connected. Push events will trigger builds automatically for connected repositories.</p>
+      )}
+    </div>
+  )
+}
+
+function DopplerDetail({ status }: { status: DopplerIntegrationStatus }) {
+  const items = [
+    { label: 'Connector configured', ok: status.connector_configured },
+    { label: 'CLI available', ok: status.cli_available },
+    { label: 'Deploy-time sync', ok: status.ready },
+  ]
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2 sm:grid-cols-3">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-center gap-2 rounded-md border px-3 py-2">
+            {item.ok
+              ? <Check className="size-3.5 text-success" />
+              : <X className="size-3.5 text-danger" />
+            }
+            <span className="text-sm text-ink">{item.label}</span>
+          </div>
+        ))}
+      </div>
+      {status.missing.length > 0 && (
+        <div className="rounded-md border border-warning/30 bg-warning/5 px-4 py-3">
+          <p className="text-sm font-medium text-warning">Missing server-side configuration</p>
+          <p className="mt-1 font-mono text-xs text-muted">{status.missing.join(', ')}</p>
+        </div>
+      )}
+      {status.ready && (
+        <p className="text-sm text-muted">Doppler secrets are synced to applications at deploy time. Configure per-app project/config in the application settings.</p>
+      )}
+    </div>
+  )
+}
+
+function RegistryDetail({ registries, onSave, isSaving }: { registries: ContainerRegistry[]; onSave: (input: UpsertContainerRegistryInput) => void; isSaving: boolean }) {
+  const [name, setName] = useState('')
+  const [provider, setProvider] = useState<ContainerRegistry['provider']>('ghcr')
+  const [host, setHost] = useState('ghcr.io')
+  const [namespace, setNamespace] = useState('')
+  const [repository, setRepository] = useState('')
+
+  const providerDefaults: Record<string, string> = {
+    ghcr: 'ghcr.io',
+    ecr: '',
+    gcp_artifact_registry: 'us-docker.pkg.dev',
+    docker_hub: 'docker.io',
+    custom: '',
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!name.trim() || !host.trim() || !repository.trim()) return
+    onSave({ name: name.trim(), provider, registry_host: host.trim(), namespace: namespace.trim(), repository: repository.trim(), enabled: true })
+    setName('')
+    setRepository('')
+    setNamespace('')
+  }
+
+  return (
+    <div className="space-y-4">
+      {registries.length > 0 && (
+        <div className="space-y-2">
+          {registries.map((r) => (
+            <div key={r.id} className="flex items-center justify-between rounded-md border px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Key className="size-3.5 text-muted" />
+                <span className="text-sm font-medium text-ink">{r.name}</span>
+                <span className="font-mono text-xs text-muted">{r.registry_host}/{r.namespace || r.repository}</span>
+              </div>
+              <Badge tone={r.enabled ? 'success' : 'neutral'}>{r.enabled ? 'Active' : 'Disabled'}</Badge>
+            </div>
+          ))}
+        </div>
+      )}
+      <form onSubmit={handleSubmit} className="space-y-3 rounded-md border bg-background p-4">
+        <p className="text-sm font-medium text-ink">Add registry</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <TextInput label="Name" value={name} onChange={setName} placeholder="Production GHCR" />
+          <SelectInput label="Provider" value={provider} onChange={(v) => { setProvider(v as ContainerRegistry['provider']); setHost(providerDefaults[v] || '') }}>
+            <option value="ghcr">GitHub Container Registry</option>
+            <option value="ecr">AWS ECR</option>
+            <option value="gcp_artifact_registry">GCP Artifact Registry</option>
+            <option value="docker_hub">Docker Hub</option>
+            <option value="custom">Custom</option>
+          </SelectInput>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <TextInput label="Host" value={host} onChange={setHost} placeholder="ghcr.io" />
+          <TextInput label="Namespace" value={namespace} onChange={setNamespace} placeholder="your-org" />
+          <TextInput label="Repository" value={repository} onChange={setRepository} placeholder="your-app" />
+        </div>
+        <Button variant="primary" disabled={isSaving || !name.trim() || !repository.trim()}>
+          {isSaving ? 'Saving...' : 'Add registry'}
+        </Button>
       </form>
-      {errorMessage && <PanelError message={errorMessage} />}
+    </div>
+  )
+}
+
+function SlackDetail() {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted">
+        Set <span className="font-mono text-ink">SLACK_WEBHOOK_URL</span> on the server to receive deployment notifications in your Slack channel.
+      </p>
+      <a
+        href="https://api.slack.com/messaging/webhooks"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-accent hover:underline"
+      >
+        Create a Slack webhook
+        <ExternalLink className="size-3" />
+      </a>
+    </div>
+  )
+}
+
+// --- Connected repos ---
+
+type ConnectedReposProps = {
+  repositories: GitHubRepository[]
+  searchQuery: string
+  isSyncing: boolean
+  isDispatching: boolean
+  onSync: (connectorID: string) => void
+  onBuild: (repository: GitHubRepository) => void
+}
+
+export function ConnectedRepos({ repositories, searchQuery, isSyncing, isDispatching, onSync, onBuild }: ConnectedReposProps) {
+  const visible = repositories.filter((repo) => matchesSearch(searchQuery, [
+    repo.repository,
+    repo.branch,
+    repo.connector_name,
+  ]))
+
+  if (visible.length === 0 && !searchQuery) return null
+
+  const firstConnectorID = visible[0]?.connector_id
+
+  return (
+    <Panel title="Connected repositories">
+      <div className="flex items-center justify-between border-b px-4 py-2">
+        <span className="text-xs text-muted">{visible.length} {visible.length === 1 ? 'repository' : 'repositories'}</span>
+        {firstConnectorID && (
+          <Button variant="ghost" disabled={isSyncing} onClick={() => onSync(firstConnectorID)}>
+            <RefreshCw className={`size-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            Sync
+          </Button>
+        )}
+      </div>
+      <div className="divide-y">
+        {visible.map((repo) => (
+          <div key={`${repo.connector_id}-${repo.repository}-${repo.branch}`} className="flex items-center justify-between gap-4 px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="truncate font-medium text-ink text-sm">{repo.repository}</span>
+                <Badge tone="neutral">
+                  <GitBranch className="mr-0.5 size-3" />
+                  {repo.branch}
+                </Badge>
+              </div>
+              {repo.image_ref && (
+                <p className="mt-0.5 truncate font-mono text-xs text-muted">{repo.image_ref}</p>
+              )}
+            </div>
+            <Button variant="ghost" disabled={isDispatching} onClick={() => onBuild(repo)}>
+              <Rocket className="size-3.5" />
+              Build
+            </Button>
+          </div>
+        ))}
+      </div>
+      {visible.length === 0 && searchQuery && (
+        <p className="px-4 py-6 text-sm text-muted">No repositories match your search.</p>
+      )}
     </Panel>
   )
 }
 
-function ProviderFields({ provider, config, onChange }: { provider: ConnectorProvider, config: string, onChange: (config: string) => void }) {
-  const metadata = parseMetadata(config)
-  function update(next: Record<string, unknown>) {
-    onChange(JSON.stringify(next, null, 2))
-  }
+// --- Recent builds ---
 
-  if (provider === 'github') {
-    const repository = firstRecord(metadata.repositories)?.repository
-    const branch = stringValue(firstRecord(metadata.repositories)?.branch) || 'main'
-    return (
-      <div className="grid gap-3 md:grid-cols-2">
-        <TextInput label="Repository" value={stringValue(repository)} onChange={(value) => update({ repositories: [{ ...firstRecord(metadata.repositories), repository: value, branch }] })} placeholder="prosights/recreate" />
-        <TextInput label="Branch" value={branch} onChange={(value) => update({ repositories: [{ ...firstRecord(metadata.repositories), repository: stringValue(repository), branch: value }] })} placeholder="main" />
-      </div>
-    )
-  }
-  if (provider === 'doppler') {
-    return (
-      <div className="grid gap-3 md:grid-cols-3">
-        <TextInput label="Doppler project" value={stringValue(metadata.project)} onChange={(value) => update({ ...metadata, project: value })} placeholder="recreate" />
-        <TextInput label="Config" value={stringValue(metadata.config)} onChange={(value) => update({ ...metadata, config: value })} placeholder="prd" />
-        <TextInput label="App scope" value={firstString(metadata.applications)} onChange={(value) => update({ ...metadata, applications: value ? [value] : [] })} placeholder="production" />
-      </div>
-    )
-  }
-  if (provider === 'gcs') {
-    const bucket = firstRecord(metadata.buckets)
-    return (
-      <div className="grid gap-3 md:grid-cols-3">
-        <TextInput label="GCP project" value={stringValue(metadata.project_id)} onChange={(value) => update({ ...metadata, project_id: value })} placeholder="prosights-platform" />
-        <TextInput label="Bucket" value={stringValue(bucket.bucket)} onChange={(value) => update({ ...metadata, buckets: [{ ...bucket, bucket: value }] })} placeholder="deploy-artifacts" />
-        <TextInput label="Credential ref" value={stringValue(bucket.external_ref)} onChange={(value) => update({ ...metadata, buckets: [{ ...bucket, external_ref: value }] })} placeholder="gcp-service-account" />
-      </div>
-    )
-  }
-  const bucket = firstRecord(metadata.buckets)
-  return (
-    <div className="grid gap-3 md:grid-cols-3">
-      <TextInput label="Region" value={stringValue(metadata.region)} onChange={(value) => update({ ...metadata, region: value })} placeholder="us-east-1" />
-      <TextInput label="Bucket" value={stringValue(bucket.bucket)} onChange={(value) => update({ ...metadata, buckets: [{ ...bucket, bucket: value }] })} placeholder="deploy-artifacts" />
-      <TextInput label="Credential ref" value={stringValue(bucket.external_ref)} onChange={(value) => update({ ...metadata, buckets: [{ ...bucket, external_ref: value }] })} placeholder="aws-role" />
-    </div>
-  )
+type RecentBuildsProps = {
+  builds: BuildRun[]
 }
 
-export function ConnectorGuides() {
-  return (
-    <>
-      <Panel title="GitHub deploy webhooks">
-        <div className="grid gap-4 p-4 lg:grid-cols-[1.2fr_1fr]">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <ProviderIcon provider="github" />
-              <div className="font-medium">Push-triggered deployments</div>
-              <Badge tone="accent">/api/webhooks/github</Badge>
-            </div>
-            <p className="max-w-2xl text-sm leading-6 text-muted">
-              GitHub push events queue deployments for applications whose repository URL and branch match the payload. The webhook secret is supplied by <span className="font-mono text-ink">GITHUB_WEBHOOK_SECRET</span>; this app does not store it.
-            </p>
-            <p className="max-w-2xl text-sm leading-6 text-muted">
-              Registered GitHub connectors can sync repository credential references, permissions, and deployment usage into the credential inventory from metadata.
-            </p>
-          </div>
-          <div className="rounded-md border bg-background p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs uppercase text-muted">Webhook URL</div>
-                <div className="mt-1 font-mono text-sm text-ink">/api/webhooks/github</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <CopyButton text="/api/webhooks/github" />
-                <Button variant="ghost" type="button">
-                  <Radio className="size-4" />
-                  Active
-                </Button>
-              </div>
-            </div>
-            <div className="mt-3 text-xs text-muted">Events: push, ping. Signature: X-Hub-Signature-256. Config key: repositories.</div>
-          </div>
-        </div>
-      </Panel>
-      <Panel title="Doppler runtime sync">
-        <div className="grid gap-4 p-4 lg:grid-cols-[1.2fr_1fr]">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <ProviderIcon provider="doppler" />
-              <div className="font-medium">Runtime environment files</div>
-              <Badge tone="accent">deploy-time sync</Badge>
-            </div>
-            <p className="max-w-2xl text-sm leading-6 text-muted">
-              When Doppler is configured, deployments download runtime variables and write a locked-down <span className="font-mono text-ink">.env</span> file on the target server before Compose starts. Deploy Manager does not persist those values.
-            </p>
-          </div>
-          <div className="rounded-md border bg-background p-3">
-            <div className="text-xs uppercase text-muted">Environment</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {['DOPPLER_PROJECT', 'DOPPLER_CONFIG', 'DOPPLER_TOKEN'].map((variable) => (
-                <span key={variable} className="rounded-md bg-panel px-2 py-1 font-mono text-xs text-muted">{variable}</span>
-              ))}
-            </div>
-            <div className="mt-3 text-xs text-muted">Requires the Doppler CLI on the Go server host. Inventory metadata keys: project, config, applications.</div>
-          </div>
-        </div>
-      </Panel>
-      <Panel title="Object storage inventory">
-        <div className="grid gap-4 p-4 lg:grid-cols-[1.2fr_1fr]">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <ProviderIcon provider="s3" />
-              <ProviderIcon provider="gcs" />
-              <div className="font-medium">S3 and GCS bucket access</div>
-              <Badge tone="accent">/api/object-storage/inventory</Badge>
-            </div>
-            <p className="max-w-2xl text-sm leading-6 text-muted">
-              Storage connectors report bucket permissions and application usage into the credential inventory. Registered S3 and GCS connectors can sync bucket metadata from their connector config; provider keys and tokens stay in their source systems.
-            </p>
-          </div>
-          <div className="rounded-md border bg-background p-3">
-            <div className="text-xs uppercase text-muted">Supported providers</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Badge tone="neutral">s3</Badge>
-              <Badge tone="neutral">gcs</Badge>
-            </div>
-            <div className="mt-3 text-xs text-muted">Config key: buckets. Reports: credential reference, bucket, permissions, usages.</div>
-          </div>
-        </div>
-      </Panel>
-    </>
-  )
-}
-
-export function ConnectorSyncGrid({
-  connectors,
-  isSyncing,
-  onSync,
-}: {
-  connectors: ConnectorAccount[]
-  isSyncing: boolean
-  onSync: (connectorID: string) => void
-}) {
-  return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {connectors.map((connector) => (
-        <Panel key={connector.id}>
-          <div className="space-y-3 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <ProviderIcon provider={connectorProvider(connector.provider)} />
-                <div className="min-w-0">
-                  <div className="font-medium">{connector.name}</div>
-                  <div className="text-sm text-muted">{connector.provider}</div>
-                </div>
-              </div>
-              <div className="flex flex-col items-end gap-2">
-                <Badge tone={connector.enabled ? 'success' : 'neutral'}>{connector.enabled ? 'enabled' : 'disabled'}</Badge>
-                {connector.last_sync_status && <Badge tone={connector.last_sync_status === 'ok' ? 'success' : 'danger'}>{connector.last_sync_status}</Badge>}
-              </div>
-            </div>
-            <div className="text-sm text-muted">{connector.last_sync_message ?? 'No sync has run yet.'}</div>
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-xs text-muted">
-                {connector.last_synced_at ? `Last sync ${new Date(connector.last_synced_at).toLocaleString()}` : 'Not synced yet'}
-              </div>
-              <Button variant="ghost" disabled={!connector.enabled || isSyncing} onClick={() => onSync(connector.id)}>
-                <RefreshCw className="size-4" />
-                Sync
-              </Button>
-            </div>
-          </div>
-        </Panel>
-      ))}
-      {connectors.length === 0 && <div className="rounded-md border bg-panel px-4 py-6 text-sm text-muted">No connectors found.</div>}
-    </div>
-  )
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
+export function RecentBuilds({ builds }: RecentBuildsProps) {
+  if (builds.length === 0) return null
 
   return (
-    <Button
-      variant="ghost"
-      type="button"
-      className="size-9 p-0"
-      onClick={() => {
-        navigator.clipboard.writeText(text)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-      }}
-      aria-label="Copy to clipboard"
-    >
-      {copied ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
-    </Button>
+    <Panel title="Recent builds">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs text-muted">
+            <tr>
+              <th className="px-4 py-2.5 font-medium">Repository</th>
+              <th className="px-4 py-2.5 font-medium">Branch</th>
+              <th className="px-4 py-2.5 font-medium">Status</th>
+              <th className="px-4 py-2.5 font-medium">Image</th>
+              <th className="px-4 py-2.5 font-medium">Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {builds.slice(0, 20).map((build) => (
+              <tr key={build.id} className="border-t">
+                <td className="px-4 py-2.5 font-medium text-ink">{build.repository}</td>
+                <td className="px-4 py-2.5">
+                  <Badge tone="neutral">
+                    <GitBranch className="mr-0.5 size-3" />
+                    {build.branch}
+                  </Badge>
+                </td>
+                <td className="px-4 py-2.5">
+                  <Badge tone={statusTone(build.status)}>
+                    {build.status === 'dispatched' && <Hammer className="mr-0.5 size-3" />}
+                    {build.status}
+                  </Badge>
+                </td>
+                <td className="max-w-48 truncate px-4 py-2.5 font-mono text-xs text-muted">
+                  {build.image_ref ?? '—'}
+                </td>
+                <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted">
+                  {build.started_at ? new Date(build.started_at).toLocaleString() : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   )
 }

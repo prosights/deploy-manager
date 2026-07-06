@@ -7,7 +7,10 @@ import (
 
 	"deploy-manager/internal/db"
 	"deploy-manager/internal/deployments"
+	"deploy-manager/internal/githubconnector"
 	"deploy-manager/internal/githubhook"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
@@ -76,14 +79,43 @@ func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queued := make([]db.Deployment, 0, len(applications))
+	builds := make([]db.BuildRun, 0)
+	skipped := make([]map[string]any, 0)
+
 	for _, application := range applications {
-		deployment, err := s.queries.CreateDeployment(r.Context(), db.CreateDeploymentParams{
+		if err := validateBlueGreenHealthCheck(application.HealthCheckUrl); err != nil {
+			skipped = append(skipped, githubSkipEntry(application, err, push))
+			s.auditGitHubSkip(r, application, err, push)
+			continue
+		}
+
+		if dispatched, ok := s.tryBuildDispatch(r, application, push); ok {
+			if dispatched.ID.Valid {
+				builds = append(builds, dispatched)
+			}
+			continue
+		}
+
+		if strings.TrimSpace(application.ComposePath) == "" {
+			err := validationError("application has no compose_path to build from")
+			skipped = append(skipped, githubSkipEntry(application, err, push))
+			s.auditGitHubSkip(r, application, err, push)
+			continue
+		}
+
+		input, err := normalizeCreateDeployment(db.CreateDeploymentParams{
 			ApplicationID: application.ID,
 			Trigger:       "github_push",
-			Strategy:      "rolling",
+			Strategy:      "blue_green",
 			CommitSha:     blankStringAsText(push.CommitSHA),
 			Actor:         blankStringAsText(push.Actor),
 		})
+		if err != nil {
+			skipped = append(skipped, githubSkipEntry(application, err, push))
+			s.auditGitHubSkip(r, application, err, push)
+			continue
+		}
+		deployment, err := s.queries.CreateDeployment(r.Context(), input)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -101,8 +133,191 @@ func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		"commit_sha":  push.CommitSHA,
 		"matched":     len(applications),
 		"deployments": queued,
+		"builds":      builds,
+		"skipped":     skipped,
 	})
 	s.audit(r, "github.push", "deployment", "batch", push.Branch, map[string]any{"matched": len(applications), "commit_sha": push.CommitSHA})
+}
+
+// tryBuildDispatch attempts to dispatch a GitHub Actions build for the
+// application. Returns true once a connector explicitly owns the repo so the
+// webhook does not silently fall back to source-build-on-target on dispatch
+// errors.
+func (s Server) tryBuildDispatch(r *http.Request, application db.ListApplicationsForGitHubPushRow, push githubhook.Push) (db.BuildRun, bool) {
+	if s.github.App == nil {
+		return db.BuildRun{}, false
+	}
+	accounts, err := s.queries.ListConnectorAccounts(r.Context())
+	if err != nil {
+		return db.BuildRun{}, false
+	}
+	repoName := githubRepoFromURLs(push.Repositories)
+	if repoName == "" {
+		return db.BuildRun{}, false
+	}
+	for _, account := range accounts {
+		if account.Provider != "github" || !account.Enabled {
+			continue
+		}
+		repo, owned, err := githubConnectorBuildTarget(account.Config, repoName, push.Branch, application, push.ChangedPaths)
+		if err != nil {
+			s.auditGitHubSkip(r, application, err, push)
+			return db.BuildRun{}, true
+		}
+		if !owned {
+			continue
+		}
+		if repo.Repository == "" {
+			return db.BuildRun{}, true
+		}
+		if repo.InstallationID == "" {
+			s.auditGitHubSkip(r, application, validationError("github repository requires installation_id before builds can be dispatched"), push)
+			return db.BuildRun{}, true
+		}
+		request := githubPushBuildRequest(repo, push)
+		if err := validateGitHubBuildDispatchRequest(request); err != nil {
+			s.auditGitHubSkip(r, application, err, push)
+			return db.BuildRun{}, true
+		}
+		build, err := s.queries.CreateBuildRun(r.Context(), db.CreateBuildRunParams{
+			Provider:      "github_actions",
+			ConnectorID:   account.ID,
+			ApplicationID: application.ID,
+			Repository:    repo.Repository,
+			Branch:        repo.Branch,
+			WorkflowID:    request.WorkflowID,
+			CommitSha:     blankStringAsText(push.CommitSHA),
+		})
+		if err != nil {
+			return db.BuildRun{}, true
+		}
+		inputs := githubBuildWorkflowInputs(request.Inputs, build)
+		if err := s.github.App.DispatchWorkflow(r.Context(), repo.InstallationID, repo.Repository, request.WorkflowID, repo.Branch, inputs); err != nil {
+			failedBuild, _ := s.queries.CompleteBuildRun(r.Context(), db.CompleteBuildRunParams{
+				ID:           build.ID,
+				Status:       "failed",
+				ErrorMessage: blankStringAsText(buildErrorMessage(err)),
+			})
+			if failedBuild.ID.Valid {
+				return failedBuild, true
+			}
+			return build, true
+		}
+		s.audit(r, "github.build_dispatch", "build", uuidString(build.ID), repo.Repository, map[string]any{
+			"connector_id": uuidString(account.ID),
+			"branch":       push.Branch,
+			"commit_sha":   push.CommitSHA,
+			"workflow_id":  request.WorkflowID,
+		})
+		return build, true
+	}
+	return db.BuildRun{}, false
+}
+
+func githubConnectorBuildTarget(raw []byte, repoName string, branch string, application db.ListApplicationsForGitHubPushRow, changedPaths []string) (githubconnector.Repository, bool, error) {
+	repositories, err := githubConnectorRepositories(raw, repoName, branch)
+	if err != nil {
+		return githubconnector.Repository{}, false, nil
+	}
+	for _, repository := range repositories {
+		if !repositoryTargetsApplication(repository, application.ID, application.Name) {
+			continue
+		}
+		if !repositoryMatchesChangedPaths(repository, changedPaths) {
+			return githubconnector.Repository{}, true, nil
+		}
+		return repository, true, nil
+	}
+	return githubconnector.Repository{}, false, nil
+}
+
+func repositoryTargetsApplication(repository githubconnector.Repository, applicationID pgtype.UUID, applicationName string) bool {
+	if repository.ApplicationID != "" {
+		return repository.ApplicationID == uuidString(applicationID)
+	}
+	if repository.ApplicationName != "" {
+		return strings.EqualFold(repository.ApplicationName, applicationName)
+	}
+	return true
+}
+
+func repositoryMatchesChangedPaths(repository githubconnector.Repository, changedPaths []string) bool {
+	if len(repository.PathFilters) == 0 {
+		return true
+	}
+	if len(changedPaths) == 0 {
+		return false
+	}
+	for _, changedPath := range changedPaths {
+		changedPath = strings.Trim(strings.TrimSpace(changedPath), "/")
+		for _, filter := range repository.PathFilters {
+			if pathFilterMatches(filter, changedPath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func pathFilterMatches(filter string, changedPath string) bool {
+	filter = strings.Trim(strings.TrimSpace(filter), "/")
+	if filter == "" || changedPath == "" {
+		return false
+	}
+	filter = strings.TrimSuffix(filter, "/**")
+	filter = strings.TrimSuffix(filter, "/*")
+	if filter == "" {
+		return true
+	}
+	return changedPath == filter || strings.HasPrefix(changedPath, filter+"/")
+}
+
+func githubPushBuildRequest(repo githubconnector.Repository, push githubhook.Push) githubBuildDispatchRequest {
+	inputs := map[string]string{}
+	if strings.TrimSpace(push.CommitSHA) != "" {
+		inputs["commit_sha"] = strings.TrimSpace(push.CommitSHA)
+	}
+	request := fillGitHubBuildDefaults(githubBuildDispatchRequest{
+		Repository: repo.Repository,
+		Branch:     repo.Branch,
+		Inputs:     inputs,
+	}, repo)
+	expandGitHubBuildInputTemplates(request.Inputs, push.CommitSHA)
+	return request
+}
+
+// githubRepoFromURLs extracts the owner/repo from the first URL in the list.
+func githubRepoFromURLs(urls []string) string {
+	for _, u := range urls {
+		u = strings.TrimSuffix(strings.TrimSpace(u), ".git")
+		if idx := strings.LastIndex(u, "/"); idx > 0 {
+			prefix := u[:idx]
+			name := u[idx+1:]
+			if ownerIdx := strings.LastIndex(prefix, "/"); ownerIdx >= 0 {
+				return prefix[ownerIdx+1:] + "/" + name
+			}
+			if colonIdx := strings.LastIndex(prefix, ":"); colonIdx >= 0 {
+				return prefix[colonIdx+1:] + "/" + name
+			}
+		}
+	}
+	return ""
+}
+
+func githubSkipEntry(application db.ListApplicationsForGitHubPushRow, err error, push githubhook.Push) map[string]any {
+	return map[string]any{
+		"application_id": uuidString(application.ID),
+		"reason":         errorString(err),
+	}
+}
+
+func (s Server) auditGitHubSkip(r *http.Request, application db.ListApplicationsForGitHubPushRow, err error, push githubhook.Push) {
+	s.audit(r, "github.push_skipped", "deployment", uuidString(application.ID), application.Name, map[string]any{
+		"reason":     "not_deployable",
+		"error":      errorString(err),
+		"branch":     push.Branch,
+		"commit_sha": push.CommitSHA,
+	})
 }
 
 func githubIgnoredPushMetadata(push githubhook.Push, reason string) map[string]any {

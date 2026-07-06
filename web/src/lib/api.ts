@@ -104,6 +104,34 @@ export type DeploymentLog = {
   created_at?: string
 }
 
+export type BuildRun = {
+  id: string
+  provider: 'github_actions' | 'cloud_build'
+  connector_id: string | null
+  application_id: string | null
+  repository: string
+  branch: string
+  workflow_id: string
+  status: 'dispatched' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  commit_sha: string | null
+  image_ref: string | null
+  image_digest: string | null
+  external_url: string | null
+  error_message: string | null
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type DopplerIntegrationStatus = {
+  connector_configured: boolean
+  cli_available: boolean
+  ready: boolean
+  missing: string[]
+  message: string
+}
+
 export type ProxyRoute = {
   id: string
   server_id: string
@@ -123,7 +151,7 @@ export type ProxyRoute = {
 export type CreateDeploymentInput = {
   application_id: string
   trigger?: string
-  strategy?: 'rolling' | 'blue_green'
+  strategy?: 'blue_green'
   commit_sha?: string
   image_ref?: string
   image_digest?: string
@@ -185,6 +213,7 @@ export type CreateApplicationInput = {
   health_check_url?: string
   doppler_project?: string
   doppler_config?: string
+  github_auto_deploy?: boolean
 }
 
 export type Project = {
@@ -327,6 +356,83 @@ export type ConnectorSyncResponse = {
   count: number
 }
 
+export type GitHubRepositorySyncResponse = {
+  connector: ConnectorAccount
+  repositories: GitHubRepository[]
+}
+
+export type GitHubIntegrationStatus = {
+  webhook_configured: boolean
+  app_configured: boolean
+  repository_sync_enabled: boolean
+  build_dispatch_enabled: boolean
+  install_url: string
+  missing: string[]
+}
+
+export type GitHubBuildDispatchInput = {
+  repository: string
+  application_id?: string
+  branch?: string
+  workflow_id?: string
+  inputs?: Record<string, string>
+}
+
+export type GitHubBuildDispatchResponse = {
+  build: BuildRun
+}
+
+export type CompleteBuildRunResponse = {
+  build: BuildRun
+  deployments: Deployment[]
+}
+
+export type GitHubRepository = {
+  connector_id: string
+  connector_name: string
+  installation_id: string
+  application_id: string
+  application_name: string
+  repository: string
+  branch: string
+  workflow_id: string
+  build_context: string
+  dockerfile: string
+  image_ref: string
+  build_matrix: string
+  runner: string
+  path_filters: string[]
+  clone_url: string
+  web_url: string
+}
+
+export type GitHubDetectedService = {
+  name: string
+  root: string
+  compose_path: string
+  path_filters: string[]
+}
+
+export type GitHubDetectedServicesResponse = {
+  repository: string
+  branch: string
+  services: GitHubDetectedService[]
+}
+
+export type ImportGitHubServicesInput = {
+  connector_id: string
+  repository: string
+  branch?: string
+  environment_id: string
+  server_id: string
+  services: string[]
+}
+
+export type ImportGitHubServicesResponse = {
+  applications: Application[]
+  connector: ConnectorAccount
+}
+
 export type UpsertConnectorInput = {
   provider: string
   name: string
@@ -454,6 +560,17 @@ export function listDeploymentLogs(deploymentID: string, init?: RequestInit) {
   return api<DeploymentLog[]>(`/api/deployments/${deploymentID}/logs`, init)
 }
 
+export function listBuildRuns(init?: RequestInit) {
+  return api<BuildRun[]>('/api/builds?limit=100', init)
+}
+
+export function completeBuildRun(buildID: string, input: { status?: string, image_ref?: string, image_digest?: string, external_url?: string, error_message?: string }) {
+  return api<CompleteBuildRunResponse>(`/api/builds/${buildID}/complete`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function createServer(input: CreateServerInput) {
   return api<Server>('/api/servers', {
     method: 'POST',
@@ -520,6 +637,34 @@ export function deleteEnvironment(environmentID: string) {
   })
 }
 
+export function listGitHubRepositories(init?: RequestInit) {
+  return api<GitHubRepository[]>('/api/github/repositories', init)
+}
+
+export function detectGitHubRepositoryServices(input: { connector_id: string, repository: string, branch?: string }) {
+  const params = new URLSearchParams({
+    connector_id: input.connector_id,
+    repository: input.repository,
+    branch: input.branch || 'main',
+  })
+  return api<GitHubDetectedServicesResponse>(`/api/github/repositories/detect?${params}`)
+}
+
+export function importGitHubRepositoryServices(projectID: string, input: ImportGitHubServicesInput) {
+  return api<ImportGitHubServicesResponse>(`/api/projects/${projectID}/github/import`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function getGitHubStatus(init?: RequestInit) {
+  return api<GitHubIntegrationStatus>('/api/github/status', init)
+}
+
+export function getDopplerStatus(init?: RequestInit) {
+  return api<DopplerIntegrationStatus>('/api/doppler/status', init)
+}
+
 export function createProxyRoute(input: CreateProxyRouteInput) {
   return api<ProxyRoute>('/api/proxy-routes', {
     method: 'POST',
@@ -549,6 +694,19 @@ export function upsertConnector(input: UpsertConnectorInput) {
 export function syncConnector(connectorID: string) {
   return api<ConnectorSyncResponse>(`/api/connectors/${connectorID}/sync`, {
     method: 'POST',
+  })
+}
+
+export function syncGitHubConnectorRepositories(connectorID: string) {
+  return api<GitHubRepositorySyncResponse>(`/api/connectors/${connectorID}/github/repositories/sync`, {
+    method: 'POST',
+  })
+}
+
+export function dispatchGitHubBuild(connectorID: string, input: GitHubBuildDispatchInput) {
+  return api<GitHubBuildDispatchResponse>(`/api/connectors/${connectorID}/github/builds/dispatch`, {
+    method: 'POST',
+    body: JSON.stringify(input),
   })
 }
 

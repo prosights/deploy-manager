@@ -153,6 +153,60 @@ func (q *Queries) CancelQueuedDeployment(ctx context.Context, id pgtype.UUID) (D
 	return i, err
 }
 
+const completeBuildRun = `-- name: CompleteBuildRun :one
+UPDATE build_runs
+SET status = $2,
+    image_ref = $3::text,
+    image_digest = $4::text,
+    external_url = $5::text,
+    error_message = $6::text,
+    completed_at = now(),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at
+`
+
+type CompleteBuildRunParams struct {
+	ID           pgtype.UUID `json:"id"`
+	Status       string      `json:"status"`
+	ImageRef     pgtype.Text `json:"image_ref"`
+	ImageDigest  pgtype.Text `json:"image_digest"`
+	ExternalUrl  pgtype.Text `json:"external_url"`
+	ErrorMessage pgtype.Text `json:"error_message"`
+}
+
+func (q *Queries) CompleteBuildRun(ctx context.Context, arg CompleteBuildRunParams) (BuildRun, error) {
+	row := q.db.QueryRow(ctx, completeBuildRun,
+		arg.ID,
+		arg.Status,
+		arg.ImageRef,
+		arg.ImageDigest,
+		arg.ExternalUrl,
+		arg.ErrorMessage,
+	)
+	var i BuildRun
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.ConnectorID,
+		&i.ApplicationID,
+		&i.Repository,
+		&i.Branch,
+		&i.WorkflowID,
+		&i.Status,
+		&i.CommitSha,
+		&i.ImageRef,
+		&i.ImageDigest,
+		&i.ExternalUrl,
+		&i.ErrorMessage,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createApplication = `-- name: CreateApplication :one
 INSERT INTO applications (environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, github_auto_deploy)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -209,6 +263,55 @@ func (q *Queries) CreateApplication(ctx context.Context, arg CreateApplicationPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.GithubAutoDeploy,
+	)
+	return i, err
+}
+
+const createBuildRun = `-- name: CreateBuildRun :one
+INSERT INTO build_runs (provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, started_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'dispatched', $7, now())
+RETURNING id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at
+`
+
+type CreateBuildRunParams struct {
+	Provider      string      `json:"provider"`
+	ConnectorID   pgtype.UUID `json:"connector_id"`
+	ApplicationID pgtype.UUID `json:"application_id"`
+	Repository    string      `json:"repository"`
+	Branch        string      `json:"branch"`
+	WorkflowID    string      `json:"workflow_id"`
+	CommitSha     pgtype.Text `json:"commit_sha"`
+}
+
+func (q *Queries) CreateBuildRun(ctx context.Context, arg CreateBuildRunParams) (BuildRun, error) {
+	row := q.db.QueryRow(ctx, createBuildRun,
+		arg.Provider,
+		arg.ConnectorID,
+		arg.ApplicationID,
+		arg.Repository,
+		arg.Branch,
+		arg.WorkflowID,
+		arg.CommitSha,
+	)
+	var i BuildRun
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.ConnectorID,
+		&i.ApplicationID,
+		&i.Repository,
+		&i.Branch,
+		&i.WorkflowID,
+		&i.Status,
+		&i.CommitSha,
+		&i.ImageRef,
+		&i.ImageDigest,
+		&i.ExternalUrl,
+		&i.ErrorMessage,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -767,6 +870,37 @@ func (q *Queries) GetApplication(ctx context.Context, id pgtype.UUID) (Applicati
 	return i, err
 }
 
+const getBuildRun = `-- name: GetBuildRun :one
+SELECT id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at
+FROM build_runs
+WHERE id = $1
+`
+
+func (q *Queries) GetBuildRun(ctx context.Context, id pgtype.UUID) (BuildRun, error) {
+	row := q.db.QueryRow(ctx, getBuildRun, id)
+	var i BuildRun
+	err := row.Scan(
+		&i.ID,
+		&i.Provider,
+		&i.ConnectorID,
+		&i.ApplicationID,
+		&i.Repository,
+		&i.Branch,
+		&i.WorkflowID,
+		&i.Status,
+		&i.CommitSha,
+		&i.ImageRef,
+		&i.ImageDigest,
+		&i.ExternalUrl,
+		&i.ErrorMessage,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getConnectorAccount = `-- name: GetConnectorAccount :one
 SELECT id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at
 FROM connector_accounts
@@ -1292,8 +1426,65 @@ func (q *Queries) ListApplications(ctx context.Context) ([]ListApplicationsRow, 
 	return items, nil
 }
 
+const listApplicationsForBuildComplete = `-- name: ListApplicationsForBuildComplete :many
+SELECT id, server_id, name, repository_url, branch, compose_path, health_check_url
+FROM applications
+WHERE branch = $1::text
+  AND github_auto_deploy = true
+  AND (
+    repository_url LIKE '%/' || $2::text || '.git'
+    OR repository_url LIKE '%/' || $2::text
+    OR repository_url LIKE '%:' || $2::text || '.git'
+    OR repository_url LIKE '%:' || $2::text
+  )
+ORDER BY name
+`
+
+type ListApplicationsForBuildCompleteParams struct {
+	Branch     string `json:"branch"`
+	Repository string `json:"repository"`
+}
+
+type ListApplicationsForBuildCompleteRow struct {
+	ID             pgtype.UUID `json:"id"`
+	ServerID       pgtype.UUID `json:"server_id"`
+	Name           string      `json:"name"`
+	RepositoryUrl  pgtype.Text `json:"repository_url"`
+	Branch         string      `json:"branch"`
+	ComposePath    string      `json:"compose_path"`
+	HealthCheckUrl pgtype.Text `json:"health_check_url"`
+}
+
+func (q *Queries) ListApplicationsForBuildComplete(ctx context.Context, arg ListApplicationsForBuildCompleteParams) ([]ListApplicationsForBuildCompleteRow, error) {
+	rows, err := q.db.Query(ctx, listApplicationsForBuildComplete, arg.Branch, arg.Repository)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListApplicationsForBuildCompleteRow{}
+	for rows.Next() {
+		var i ListApplicationsForBuildCompleteRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServerID,
+			&i.Name,
+			&i.RepositoryUrl,
+			&i.Branch,
+			&i.ComposePath,
+			&i.HealthCheckUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listApplicationsForGitHubPush = `-- name: ListApplicationsForGitHubPush :many
-SELECT id, server_id, name, repository_url, branch
+SELECT id, server_id, name, repository_url, branch, compose_path, health_check_url
 FROM applications
 WHERE branch = $1
   AND repository_url = ANY($2::text[])
@@ -1307,11 +1498,13 @@ type ListApplicationsForGitHubPushParams struct {
 }
 
 type ListApplicationsForGitHubPushRow struct {
-	ID            pgtype.UUID `json:"id"`
-	ServerID      pgtype.UUID `json:"server_id"`
-	Name          string      `json:"name"`
-	RepositoryUrl pgtype.Text `json:"repository_url"`
-	Branch        string      `json:"branch"`
+	ID             pgtype.UUID `json:"id"`
+	ServerID       pgtype.UUID `json:"server_id"`
+	Name           string      `json:"name"`
+	RepositoryUrl  pgtype.Text `json:"repository_url"`
+	Branch         string      `json:"branch"`
+	ComposePath    string      `json:"compose_path"`
+	HealthCheckUrl pgtype.Text `json:"health_check_url"`
 }
 
 func (q *Queries) ListApplicationsForGitHubPush(ctx context.Context, arg ListApplicationsForGitHubPushParams) ([]ListApplicationsForGitHubPushRow, error) {
@@ -1329,6 +1522,8 @@ func (q *Queries) ListApplicationsForGitHubPush(ctx context.Context, arg ListApp
 			&i.Name,
 			&i.RepositoryUrl,
 			&i.Branch,
+			&i.ComposePath,
+			&i.HealthCheckUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -1365,6 +1560,51 @@ func (q *Queries) ListAuditEvents(ctx context.Context, limit int32) ([]AuditEven
 			&i.TargetName,
 			&i.Metadata,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBuildRuns = `-- name: ListBuildRuns :many
+SELECT id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at
+FROM build_runs
+ORDER BY created_at DESC
+LIMIT $1
+`
+
+func (q *Queries) ListBuildRuns(ctx context.Context, limit int32) ([]BuildRun, error) {
+	rows, err := q.db.Query(ctx, listBuildRuns, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BuildRun{}
+	for rows.Next() {
+		var i BuildRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.Provider,
+			&i.ConnectorID,
+			&i.ApplicationID,
+			&i.Repository,
+			&i.Branch,
+			&i.WorkflowID,
+			&i.Status,
+			&i.CommitSha,
+			&i.ImageRef,
+			&i.ImageDigest,
+			&i.ExternalUrl,
+			&i.ErrorMessage,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

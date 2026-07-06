@@ -14,46 +14,54 @@ import (
 )
 
 type Config struct {
-	Addr                string
-	DatabaseURL         string
-	RedisURL            string
-	StaticDir           string
-	APIToken            string
-	AuthDisabled        bool
-	SSHSignerMode       string
-	GitHubWebhookSecret string
-	SlackWebhookURL     string
-	ResendAPIKey        string
-	ResendFromEmail     string
-	ResendToEmail       string
-	DopplerProject      string
-	DopplerConfig       string
-	DopplerToken        string
-	DopplerCLIPath      string
-	SSHKnownHostsPath   string
-	Shutdown            time.Duration
+	Addr                    string
+	DatabaseURL             string
+	RedisURL                string
+	StaticDir               string
+	APIToken                string
+	AuthDisabled            bool
+	SSHSignerMode           string
+	GitHubWebhookSecret     string
+	GitHubAppID             string
+	GitHubAppSlug           string
+	GitHubAppPrivateKey     string
+	GitHubAppPrivateKeyPath string
+	SlackWebhookURL         string
+	ResendAPIKey            string
+	ResendFromEmail         string
+	ResendToEmail           string
+	DopplerProject          string
+	DopplerConfig           string
+	DopplerToken            string
+	DopplerCLIPath          string
+	SSHKnownHostsPath       string
+	Shutdown                time.Duration
 }
 
 func Load() Config {
 	return Config{
-		Addr:                env("HTTP_ADDR", ":8080"),
-		DatabaseURL:         env("DATABASE_URL", "postgres://deploy:deploy@localhost:5432/deploy_manager?sslmode=disable"),
-		RedisURL:            env("REDIS_URL", "redis://localhost:6379/0"),
-		StaticDir:           env("STATIC_DIR", "web/dist"),
-		APIToken:            env("API_TOKEN", ""),
-		AuthDisabled:        boolEnv("AUTH_DISABLED", false),
-		SSHSignerMode:       env("SSH_SIGNER_MODE", "file"),
-		GitHubWebhookSecret: env("GITHUB_WEBHOOK_SECRET", ""),
-		SlackWebhookURL:     env("SLACK_WEBHOOK_URL", ""),
-		ResendAPIKey:        env("RESEND_API_KEY", ""),
-		ResendFromEmail:     env("RESEND_FROM_EMAIL", ""),
-		ResendToEmail:       env("RESEND_TO_EMAIL", ""),
-		DopplerProject:      env("DOPPLER_PROJECT", ""),
-		DopplerConfig:       env("DOPPLER_CONFIG", ""),
-		DopplerToken:        env("DOPPLER_TOKEN", ""),
-		DopplerCLIPath:      env("DOPPLER_CLI_PATH", "doppler"),
-		SSHKnownHostsPath:   env("SSH_KNOWN_HOSTS_PATH", ""),
-		Shutdown:            durationEnv("SHUTDOWN_TIMEOUT_SECONDS", 10*time.Second),
+		Addr:                    env("HTTP_ADDR", ":8080"),
+		DatabaseURL:             env("DATABASE_URL", "postgres://deploy:deploy@localhost:5432/deploy_manager?sslmode=disable"),
+		RedisURL:                env("REDIS_URL", "redis://localhost:6379/0"),
+		StaticDir:               env("STATIC_DIR", "web/dist"),
+		APIToken:                env("API_TOKEN", ""),
+		AuthDisabled:            boolEnv("AUTH_DISABLED", false),
+		SSHSignerMode:           env("SSH_SIGNER_MODE", "file"),
+		GitHubWebhookSecret:     env("GITHUB_WEBHOOK_SECRET", ""),
+		GitHubAppID:             env("GITHUB_APP_ID", ""),
+		GitHubAppSlug:           env("GITHUB_APP_SLUG", ""),
+		GitHubAppPrivateKey:     os.Getenv("GITHUB_APP_PRIVATE_KEY"),
+		GitHubAppPrivateKeyPath: env("GITHUB_APP_PRIVATE_KEY_PATH", ""),
+		SlackWebhookURL:         env("SLACK_WEBHOOK_URL", ""),
+		ResendAPIKey:            env("RESEND_API_KEY", ""),
+		ResendFromEmail:         env("RESEND_FROM_EMAIL", ""),
+		ResendToEmail:           env("RESEND_TO_EMAIL", ""),
+		DopplerProject:          env("DOPPLER_PROJECT", ""),
+		DopplerConfig:           env("DOPPLER_CONFIG", ""),
+		DopplerToken:            env("DOPPLER_TOKEN", ""),
+		DopplerCLIPath:          env("DOPPLER_CLI_PATH", "doppler"),
+		SSHKnownHostsPath:       env("SSH_KNOWN_HOSTS_PATH", ""),
+		Shutdown:                durationEnv("SHUTDOWN_TIMEOUT_SECONDS", 10*time.Second),
 	}
 }
 
@@ -100,6 +108,22 @@ func (c Config) Validate() error {
 	}
 	if hasAny(c.DopplerProject, c.DopplerConfig, c.DopplerToken) && strings.TrimSpace(c.DopplerCLIPath) == "" {
 		return fmt.Errorf("DOPPLER_CLI_PATH is required when Doppler is configured")
+	}
+	if hasAny(c.GitHubAppID, c.GitHubAppPrivateKey, c.GitHubAppPrivateKeyPath) {
+		if strings.TrimSpace(c.GitHubAppID) == "" {
+			return fmt.Errorf("GITHUB_APP_ID is required when GitHub App credentials are configured")
+		}
+		if strings.TrimSpace(c.GitHubAppPrivateKey) == "" && strings.TrimSpace(c.GitHubAppPrivateKeyPath) == "" {
+			return fmt.Errorf("GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH is required when GitHub App credentials are configured")
+		}
+		if strings.TrimSpace(c.GitHubAppPrivateKey) != "" && strings.TrimSpace(c.GitHubAppPrivateKeyPath) != "" {
+			return fmt.Errorf("provide either GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH, not both")
+		}
+		if strings.TrimSpace(c.GitHubAppPrivateKeyPath) != "" {
+			if err := validateOptionalReadableFile("GITHUB_APP_PRIVATE_KEY_PATH", c.GitHubAppPrivateKeyPath); err != nil {
+				return err
+			}
+		}
 	}
 	if hasAny(c.ResendAPIKey, c.ResendFromEmail, c.ResendToEmail) && !hasAll(c.ResendAPIKey, c.ResendFromEmail, c.ResendToEmail) {
 		return fmt.Errorf("RESEND_API_KEY, RESEND_FROM_EMAIL, and RESEND_TO_EMAIL must be provided together")

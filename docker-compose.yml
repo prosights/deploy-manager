@@ -34,7 +34,12 @@ services:
       STATIC_DIR: web/dist
       SSH_KNOWN_HOSTS_PATH: /app/known_hosts
       API_TOKEN: "${API_TOKEN:-}"
+      AUTH_DISABLED: "${AUTH_DISABLED:-false}"
       GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET:-}"
+      GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
+      GITHUB_APP_SLUG: "${GITHUB_APP_SLUG:-}"
+      GITHUB_APP_PRIVATE_KEY: "${GITHUB_APP_PRIVATE_KEY:-}"
+      GITHUB_APP_PRIVATE_KEY_PATH: "${GITHUB_APP_PRIVATE_KEY_PATH:-}"
       DOPPLER_PROJECT: "${DOPPLER_PROJECT:-}"
       DOPPLER_CONFIG: "${DOPPLER_CONFIG:-}"
       DOPPLER_TOKEN: "${DOPPLER_TOKEN:-}"
@@ -45,6 +50,13 @@ services:
       RESEND_TO_EMAIL: "${RESEND_TO_EMAIL:-}"
     ports:
       - "8080:8080"
+    group_add:
+      - "${DOCKER_GROUP_ID:-999}"
+    volumes:
+      - ~/.config/deploy-manager:/app/secrets:ro
+      - /srv/deploy-manager/apps:/srv/deploy-manager/apps
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
     depends_on:
       postgres:
         condition: service_healthy

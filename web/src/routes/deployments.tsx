@@ -4,7 +4,7 @@ import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
 import { DeploymentList, DeploymentQueuePanel } from '../features/deployments/components'
 import { DeploymentLogsPanel, useDeploymentLogs } from '../features/deployments/logs'
-import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, type ContainerRegistry, type CreateDeploymentInput } from '../lib/api'
+import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, type Application, type ContainerRegistry, type CreateDeploymentInput } from '../lib/api'
 import { applicationsQuery, containerRegistriesQuery, deploymentsQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
 import { useDeploymentSelection } from '../store/deployments'
@@ -21,7 +21,6 @@ export function DeploymentsRoute() {
   const selectedDeploymentID = useDeploymentSelection((state) => state.selectedDeploymentID)
   const setSelectedDeploymentID = useDeploymentSelection((state) => state.setSelectedDeploymentID)
   const [applicationID, setApplicationID] = useState(applications[0]?.id ?? '')
-  const [strategy, setStrategy] = useState<'rolling' | 'blue_green'>('rolling')
   const [commitSha, setCommitSha] = useState('')
   const [imageRef, setImageRef] = useState('')
   const [registryOverrideID, setRegistryOverrideID] = useState<string | null>(null)
@@ -65,7 +64,7 @@ export function DeploymentsRoute() {
       if (!target) {
         throw new Error('No application target is available')
       }
-      return createDeployment(deploymentInput(target.id, strategy, commitSha, imageRef, selectedRegistry, imageName, imageTag, imageDigest, actor))
+      return createDeployment(deploymentInput(target.id, commitSha, imageRef, selectedRegistry, imageName, imageTag, imageDigest, actor))
     },
     onSuccess: async () => {
       setFormError(undefined)
@@ -115,7 +114,6 @@ export function DeploymentsRoute() {
       <DeploymentQueuePanel
         applications={applications}
         target={target}
-        strategy={strategy}
         commitSha={commitSha}
         imageRef={imageRef}
         imageName={imageName}
@@ -130,7 +128,6 @@ export function DeploymentsRoute() {
           setApplicationID(nextApplicationID)
           setRegistryOverrideID(null)
         }}
-        onStrategyChange={setStrategy}
         onCommitShaChange={setCommitSha}
         onImageRefChange={setImageRef}
         onRegistryChange={(value) => setRegistryOverrideID(value || manualRegistryID)}
@@ -142,7 +139,7 @@ export function DeploymentsRoute() {
           setFormError(undefined)
           try {
             validateCommitSha(commitSha)
-            validateRegistryImage(selectedRegistry, imageName, imageTag, imageRef)
+            validateRegistryImage(selectedRegistry, imageName, imageTag, imageRef, target)
             validateImageDigest(imageDigest)
             validateDeploymentActor(actor)
           } catch (error) {
@@ -178,7 +175,6 @@ export function DeploymentsRoute() {
 
 function deploymentInput(
   applicationID: string,
-  strategy: 'rolling' | 'blue_green',
   commitSha: string,
   imageRef: string,
   registry: ContainerRegistry | undefined,
@@ -190,7 +186,7 @@ function deploymentInput(
   return {
     application_id: applicationID,
     trigger: 'manual',
-    strategy,
+    strategy: 'blue_green',
     commit_sha: optionalTrimmed(commitSha),
     image_ref: registry ? resolvedImageRef(registry, imageName, imageTag) : optionalTrimmed(imageRef),
     image_digest: optionalTrimmed(imageDigest),
@@ -213,8 +209,20 @@ function validateCommitSha(value: string): void {
   }
 }
 
-function validateRegistryImage(registry: ContainerRegistry | undefined, imageName: string, imageTag: string, manualRef: string): void {
+function validateRegistryImage(
+  registry: ContainerRegistry | undefined,
+  imageName: string,
+  imageTag: string,
+  manualRef: string,
+  target: Application | undefined,
+): void {
   if (!registry) {
+    if (!manualRef.trim()) {
+      if (canBuildFromSource(target)) {
+        return
+      }
+      throw new Error('Provide an image ref, or configure the application with a repository and compose file to build from.')
+    }
     validateImageRef(manualRef)
     return
   }
@@ -223,6 +231,13 @@ function validateRegistryImage(registry: ContainerRegistry | undefined, imageNam
     throw new Error('Image and tag are required when using a registry.')
   }
   validateImageRef(resolvedImageRef(registry, imageName, imageTag))
+}
+
+// canBuildFromSource mirrors the backend rule: an application with a repository
+// and compose file can be built on the target VM, so no pinned image ref is
+// required for a deployment.
+function canBuildFromSource(target: Application | undefined): boolean {
+  return Boolean(target?.repository_url?.trim() && target?.compose_path?.trim())
 }
 
 function validateImageRef(value: string | undefined): void {

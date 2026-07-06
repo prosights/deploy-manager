@@ -21,12 +21,13 @@ func TestNormalizeCreateDeploymentTrimsDefaultsAndNullsBlankText(t *testing.T) {
 		Strategy:      " ",
 		Actor:         pgtype.Text{String: " ", Valid: true},
 		CommitSha:     pgtype.Text{String: " abc1234 ", Valid: true},
+		ImageRef:      pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if input.Trigger != "manual" || input.Strategy != "rolling" {
+	if input.Trigger != "manual" || input.Strategy != "blue_green" {
 		t.Fatalf("unexpected deployment defaults: %+v", input)
 	}
 	if !input.CommitSha.Valid || input.CommitSha.String != "abc1234" {
@@ -45,12 +46,59 @@ func TestNormalizeCreateDeploymentRejectsMissingApplication(t *testing.T) {
 }
 
 func TestNormalizeCreateDeploymentRejectsUnsupportedStrategy(t *testing.T) {
-	_, err := normalizeCreateDeployment(db.CreateDeploymentParams{
+	for _, strategy := range []string{"canary", "rolling"} {
+		_, err := normalizeCreateDeployment(db.CreateDeploymentParams{
+			ApplicationID: pgtype.UUID{Valid: true},
+			Strategy:      strategy,
+		})
+		if err == nil {
+			t.Fatalf("expected strategy %q to be rejected", strategy)
+		}
+	}
+}
+
+func TestNormalizeCreateDeploymentAllowsMissingImageRefForSourceDeploys(t *testing.T) {
+	input, err := normalizeCreateDeployment(db.CreateDeploymentParams{
 		ApplicationID: pgtype.UUID{Valid: true},
-		Strategy:      "canary",
 	})
+	if err != nil {
+		t.Fatalf("expected missing image_ref to be allowed (source deploy), got %v", err)
+	}
+	if input.ImageRef.Valid {
+		t.Fatalf("expected image_ref to remain null, got %+v", input.ImageRef)
+	}
+}
+
+func TestValidateDeploymentSourceAcceptsImageRef(t *testing.T) {
+	err := validateDeploymentSource(db.Application{}, pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true})
+	if err != nil {
+		t.Fatalf("expected image_ref deploy to be valid, got %v", err)
+	}
+}
+
+func TestValidateDeploymentSourceAcceptsRepositoryWithCompose(t *testing.T) {
+	err := validateDeploymentSource(db.Application{
+		RepositoryUrl: pgtype.Text{String: "https://github.com/acme/app.git", Valid: true},
+		ComposePath:   "docker-compose.yml",
+	}, pgtype.Text{})
+	if err != nil {
+		t.Fatalf("expected repo+compose source deploy to be valid, got %v", err)
+	}
+}
+
+func TestValidateDeploymentSourceRejectsNoImageAndNoRepo(t *testing.T) {
+	err := validateDeploymentSource(db.Application{ComposePath: "docker-compose.yml"}, pgtype.Text{})
 	if err == nil {
-		t.Fatal("expected unsupported strategy to fail")
+		t.Fatal("expected deploy with neither image_ref nor repository_url to be rejected")
+	}
+}
+
+func TestValidateDeploymentSourceRejectsRepoWithoutCompose(t *testing.T) {
+	err := validateDeploymentSource(db.Application{
+		RepositoryUrl: pgtype.Text{String: "https://github.com/acme/app.git", Valid: true},
+	}, pgtype.Text{})
+	if err == nil {
+		t.Fatal("expected repo without compose_path to be rejected")
 	}
 }
 
@@ -158,6 +206,7 @@ func TestRetryDeploymentInputCopiesRetryableDeploymentTarget(t *testing.T) {
 		Status:        "failed",
 		Strategy:      "blue_green",
 		CommitSha:     pgtype.Text{String: "abc1234", Valid: true},
+		ImageRef:      pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
 	}, "ali")
 	if err != nil {
 		t.Fatal(err)

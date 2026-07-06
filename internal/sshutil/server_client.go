@@ -12,6 +12,9 @@ const ConnectionModeTailscaleSSH = "tailscale_ssh"
 
 func ServerClient(ctx context.Context, server db.Server, signerSource SignerSource) (Client, error) {
 	if server.ConnectionMode == ConnectionModeTailscaleSSH {
+		if IsLocalTailscaleHost(ctx, server.Hostname) {
+			return NewLocalClient(), nil
+		}
 		return NewTailscaleSSHClient(server.Hostname, server.SshPort, server.SshUser), nil
 	}
 	signer, err := signerForServer(ctx, server, signerSource)

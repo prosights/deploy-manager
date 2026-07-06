@@ -12,7 +12,7 @@ func TestNormalizeConnectorAccountAllowsMetadataOnlyConfig(t *testing.T) {
 		Provider: " GitHub ",
 		Name:     " production ",
 		Enabled:  true,
-		Config:   []byte(`{"default_branch":"main","labels":["deploy"],"webhook_url":"/api/webhooks/github"}`),
+		Config:   []byte(`{"default_branch":"main","labels":["deploy"],"webhook_url":"/api/webhooks/github","repositories":[{"repository":"prosights/api","branch":"main"}]}`),
 	}
 
 	normalized, err := normalizeConnectorAccount(input)
@@ -30,6 +30,55 @@ func TestNormalizeConnectorAccountAllowsMetadataOnlyConfig(t *testing.T) {
 	}
 	if config["default_branch"] != "main" || config["webhook_url"] != "/api/webhooks/github" {
 		t.Fatalf("unexpected normalized config: %+v", config)
+	}
+}
+
+func TestNormalizeConnectorAccountRejectsInvalidGitHubRepositoryConfig(t *testing.T) {
+	_, err := normalizeConnectorAccount(db.UpsertConnectorAccountParams{
+		Provider: "github",
+		Name:     "production",
+		Config:   []byte(`{"repositories":[{"repository":"https://github.com/prosights/api"}]}`),
+	})
+	if err == nil {
+		t.Fatal("expected invalid github repository config to fail")
+	}
+}
+
+func TestNormalizeConnectorAccountRequiresDopplerProjectAndConfig(t *testing.T) {
+	for _, config := range []string{
+		`{}`,
+		`{"project":"internal"}`,
+		`{"config":"prd"}`,
+	} {
+		t.Run(config, func(t *testing.T) {
+			_, err := normalizeConnectorAccount(db.UpsertConnectorAccountParams{
+				Provider: "doppler",
+				Name:     "runtime",
+				Config:   []byte(config),
+			})
+			if err == nil {
+				t.Fatal("expected incomplete doppler config to fail")
+			}
+		})
+	}
+}
+
+func TestNormalizeConnectorAccountAcceptsDopplerProjectAndConfig(t *testing.T) {
+	normalized, err := normalizeConnectorAccount(db.UpsertConnectorAccountParams{
+		Provider: "doppler",
+		Name:     "runtime",
+		Config:   []byte(`{"project":" internal ","config":" prd "}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal(normalized.Config, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config["project"] != "internal" || config["config"] != "prd" {
+		t.Fatalf("unexpected doppler config: %+v", config)
 	}
 }
 

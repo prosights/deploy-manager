@@ -139,7 +139,7 @@ describe('DeploymentsRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     MockEventSource.instances = []
-    queryData.applications[0].health_check_url = null
+    queryData.applications[0].health_check_url = 'http://127.0.0.1:{port}/healthz?color={color}'
     useDeploymentSelection.setState({ selectedDeploymentID: '' })
     useUiStore.setState({ searchQuery: '', sidebarCollapsed: false })
   })
@@ -158,7 +158,8 @@ describe('DeploymentsRoute', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: /queue deploy/i }))
+    fireEvent.change(await screen.findByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
+    fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
 
     await waitFor(() => {
       expect(createDeployment).toHaveBeenCalledWith(
@@ -169,7 +170,7 @@ describe('DeploymentsRoute', () => {
       expect(createDeployment).toHaveBeenCalledWith(
         expect.objectContaining({
           application_id: 'app_1',
-          strategy: 'rolling',
+          strategy: 'blue_green',
         }),
       )
     })
@@ -186,14 +187,17 @@ describe('DeploymentsRoute', () => {
 
     fireEvent.change(await screen.findByLabelText('Commit SHA'), { target: { value: ' ' } })
     fireEvent.change(screen.getByLabelText('Actor'), { target: { value: ' ' } })
+    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
     fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
 
     await waitFor(() => {
       expect(createDeployment).toHaveBeenCalledWith({
         application_id: 'app_1',
         trigger: 'manual',
-        strategy: 'rolling',
+        strategy: 'blue_green',
         commit_sha: undefined,
+        image_ref: 'ghcr.io/acme/api:1.0.0',
+        image_digest: undefined,
         actor: undefined,
       })
     })
@@ -209,6 +213,7 @@ describe('DeploymentsRoute', () => {
     )
 
     fireEvent.change(await screen.findByLabelText('Commit SHA'), { target: { value: 'abc1234' } })
+    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
     fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
 
     await waitFor(() => {
@@ -247,6 +252,7 @@ describe('DeploymentsRoute', () => {
     )
 
     fireEvent.change(await screen.findByLabelText('Actor'), { target: { value: ' ali ' } })
+    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
     fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
 
     await waitFor(() => {
@@ -268,6 +274,7 @@ describe('DeploymentsRoute', () => {
     )
 
     fireEvent.change(await screen.findByLabelText('Actor'), { target: { value: 'ali\troot' } })
+    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
     fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
 
     expect(await screen.findByText('Actor cannot contain control characters.')).toBeInTheDocument()
@@ -275,6 +282,7 @@ describe('DeploymentsRoute', () => {
   })
 
   it('requires a color-aware health check before queueing blue-green deployments', async () => {
+    queryData.applications[0].health_check_url = null
     const client = new QueryClient()
 
     render(
@@ -283,7 +291,7 @@ describe('DeploymentsRoute', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.change(await screen.findByLabelText('Strategy'), { target: { value: 'blue_green' } })
+    await screen.findByRole('button', { name: /queue deploy/i })
 
     expect(screen.getByRole('button', { name: /queue deploy/i })).toBeDisabled()
     expect(screen.getByText(/Configure a health check URL with/)).toBeInTheDocument()
@@ -300,7 +308,7 @@ describe('DeploymentsRoute', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.change(await screen.findByLabelText('Strategy'), { target: { value: 'blue_green' } })
+    await screen.findByRole('button', { name: /queue deploy/i })
 
     expect(screen.getByRole('button', { name: /queue deploy/i })).toBeDisabled()
     expect(screen.getByText('Health check URL cannot include credentials.')).toBeInTheDocument()

@@ -158,6 +158,17 @@ func TestTailscaleSSHClientAllowsNoSigner(t *testing.T) {
 	if len(client.authMethods) != 0 || client.signer != nil {
 		t.Fatalf("expected tailscale ssh client to avoid static auth methods, got %+v", client)
 	}
+	if !client.tailscaleCLI {
+		t.Fatal("expected tailscale ssh client to use the Tailscale CLI transport")
+	}
+}
+
+func TestStripTailscaleWarningsKeepsCommandOutput(t *testing.T) {
+	output := "Warning: client version \"1.90.9-AlpineLinux\" != tailscaled server version \"1.98.4\"\n27.0 linux\n"
+
+	if got := stripTailscaleWarnings(output); got != "27.0 linux\n" {
+		t.Fatalf("expected warning to be removed, got %q", got)
+	}
 }
 
 func TestValidateTailscaleHost(t *testing.T) {

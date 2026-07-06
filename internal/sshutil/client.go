@@ -2,10 +2,12 @@ package sshutil
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,8 @@ type Client struct {
 	authMethods     []ssh.AuthMethod
 	allowNoAuth     bool
 	hostKeyCallback ssh.HostKeyCallback
+	tailscaleCLI    bool
+	localShell      bool
 }
 
 type ClientOptions struct {
@@ -65,10 +69,16 @@ func NewClientWithOptions(host string, port int32, user string, signer ssh.Signe
 }
 
 func NewTailscaleSSHClient(host string, port int32, user string) Client {
-	return NewClientWithOptions(host, port, user, nil, ClientOptions{
+	client := NewClientWithOptions(host, port, user, nil, ClientOptions{
 		AllowNoAuth:     true,
 		HostKeyCallback: tailscaleHostKeyCallback(),
 	})
+	client.tailscaleCLI = true
+	return client
+}
+
+func NewLocalClient() Client {
+	return Client{localShell: true}
 }
 
 // maxSSHOutputBytes caps how much combined stdout+stderr we buffer from a
@@ -77,6 +87,13 @@ func NewTailscaleSSHClient(host string, port int32, user string) Client {
 const maxSSHOutputBytes = 1 << 20
 
 func (c Client) Run(ctx context.Context, command string) (string, error) {
+	if c.localShell {
+		return runLocalShell(ctx, command)
+	}
+	if c.tailscaleCLI {
+		return c.runTailscaleSSH(ctx, command)
+	}
+
 	sshClient, err := c.connect(ctx)
 	if err != nil {
 		return "", err
@@ -107,8 +124,112 @@ func (c Client) Run(ctx context.Context, command string) (string, error) {
 	}
 }
 
+func runLocalShell(ctx context.Context, command string) (string, error) {
+	if strings.TrimSpace(command) == "" {
+		return "", fmt.Errorf("shell command is required")
+	}
+	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
+	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
+	cmd.Stdout = buffer
+	cmd.Stderr = buffer
+	if err := cmd.Run(); err != nil {
+		return buffer.String(), err
+	}
+	return buffer.String(), nil
+}
+
+func (c Client) runTailscaleSSH(ctx context.Context, command string) (string, error) {
+	if err := c.validateTailscaleDestination(); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(command) == "" {
+		return "", fmt.Errorf("ssh command is required")
+	}
+
+	cmd := exec.CommandContext(ctx, "tailscale", "ssh", c.destination(), command)
+	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
+	cmd.Stdout = buffer
+	cmd.Stderr = buffer
+	if err := cmd.Run(); err != nil {
+		return stripTailscaleWarnings(buffer.String()), err
+	}
+	return stripTailscaleWarnings(buffer.String()), nil
+}
+
+func stripTailscaleWarnings(output string) string {
+	lines := strings.Split(output, "\n")
+	filtered := lines[:0]
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Warning: client version ") {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "\n")
+}
+
+func (c Client) destination() string {
+	if strings.TrimSpace(c.user) == "" {
+		return strings.TrimSpace(c.host)
+	}
+	return strings.TrimSpace(c.user) + "@" + strings.TrimSpace(c.host)
+}
+
+func (c Client) validateTailscaleDestination() error {
+	if strings.TrimSpace(c.user) == "" {
+		return fmt.Errorf("tailscale ssh user is required")
+	}
+	return ValidateTailscaleHost(c.host)
+}
+
 func (c Client) Connect(ctx context.Context) (*ssh.Client, error) {
+	if c.localShell {
+		return nil, fmt.Errorf("local shell transport does not expose a Go SSH client")
+	}
+	if c.tailscaleCLI {
+		return nil, fmt.Errorf("tailscale ssh CLI transport does not expose a Go SSH client")
+	}
 	return c.connect(ctx)
+}
+
+func IsLocalTailscaleHost(ctx context.Context, host string) bool {
+	host = normalizeHost(host)
+	if host == "" {
+		return false
+	}
+	command := exec.CommandContext(ctx, "tailscale", "status", "--json")
+	output, err := command.Output()
+	if err != nil {
+		return false
+	}
+
+	var status tailscaleStatus
+	if err := json.Unmarshal(output, &status); err != nil {
+		return false
+	}
+	candidates := []string{status.Self.HostName, status.Self.DNSName}
+	candidates = append(candidates, status.Self.TailscaleIPs...)
+	for _, candidate := range candidates {
+		if normalizeHost(candidate) == host {
+			return true
+		}
+	}
+	return false
+}
+
+type tailscaleStatus struct {
+	Self tailscaleSelf `json:"Self"`
+}
+
+type tailscaleSelf struct {
+	HostName     string   `json:"HostName"`
+	DNSName      string   `json:"DNSName"`
+	TailscaleIPs []string `json:"TailscaleIPs"`
+}
+
+func normalizeHost(host string) string {
+	host = strings.Trim(strings.ToLower(strings.TrimSpace(host)), "[]")
+	return strings.TrimSuffix(host, ".")
 }
 
 // cappedBuffer accumulates output up to limit bytes and silently discards the

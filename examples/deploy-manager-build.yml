@@ -1,0 +1,112 @@
+# deploy-manager-build.yml
+#
+# Drop this file in your repo at .github/workflows/deploy-manager-build.yml
+#
+# Deploy Manager dispatches this workflow on push events via workflow_dispatch.
+# It builds the Docker image, pushes to your configured registry, and calls
+# back to Deploy Manager with the image ref so a deployment is triggered
+# automatically.
+#
+# Required GitHub Actions variables:
+#   REGISTRY_HOST             - Docker registry host (e.g. ghcr.io)
+#   DEPLOY_MANAGER_API_URL    - Base URL of your Deploy Manager instance (e.g. https://deploy.example.com)
+#
+# Required GitHub Actions secrets:
+#   DEPLOY_MANAGER_API_TOKEN  - API token for Deploy Manager
+#
+# For GHCR, also grant the workflow `packages: write` permission and use
+# GITHUB_TOKEN for registry auth (see the login step below).
+
+name: Deploy Manager Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_manager_build_id:
+        description: Build ID for the callback
+        required: true
+      repository:
+        description: owner/repo
+        required: true
+      branch:
+        description: Branch that triggered the build
+        required: true
+      commit_sha:
+        description: Commit SHA to build
+        required: false
+      image_ref:
+        description: Full image reference to push
+        required: true
+      build_context:
+        description: Docker build context
+        required: false
+        default: .
+      dockerfile:
+        description: Dockerfile path
+        required: false
+        default: Dockerfile
+      runner:
+        description: Runner label or larger-runner label
+        required: false
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ${{ vars.REGISTRY_HOST || 'ghcr.io' }}
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha || inputs.branch }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ inputs.image_ref }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Callback to Deploy Manager
+        if: always()
+        env:
+          DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}
+          DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          BUILD_ID: ${{ inputs.deploy_manager_build_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            curl -fsS -X POST \
+              "$DEPLOY_MANAGER_API_URL/api/builds/$BUILD_ID/complete" \
+              -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"status\":\"succeeded\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"external_url\":\"$RUN_URL\"}"
+          else
+            curl -fsS -X POST \
+              "$DEPLOY_MANAGER_API_URL/api/builds/$BUILD_ID/complete" \
+              -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"status\":\"failed\",\"error_message\":\"Build failed\",\"external_url\":\"$RUN_URL\"}"
+          fi

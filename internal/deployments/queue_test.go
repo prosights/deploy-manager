@@ -306,6 +306,69 @@ func TestRemoteStepsSkipRepositoryWhenNotConfigured(t *testing.T) {
 	}
 }
 
+func TestRemoteStepsBuildOnTargetForSourceRollingDeploy(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		RepositoryUrl:   pgtype.Text{String: "git@github.com:acme/app.git", Valid: true},
+		Branch:          "main",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "COMPOSE_PROJECT_NAME='api-service' docker compose -f 'docker-compose.yml' build --pull") {
+		t.Fatalf("expected source deploy to build on target, got %s", joined)
+	}
+	if strings.Contains(joined, "docker compose -f 'docker-compose.yml' pull") {
+		t.Fatalf("did not expect a registry pull for a source deploy, got %s", joined)
+	}
+}
+
+func TestRemoteStepsPullForArtifactRollingDeploy(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		RepositoryUrl:   pgtype.Text{String: "git@github.com:acme/app.git", Valid: true},
+		Branch:          "main",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+		ImageRef:        pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "docker compose -f 'docker-compose.yml' pull") {
+		t.Fatalf("expected artifact deploy to pull the pinned image, got %s", joined)
+	}
+	if strings.Contains(joined, "build --pull") {
+		t.Fatalf("did not expect a build step for an artifact deploy, got %s", joined)
+	}
+}
+
+func TestRemoteStepsBuildOnTargetForSourceBlueGreenDeploy(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		Strategy:        "blue_green",
+		RepositoryUrl:   pgtype.Text{String: "git@github.com:acme/app.git", Valid: true},
+		Branch:          "main",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/api",
+		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "docker compose -f 'docker-compose.yml' build --pull") {
+		t.Fatalf("expected blue-green source deploy to build the next color, got %s", joined)
+	}
+}
+
 func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ApplicationName: "API Service",
@@ -457,6 +520,29 @@ func TestRemoteStepsWriteRuntimeEnvironment(t *testing.T) {
 	}
 	if strings.Contains(joined, "IGNORED-KEY") {
 		t.Fatal("did not expect invalid env key")
+	}
+}
+
+func TestAppendArtifactVariablesAddsApplicationImageTag(t *testing.T) {
+	variables := appendArtifactVariables(nil, db.GetDeploymentTargetRow{
+		ApplicationName: "FinOps",
+	}, remoteStepOptions{
+		imageRef:    "us-east4-docker.pkg.dev/prosights-platform/internal/finops-api:sha-abc123",
+		targetColor: "green",
+	})
+
+	values := map[string]string{}
+	for _, variable := range variables {
+		values[variable.Key] = variable.Value
+	}
+	if values["DEPLOY_IMAGE"] != "us-east4-docker.pkg.dev/prosights-platform/internal/finops-api:sha-abc123" {
+		t.Fatalf("expected deploy image, got %+v", values)
+	}
+	if values["DEPLOY_IMAGE_TAG"] != "sha-abc123" || values["FINOPS_IMAGE_TAG"] != "sha-abc123" {
+		t.Fatalf("expected generic and application image tag vars, got %+v", values)
+	}
+	if values["DEPLOY_COLOR"] != "green" {
+		t.Fatalf("expected blue/green color var, got %+v", values)
 	}
 }
 

@@ -37,6 +37,27 @@ func TestParsePushBuildsRepositoryAliases(t *testing.T) {
 	}
 }
 
+func TestParsePushCollectsChangedPaths(t *testing.T) {
+	push, err := ParsePush([]byte(`{
+		"ref":"refs/heads/main",
+		"after":"abc123",
+		"repository":{"full_name":"acme/app"},
+		"commits":[{
+			"added":["portal/Dockerfile", " finops/api/main.go "],
+			"modified":["portal/Dockerfile"],
+			"removed":["alleyes/old.go", ""]
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []string{"portal/Dockerfile", "finops/api/main.go", "alleyes/old.go"}
+	if !reflect.DeepEqual(push.ChangedPaths, expected) {
+		t.Fatalf("expected changed paths %+v, got %+v", expected, push.ChangedPaths)
+	}
+}
+
 func TestParsePushRejectsUnsupportedRepositoryAliases(t *testing.T) {
 	_, err := ParsePush([]byte(`{
 		"ref":"refs/heads/main",

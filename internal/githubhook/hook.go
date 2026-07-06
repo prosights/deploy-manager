@@ -26,6 +26,11 @@ type PushPayload struct {
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
+	Commits []struct {
+		Added    []string `json:"added"`
+		Modified []string `json:"modified"`
+		Removed  []string `json:"removed"`
+	} `json:"commits"`
 }
 
 type Push struct {
@@ -34,6 +39,7 @@ type Push struct {
 	Actor        string
 	Deleted      bool
 	Repositories []string
+	ChangedPaths []string
 }
 
 func ParsePush(body []byte) (Push, error) {
@@ -63,7 +69,29 @@ func ParsePush(body []byte) (Push, error) {
 		Actor:        actor,
 		Deleted:      payload.Deleted,
 		Repositories: repositories,
+		ChangedPaths: changedPaths(payload),
 	}, nil
+}
+
+func changedPaths(payload PushPayload) []string {
+	seen := map[string]struct{}{}
+	paths := make([]string, 0)
+	for _, commit := range payload.Commits {
+		for _, group := range [][]string{commit.Added, commit.Modified, commit.Removed} {
+			for _, value := range group {
+				value = strings.TrimSpace(value)
+				if value == "" {
+					continue
+				}
+				if _, ok := seen[value]; ok {
+					continue
+				}
+				seen[value] = struct{}{}
+				paths = append(paths, value)
+			}
+		}
+	}
+	return paths
 }
 
 func VerifySignature(secret string, body []byte, signature string) bool {

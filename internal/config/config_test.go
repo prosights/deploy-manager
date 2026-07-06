@@ -139,6 +139,49 @@ func TestValidateAllowsOptionalIntegrationsWhenComplete(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresCompleteGitHubAppConfig(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"app id only": func(cfg *Config) {
+			cfg.GitHubAppID = "123456"
+		},
+		"private key only": func(cfg *Config) {
+			cfg.GitHubAppPrivateKey = "key"
+		},
+		"path only": func(cfg *Config) {
+			cfg.GitHubAppPrivateKeyPath = filepath.Join(t.TempDir(), "github-app.pem")
+		},
+		"key and path": func(cfg *Config) {
+			cfg.GitHubAppID = "123456"
+			cfg.GitHubAppPrivateKey = "key"
+			cfg.GitHubAppPrivateKeyPath = filepath.Join(t.TempDir(), "github-app.pem")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			mutate(&cfg)
+
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected incomplete GitHub App config to fail")
+			}
+		})
+	}
+}
+
+func TestValidateAllowsGitHubAppPrivateKeyPathWhenFileExists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "github-app.pem")
+	if err := os.WriteFile(path, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := validConfig()
+	cfg.GitHubAppID = "123456"
+	cfg.GitHubAppPrivateKeyPath = path
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateRequiresRuntimeEndpoints(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
 		"http addr": func(cfg *Config) { cfg.Addr = " " },

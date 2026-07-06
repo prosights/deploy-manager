@@ -7,13 +7,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"deploy-manager/internal/db"
 	"deploy-manager/internal/sshutil"
 	"deploy-manager/internal/stringutil"
 
+	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgtype"
 	"golang.org/x/crypto/ssh"
@@ -54,6 +58,15 @@ func (s Server) serverTerminal(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), terminalConnectTimeout)
 	defer cancel()
+
+	if server.ConnectionMode == sshutil.ConnectionModeTailscaleSSH {
+		if sshutil.IsLocalTailscaleHost(ctx, server.Hostname) {
+			s.runLocalTerminal(r.Context(), conn, r, server, initialDirectory)
+			return
+		}
+		s.runTailscaleTerminal(r.Context(), conn, r, server, initialDirectory)
+		return
+	}
 
 	sshClient, err := sshutil.ServerClient(ctx, server, sshutil.FileSigner{})
 	if err != nil {
@@ -135,6 +148,77 @@ func (s Server) serverTerminal(w http.ResponseWriter, r *http.Request) {
 	_ = session.Signal(ssh.SIGHUP)
 	_ = session.Close()
 	<-done
+	<-done
+}
+
+func (s Server) runLocalTerminal(ctx context.Context, conn *websocket.Conn, r *http.Request, server db.Server, initialDirectory string) {
+	commandText := "exec ${SHELL:-/bin/sh} -i"
+	if initialDirectory != "" {
+		commandText = "cd " + stringutil.ShellQuote(initialDirectory) + " && " + commandText
+	}
+	command := exec.CommandContext(ctx, "sh", "-lc", commandText)
+	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 32, Cols: 120})
+	if err != nil {
+		writeTerminalError(conn, err)
+		return
+	}
+	defer terminal.Close()
+
+	s.audit(r, "server.terminal.open", "server", uuidString(server.ID), server.Name, map[string]any{"connection_mode": "local", "application_directory": initialDirectory != ""})
+	bridgeTerminal(conn, terminal, command)
+}
+
+func (s Server) runTailscaleTerminal(ctx context.Context, conn *websocket.Conn, r *http.Request, server db.Server, initialDirectory string) {
+	if err := sshutil.ValidateTailscaleHost(server.Hostname); err != nil {
+		writeTerminalError(conn, err)
+		return
+	}
+	if strings.TrimSpace(server.SshUser) == "" {
+		writeTerminalError(conn, validationError("server ssh_user is required for Tailscale SSH"))
+		return
+	}
+
+	args := []string{"ssh", strings.TrimSpace(server.SshUser) + "@" + strings.TrimSpace(server.Hostname)}
+	if initialDirectory != "" {
+		args = append(args, "cd "+stringutil.ShellQuote(initialDirectory)+" && exec ${SHELL:-/bin/bash} -i")
+	}
+	command := exec.CommandContext(ctx, "tailscale", args...)
+	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 32, Cols: 120})
+	if err != nil {
+		writeTerminalError(conn, err)
+		return
+	}
+	defer terminal.Close()
+
+	s.audit(r, "server.terminal.open", "server", uuidString(server.ID), server.Name, map[string]any{"connection_mode": server.ConnectionMode, "application_directory": initialDirectory != ""})
+	bridgeTerminal(conn, terminal, command)
+}
+
+func bridgeTerminal(conn *websocket.Conn, terminal *os.File, command *exec.Cmd) {
+	writer := terminalWriter{conn: conn}
+	done := make(chan struct{}, 1)
+	go copyTerminalOutput(&writer, terminal, done)
+
+	for {
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var message terminalClientMessage
+		if err := json.Unmarshal(payload, &message); err != nil {
+			continue
+		}
+		switch message.Type {
+		case "input":
+			_, _ = io.WriteString(terminal, message.Data)
+		case "resize":
+			if message.Rows > 0 && message.Cols > 0 {
+				_ = pty.Setsize(terminal, &pty.Winsize{Rows: uint16(message.Rows), Cols: uint16(message.Cols)})
+			}
+		}
+	}
+	_ = command.Process.Kill()
+	_ = command.Wait()
 	<-done
 }
 

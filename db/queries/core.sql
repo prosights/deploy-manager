@@ -175,11 +175,24 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy;
 
 -- name: ListApplicationsForGitHubPush :many
-SELECT id, server_id, name, repository_url, branch
+SELECT id, server_id, name, repository_url, branch, compose_path, health_check_url
 FROM applications
 WHERE branch = $1
   AND repository_url = ANY(sqlc.arg(repository_urls)::text[])
   AND github_auto_deploy = true
+ORDER BY name;
+
+-- name: ListApplicationsForBuildComplete :many
+SELECT id, server_id, name, repository_url, branch, compose_path, health_check_url
+FROM applications
+WHERE branch = sqlc.arg(branch)::text
+  AND github_auto_deploy = true
+  AND (
+    repository_url LIKE '%/' || sqlc.arg(repository)::text || '.git'
+    OR repository_url LIKE '%/' || sqlc.arg(repository)::text
+    OR repository_url LIKE '%:' || sqlc.arg(repository)::text || '.git'
+    OR repository_url LIKE '%:' || sqlc.arg(repository)::text
+  )
 ORDER BY name;
 
 -- name: UpdateApplicationStatus :one
@@ -591,6 +604,34 @@ SET last_sync_status = excluded.last_sync_status,
     last_synced_at = now(),
     updated_at = now()
 RETURNING id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at;
+
+-- name: ListBuildRuns :many
+SELECT id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at
+FROM build_runs
+ORDER BY created_at DESC
+LIMIT $1;
+
+-- name: GetBuildRun :one
+SELECT id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at
+FROM build_runs
+WHERE id = $1;
+
+-- name: CreateBuildRun :one
+INSERT INTO build_runs (provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, started_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'dispatched', $7, now())
+RETURNING id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at;
+
+-- name: CompleteBuildRun :one
+UPDATE build_runs
+SET status = $2,
+    image_ref = sqlc.narg(image_ref)::text,
+    image_digest = sqlc.narg(image_digest)::text,
+    external_url = sqlc.narg(external_url)::text,
+    error_message = sqlc.narg(error_message)::text,
+    completed_at = now(),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at;
 
 -- name: ListContainerRegistries :many
 SELECT id, name, provider, registry_host, namespace, repository, default_image, enabled, created_at, updated_at
