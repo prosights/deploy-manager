@@ -1,0 +1,152 @@
+name: Deploy Manager image
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_manager_build_id:
+        description: Build ID for the Deploy Manager callback
+        required: true
+      repository:
+        description: owner/repo
+        required: true
+      branch:
+        description: Branch that triggered the build
+        required: true
+        default: main
+      commit_sha:
+        description: Commit SHA to build
+        required: false
+      image_ref:
+        description: Primary immutable image ref to push and deploy
+        required: true
+      build_context:
+        description: Docker build context
+        required: false
+        default: .
+      dockerfile:
+        description: Dockerfile path
+        required: false
+        default: Dockerfile
+      runner:
+        description: Runner label
+        required: false
+        default: ubuntu-latest
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha || inputs.branch || github.ref_name }}
+
+      - id: image
+        name: Resolve image tags
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_IMAGE_REF: ${{ inputs.image_ref }}
+          INPUT_BRANCH: ${{ inputs.branch }}
+          INPUT_COMMIT_SHA: ${{ inputs.commit_sha }}
+          VERSION_IMAGE_BASE: ${{ vars.DEPLOY_MANAGER_IMAGE }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            image_ref="$INPUT_IMAGE_REF"
+            branch="${INPUT_BRANCH:-main}"
+            commit_sha="${INPUT_COMMIT_SHA:-$SHA}"
+          else
+            if [ -z "$VERSION_IMAGE_BASE" ]; then
+              echo "DEPLOY_MANAGER_IMAGE repo variable is required for version tag builds" >&2
+              exit 1
+            fi
+            image_ref="$VERSION_IMAGE_BASE:$REF_NAME"
+            branch="$REF_NAME"
+            commit_sha="$SHA"
+          fi
+
+          short_sha="${commit_sha:0:12}"
+          image_name="${image_ref%:*}"
+          tag_list="$image_ref"
+          tag_list="$tag_list"$'\n'"$image_name:sha-$short_sha"
+
+          if [ "$branch" = "main" ]; then
+            tag_list="$tag_list"$'\n'"$image_name:main"
+            tag_list="$tag_list"$'\n'"$image_name:main-$short_sha"
+          fi
+
+          if [[ "$REF_NAME" == v* ]]; then
+            tag_list="$tag_list"$'\n'"$image_name:$REF_NAME"
+          fi
+
+          {
+            echo 'tags<<EOF'
+            printf '%s\n' "$tag_list" | awk 'NF && !seen[$0]++'
+            echo EOF
+            echo "image_ref=$image_ref"
+          } >> "$GITHUB_OUTPUT"
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ vars.GAR_REGISTRY_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build_context || '.' }}
+          file: ${{ inputs.dockerfile || 'Dockerfile' }}
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report success
+        if: ${{ success() && github.event_name == 'workflow_dispatch' }}
+        env:
+          DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}
+          DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
+          IMAGE_REF: ${{ steps.image.outputs.image_ref }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          BUILD_ID: ${{ inputs.deploy_manager_build_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl --fail-with-body -X POST "$DEPLOY_MANAGER_API_URL/api/builds/$BUILD_ID/complete" \
+            -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"status\":\"succeeded\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"external_url\":\"$RUN_URL\"}"
+
+      - name: Report failure
+        if: ${{ failure() && github.event_name == 'workflow_dispatch' }}
+        env:
+          DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}
+          DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
+          BUILD_ID: ${{ inputs.deploy_manager_build_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl --fail-with-body -X POST "$DEPLOY_MANAGER_API_URL/api/builds/$BUILD_ID/complete" \
+            -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"status\":\"failed\",\"external_url\":\"$RUN_URL\",\"error_message\":\"Deploy Manager image build failed\"}"

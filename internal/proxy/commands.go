@@ -33,14 +33,7 @@ func BuildCommand(target Target) (string, error) {
 
 	switch target.ProxyType {
 	case "caddy":
-		config := caddyConfig(target)
-		path := "/etc/caddy/conf.d/deploy-manager-" + slug + ".caddy"
-		return strings.Join([]string{
-			"sudo mkdir -p /etc/caddy/conf.d",
-			"printf %s " + shellQuote(config) + " | sudo tee " + shellQuote(path) + " >/dev/null",
-			"sudo caddy validate --config /etc/caddy/Caddyfile",
-			"sudo systemctl reload caddy",
-		}, " && "), nil
+		return caddyCommand(target, slug), nil
 	case "traefik":
 		config := traefikConfig(target, slug)
 		path := "/etc/traefik/dynamic/deploy-manager-" + slug + ".yml"
@@ -153,6 +146,65 @@ func caddyConfig(target Target) string {
 		address = "http://" + target.Domain
 	}
 	return fmt.Sprintf("%s {\n\treverse_proxy %s\n}\n", address, target.Upstream)
+}
+
+func caddyCommand(target Target, slug string) string {
+	config := caddyConfig(target)
+	hostPath := "/etc/caddy/conf.d/deploy-manager-" + slug + ".caddy"
+	script := fmt.Sprintf(`set -e
+if command -v caddy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+  sudo mkdir -p /etc/caddy/conf.d
+  printf %%s %s | sudo tee %s >/dev/null
+  sudo caddy validate --config /etc/caddy/Caddyfile
+  sudo systemctl reload caddy
+elif command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -Fxq caddy && test -f /opt/infrastructure/Caddyfile; then
+  DM_CADDY_ADDRESS=%s DM_CADDY_CONFIG=%s python3 - <<'PY'
+import os
+import pathlib
+import re
+import shutil
+import time
+
+path = pathlib.Path("/opt/infrastructure/Caddyfile")
+address = os.environ["DM_CADDY_ADDRESS"].strip()
+config = os.environ["DM_CADDY_CONFIG"].rstrip() + "\n"
+content = path.read_text()
+start = f"# deploy-manager route {address}\n"
+end = f"# deploy-manager route end {address}\n"
+managed = start + config + end
+
+content = re.sub(
+    r"(?ms)^" + re.escape(start) + r".*?^" + re.escape(end) + r"\n?",
+    "",
+    content,
+)
+
+lines = content.splitlines(keepends=True)
+cleaned = []
+i = 0
+while i < len(lines):
+    if lines[i].strip() == f"{address} {{":
+        depth = lines[i].count("{") - lines[i].count("}")
+        i += 1
+        while i < len(lines) and depth > 0:
+            depth += lines[i].count("{") - lines[i].count("}")
+            i += 1
+        continue
+    cleaned.append(lines[i])
+    i += 1
+
+content = "".join(cleaned).rstrip() + "\n\n" + managed
+backup = path.with_name(path.name + ".deploy-manager-backup." + time.strftime("%%Y%%m%%d%%H%%M%%S"))
+shutil.copy2(path, backup)
+path.write_text(content)
+PY
+  docker exec caddy caddy validate --config /etc/caddy/Caddyfile
+  docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+else
+  echo "no supported caddy runtime found" >&2
+  exit 1
+fi`, shellQuote(config), shellQuote(hostPath), shellQuote(target.Domain), shellQuote(config))
+	return "bash -lc " + shellQuote(script)
 }
 
 func traefikConfig(target Target, slug string) string {

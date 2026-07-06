@@ -174,6 +174,35 @@ The workflow uses GitHub OIDC to obtain a short-lived Google token and push to A
 
 For GHCR, copy `examples/deploy-manager-build.yml` instead. Configure GitHub variables `REGISTRY_HOST=ghcr.io` and `DEPLOY_MANAGER_API_URL`, configure GitHub secret `DEPLOY_MANAGER_API_TOKEN`, and set the connector `image_ref` to the exact GHCR image tag Deploy Manager should deploy.
 
+## Self-Deploying Deploy Manager
+
+Deploy Manager deploys itself through the same GitHub build and blue/green
+deployment loop as application services. The production lane is:
+
+```text
+push to main -> GitHub App webhook -> workflow_dispatch -> Docker image
+-> /api/builds/{id}/complete -> blue/green deploy on internal
+-> Caddy upstream flip -> rollback slot recorded
+```
+
+Use `.github/workflows/deploy-manager-build.yml` for this repository. For
+`main` builds, configure the GitHub connector image ref as an immutable template
+such as:
+
+```text
+REGISTRY_HOST/NAMESPACE/REPOSITORY/deploy-manager:main-${SHORT_SHA}
+```
+
+The workflow also pushes `main`, `main-<short-sha>`, and `sha-<short-sha>`.
+Pushing a Git tag like `v1.2.3` publishes that version tag when the GitHub repo
+variable `DEPLOY_MANAGER_IMAGE` is set to the image name without a tag. Version
+tag pushes are for release bookkeeping and rollback reference; automatic
+production deployment stays on `main`.
+
+On the `internal` VM, keep PostgreSQL and Redis outside the color swap and run
+only the app container through Deploy Manager. The bootstrap files and exact
+application/proxy settings live in `ops/self-deploy/`.
+
 For the first build provider, prefer one of these two paths:
 
 - **GitHub larger runners** for the fastest first integration when repositories already live in GitHub. GitHub bills larger runners only while jobs execute, with no charge for an idle larger runner, and publishes Linux larger runner sizes from 4 to 96 cores.

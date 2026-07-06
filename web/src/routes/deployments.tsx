@@ -1,11 +1,11 @@
-import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
-import { DeploymentList, DeploymentQueuePanel } from '../features/deployments/components'
+import { blueGreenHealthCheckError, DeploymentList, DeploymentQueuePanel } from '../features/deployments/components'
 import { DeploymentLogsPanel, useDeploymentLogs } from '../features/deployments/logs'
-import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, type Application, type ContainerRegistry, type CreateDeploymentInput } from '../lib/api'
-import { applicationsQuery, containerRegistriesQuery, deploymentsQuery } from '../lib/queries'
+import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, updateApplication, type Application, type ContainerRegistry, type CreateDeploymentInput } from '../lib/api'
+import { applicationsQuery, containerRegistriesQuery, deploymentsQuery, deploymentSlotsQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
 import { useDeploymentSelection } from '../store/deployments'
 import { useUiStore } from '../store/ui'
@@ -27,6 +27,7 @@ export function DeploymentsRoute() {
   const [imageName, setImageName] = useState('')
   const [imageTag, setImageTag] = useState('')
   const [imageDigest, setImageDigest] = useState('')
+  const [healthCheckDraft, setHealthCheckDraft] = useState({ applicationID: '', value: '' })
   const [actor, setActor] = useState('')
   const [formError, setFormError] = useState<string>()
   const visibleDeployments = deployments.filter((deployment) => matchesSearch(searchQuery, [
@@ -59,6 +60,11 @@ export function DeploymentsRoute() {
     [effectiveRegistryID, registries],
   )
   const { logs, live } = useDeploymentLogs(selectedDeploymentIDForLogs)
+  const { data: deploymentSlots = [] } = useQuery({
+    ...deploymentSlotsQuery(target?.id ?? ''),
+    enabled: Boolean(target?.id),
+  })
+  const healthCheckDraftValue = target && healthCheckDraft.applicationID === target.id ? healthCheckDraft.value : target?.health_check_url ?? ''
   const deploy = useMutation({
     mutationFn: () => {
       if (!target) {
@@ -69,6 +75,9 @@ export function DeploymentsRoute() {
     onSuccess: async () => {
       setFormError(undefined)
       await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
+      if (target) {
+        await queryClient.invalidateQueries({ queryKey: deploymentSlotsQuery(target.id).queryKey })
+      }
     },
   })
   const cancel = useMutation({
@@ -83,6 +92,23 @@ export function DeploymentsRoute() {
       await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
     },
   })
+  const saveHealthCheck = useMutation({
+    mutationFn: () => {
+      if (!target) {
+        throw new Error('No application target is available')
+      }
+      const error = blueGreenHealthCheckError(healthCheckDraftValue)
+      if (error) {
+        throw new Error(error)
+      }
+      return updateApplication(target.id, applicationUpdateInput(target, healthCheckDraftValue))
+    },
+    onSuccess: async (application) => {
+      setFormError(undefined)
+      setHealthCheckDraft({ applicationID: application.id, value: application.health_check_url ?? '' })
+      await queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey })
+    },
+  })
   const rollback = useMutation({
     mutationFn: () => {
       if (!target) {
@@ -92,6 +118,9 @@ export function DeploymentsRoute() {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
+      if (target) {
+        await queryClient.invalidateQueries({ queryKey: deploymentSlotsQuery(target.id).queryKey })
+      }
     },
   })
 
@@ -114,6 +143,8 @@ export function DeploymentsRoute() {
       <DeploymentQueuePanel
         applications={applications}
         target={target}
+        deploymentSlots={deploymentSlots}
+        healthCheckDraft={healthCheckDraftValue}
         commitSha={commitSha}
         imageRef={imageRef}
         imageName={imageName}
@@ -124,10 +155,15 @@ export function DeploymentsRoute() {
         actor={actor}
         isQueueing={deploy.isPending}
         isRollingBack={rollback.isPending}
+        isSavingHealthCheck={saveHealthCheck.isPending}
         onApplicationChange={(nextApplicationID) => {
           setApplicationID(nextApplicationID)
           setRegistryOverrideID(null)
         }}
+        onHealthCheckDraftChange={(value) => {
+          setHealthCheckDraft({ applicationID: target?.id ?? '', value })
+        }}
+        onSaveHealthCheck={() => saveHealthCheck.mutate()}
         onCommitShaChange={setCommitSha}
         onImageRefChange={setImageRef}
         onRegistryChange={(value) => setRegistryOverrideID(value || manualRegistryID)}
@@ -156,6 +192,7 @@ export function DeploymentsRoute() {
         </div>
       )}
       {(formError || deploy.error) && <BlockError message={formError ?? deploy.error?.message ?? 'Deployment could not be queued.'} />}
+      {saveHealthCheck.error && <BlockError message={saveHealthCheck.error.message} />}
       <DeploymentList
         deployments={visibleDeployments}
         selectedDeployment={selectedDeployment}
@@ -171,6 +208,23 @@ export function DeploymentsRoute() {
       <DeploymentLogsPanel deployment={selectedDeployment} logs={logs} live={live} />
     </div>
   )
+}
+
+function applicationUpdateInput(application: Application, healthCheckURL: string) {
+  return {
+    environment_id: application.environment_id,
+    server_id: application.server_id,
+    name: application.name,
+    repository_url: application.repository_url ?? undefined,
+    branch: application.branch,
+    compose_path: application.compose_path,
+    remote_directory: application.remote_directory,
+    domain: application.domain ?? undefined,
+    health_check_url: healthCheckURL.trim(),
+    doppler_project: application.doppler_project ?? undefined,
+    doppler_config: application.doppler_config ?? undefined,
+    github_auto_deploy: application.github_auto_deploy,
+  }
 }
 
 function deploymentInput(

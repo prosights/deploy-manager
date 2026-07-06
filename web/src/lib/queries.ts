@@ -1,5 +1,5 @@
 import { queryOptions } from '@tanstack/react-query'
-import { api, getDopplerStatus, getGitHubStatus, listBuildRuns, listDeploymentLogs, listGitHubRepositories, type Application, type AuditEvent, type BuildRun, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type DopplerIntegrationStatus, type Environment, type GitHubIntegrationStatus, type GitHubRepository, type InstanceSettings, type Project, type ProxyRoute, type Server, type TailscaleDevicesResponse } from './api'
+import { api, getDopplerStatus, getGitHubStatus, listBuildRuns, listDeploymentLogs, listDeploymentSlots, listGitHubRepositories, type Application, type AuditEvent, type BuildRun, type ConnectorAccount, type ContainerRegistry, type Credential, type CredentialDetail, type Deployment, type DeploymentSlot, type DopplerIntegrationStatus, type Environment, type GitHubIntegrationStatus, type GitHubRepository, type InstanceSettings, type Project, type ProxyRoute, type Server, type TailscaleDevicesResponse } from './api'
 
 export const settingsQuery = queryOptions({
   queryKey: ['settings'],
@@ -45,6 +45,13 @@ export const buildRunsQuery = queryOptions({
   queryKey: ['build-runs'],
   queryFn: ({ signal }) => listBuildRuns({ signal }) as Promise<BuildRun[]>,
 })
+
+export function deploymentSlotsQuery(applicationID: string) {
+  return queryOptions({
+    queryKey: ['applications', applicationID, 'deployment-slots'],
+    queryFn: ({ signal }) => listDeploymentSlots(applicationID, { signal }) as Promise<DeploymentSlot[]>,
+  })
+}
 
 export function deploymentLogsQuery(deploymentID: string) {
   return queryOptions({

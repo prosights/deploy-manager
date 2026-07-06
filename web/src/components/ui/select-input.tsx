@@ -22,6 +22,7 @@ type MenuPosition = {
   left: number
   top: number
   width: number
+  maxHeight: number
 }
 
 export function SelectInput({
@@ -46,10 +47,23 @@ export function SelectInput({
     if (!rect) {
       return
     }
+    const gap = 6
+    const viewportPadding = 8
+    const availableBelow = window.innerHeight - rect.bottom - viewportPadding
+    const availableAbove = rect.top - viewportPadding
+    const openAbove = availableBelow < 160 && availableAbove > availableBelow
+    const maxHeight = Math.min(256, Math.max(144, openAbove ? availableAbove - gap : availableBelow - gap))
+    const top = openAbove ? Math.max(viewportPadding, rect.top - maxHeight - gap) : rect.bottom + gap
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - rect.width - viewportPadding),
+    )
+
     setMenuPosition({
-      left: rect.left,
-      top: rect.bottom + 4,
+      left,
+      top,
       width: rect.width,
+      maxHeight,
     })
   }
 
@@ -112,8 +126,11 @@ export function SelectInput({
         aria-controls={`${selectID}-menu`}
         aria-expanded={open}
         className={cn(
-          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-left text-sm text-ink outline-none transition-colors',
-          'hover:bg-panel focus-visible:ring-2 focus-visible:ring-accent disabled:pointer-events-none disabled:opacity-50',
+          'flex h-9 w-full items-center justify-between gap-2 rounded-md border bg-background px-3 text-left text-sm text-ink outline-none',
+          'transition-[background-color,border-color,box-shadow] duration-150',
+          'hover:border-coolgray-500 hover:bg-panel focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/35',
+          'disabled:pointer-events-none disabled:opacity-50',
+          open && 'border-accent/60 bg-panel shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-accent)_22%,transparent)]',
         )}
         disabled={disabled}
         onClick={() => setOpen((state) => !state)}
@@ -125,8 +142,13 @@ export function SelectInput({
         <div
           id={`${selectID}-menu`}
           role="listbox"
-          className="fixed z-50 max-h-64 overflow-auto rounded-md border bg-surface p-1 text-sm text-ink shadow-lg"
-          style={{ left: menuPosition.left, top: menuPosition.top, minWidth: menuPosition.width }}
+          className="fixed z-50 overflow-auto rounded-md border border-coolgray-400 bg-background p-1 text-sm text-ink shadow-[0_14px_28px_rgba(0,0,0,0.22)]"
+          style={{
+            left: menuPosition.left,
+            top: menuPosition.top,
+            minWidth: menuPosition.width,
+            maxHeight: menuPosition.maxHeight,
+          }}
         >
           {options.map((option) => (
             <button
@@ -135,8 +157,8 @@ export function SelectInput({
               role="option"
               aria-selected={option.value === value}
               className={cn(
-                'flex h-8 w-full items-center justify-between gap-3 rounded px-2 text-left transition-colors',
-                option.value === value ? 'bg-accent/15 text-ink' : 'hover:bg-panel',
+                'flex h-8 w-full items-center justify-between gap-3 rounded px-2 text-left outline-none transition-colors duration-150',
+                option.value === value ? 'bg-coollabs-50 text-accent-text' : 'hover:bg-panel focus-visible:bg-panel',
                 option.disabled && 'pointer-events-none opacity-45',
               )}
               disabled={option.disabled}

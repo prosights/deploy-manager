@@ -58,6 +58,7 @@ type Querier interface {
 	ListCredentialUsages(ctx context.Context, credentialID pgtype.UUID) ([]CredentialUsage, error)
 	ListCredentials(ctx context.Context) ([]ListCredentialsRow, error)
 	ListDeploymentLogsAfter(ctx context.Context, arg ListDeploymentLogsAfterParams) ([]DeploymentLog, error)
+	ListDeploymentSlotsForApplication(ctx context.Context, applicationID pgtype.UUID) ([]ApplicationDeploymentSlot, error)
 	ListDeployments(ctx context.Context, limit int32) ([]ListDeploymentsRow, error)
 	ListEnvironments(ctx context.Context) ([]ListEnvironmentsRow, error)
 	ListEnvironmentsForProject(ctx context.Context, projectID pgtype.UUID) ([]Environment, error)
@@ -74,6 +75,7 @@ type Querier interface {
 	RenameServerDevSudoUser(ctx context.Context, arg RenameServerDevSudoUserParams) (ServerDevSudoUser, error)
 	ReplaceServerDevSudoUsers(ctx context.Context, arg ReplaceServerDevSudoUsersParams) error
 	StartQueuedDeployment(ctx context.Context, id pgtype.UUID) (Deployment, error)
+	UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error)
 	UpdateApplicationStatus(ctx context.Context, arg UpdateApplicationStatusParams) (Application, error)
 	UpdateDeploymentStatus(ctx context.Context, arg UpdateDeploymentStatusParams) (Deployment, error)
 	UpdateInstanceSettings(ctx context.Context, arg UpdateInstanceSettingsParams) (InstanceSetting, error)

@@ -82,6 +82,7 @@ export type Application = {
   project_slug: string
   default_registry_id: string | null
   default_registry_name: string | null
+  github_auto_deploy: boolean
 }
 
 export type Deployment = {
@@ -100,6 +101,20 @@ export type Deployment = {
   created_at: string
   started_at: string | null
   finished_at: string | null
+}
+
+export type DeploymentSlot = {
+  id: string
+  application_id: string
+  server_id: string
+  color: 'blue' | 'green' | string
+  deployment_id: string | null
+  image_ref: string
+  image_digest: string | null
+  status: 'active' | 'standby' | string
+  promoted_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 export type DeploymentLog = {
@@ -221,6 +236,8 @@ export type CreateApplicationInput = {
   doppler_config?: string
   github_auto_deploy?: boolean
 }
+
+export type UpdateApplicationInput = CreateApplicationInput
 
 export type Project = {
   id: string
@@ -548,6 +565,10 @@ export function rollbackApplication(applicationID: string) {
   })
 }
 
+export function listDeploymentSlots(applicationID: string, init?: RequestInit) {
+  return api<DeploymentSlot[]>(`/api/applications/${applicationID}/deployment-slots`, init)
+}
+
 export function upsertContainerRegistry(input: UpsertContainerRegistryInput) {
   return api<ContainerRegistry>('/api/container-registries', {
     method: 'POST',
@@ -630,6 +651,13 @@ export function applyServerDevUsers(serverID: string) {
 export function createApplication(input: CreateApplicationInput) {
   return api<Application>('/api/applications', {
     method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateApplication(applicationID: string, input: UpdateApplicationInput) {
+  return api<Application>(`/api/applications/${applicationID}`, {
+    method: 'PATCH',
     body: JSON.stringify(input),
   })
 }

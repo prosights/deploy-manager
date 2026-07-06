@@ -56,6 +56,40 @@ func (s Server) createApplication(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, application)
 }
 
+func (s Server) updateApplication(w http.ResponseWriter, r *http.Request) {
+	applicationID, err := parseUUIDParam(r, "applicationID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var input db.UpdateApplicationParams
+	if err := readJSON(w, r, &input); err != nil {
+		writeError(w, err)
+		return
+	}
+	input.ID = applicationID
+	input, err = normalizeUpdateApplication(input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, err := s.queries.GetServer(r.Context(), input.ServerID); err != nil {
+		writeError(w, applicationLookupError(err, "server not found"))
+		return
+	}
+	if _, err := s.queries.GetEnvironment(r.Context(), input.EnvironmentID); err != nil {
+		writeError(w, applicationLookupError(err, "environment not found"))
+		return
+	}
+	application, err := s.queries.UpdateApplication(r.Context(), input)
+	if err != nil {
+		writeError(w, applicationLookupError(err, "application not found"))
+		return
+	}
+	s.audit(r, "application.update", "application", uuidString(application.ID), application.Name, map[string]any{"environment_id": uuidString(application.EnvironmentID), "server_id": uuidString(application.ServerID), "branch": application.Branch, "doppler_scoped": application.DopplerProject.Valid && application.DopplerConfig.Valid, "github_auto_deploy": application.GithubAutoDeploy})
+	writeJSON(w, http.StatusOK, application)
+}
+
 func (s Server) deleteApplication(w http.ResponseWriter, r *http.Request) {
 	applicationID, err := parseUUIDParam(r, "applicationID")
 	if err != nil {
@@ -135,6 +169,39 @@ func normalizeCreateApplication(input db.CreateApplicationParams) (db.CreateAppl
 			return input, validationError(err.Error())
 		}
 	}
+	return input, nil
+}
+
+func normalizeUpdateApplication(input db.UpdateApplicationParams) (db.UpdateApplicationParams, error) {
+	createInput, err := normalizeCreateApplication(db.CreateApplicationParams{
+		EnvironmentID:    input.EnvironmentID,
+		ServerID:         input.ServerID,
+		Name:             input.Name,
+		RepositoryUrl:    input.RepositoryUrl,
+		Branch:           input.Branch,
+		ComposePath:      input.ComposePath,
+		RemoteDirectory:  input.RemoteDirectory,
+		Domain:           input.Domain,
+		HealthCheckUrl:   input.HealthCheckUrl,
+		DopplerProject:   input.DopplerProject,
+		DopplerConfig:    input.DopplerConfig,
+		GithubAutoDeploy: input.GithubAutoDeploy,
+	})
+	if err != nil {
+		return input, err
+	}
+	input.EnvironmentID = createInput.EnvironmentID
+	input.ServerID = createInput.ServerID
+	input.Name = createInput.Name
+	input.RepositoryUrl = createInput.RepositoryUrl
+	input.Branch = createInput.Branch
+	input.ComposePath = createInput.ComposePath
+	input.RemoteDirectory = createInput.RemoteDirectory
+	input.Domain = createInput.Domain
+	input.HealthCheckUrl = createInput.HealthCheckUrl
+	input.DopplerProject = createInput.DopplerProject
+	input.DopplerConfig = createInput.DopplerConfig
+	input.GithubAutoDeploy = createInput.GithubAutoDeploy
 	return input, nil
 }
 

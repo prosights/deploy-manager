@@ -1,16 +1,18 @@
-import { Ban, RotateCcw, Rocket, ScrollText } from 'lucide-react'
+import { Ban, History, RotateCcw, Rocket, Save, ScrollText } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Panel } from '../../components/ui/panel'
 import { SelectInput } from '../../components/ui/select-input'
 import { TextInput } from '../../components/ui/text-input'
-import type { Application, ContainerRegistry, Deployment } from '../../lib/api'
+import type { Application, ContainerRegistry, Deployment, DeploymentSlot } from '../../lib/api'
 import { validateHealthCheckURL } from '../../lib/urls'
 import { statusTone } from '../status'
 
 type DeploymentQueuePanelProps = {
   applications: Application[]
   target?: Application
+  deploymentSlots: DeploymentSlot[]
+  healthCheckDraft: string
   commitSha: string
   imageRef: string
   imageName: string
@@ -21,7 +23,10 @@ type DeploymentQueuePanelProps = {
   actor: string
   isQueueing: boolean
   isRollingBack: boolean
+  isSavingHealthCheck: boolean
   onApplicationChange: (applicationID: string) => void
+  onHealthCheckDraftChange: (healthCheckURL: string) => void
+  onSaveHealthCheck: () => void
   onCommitShaChange: (commitSha: string) => void
   onImageRefChange: (imageRef: string) => void
   onRegistryChange: (registryID: string) => void
@@ -36,6 +41,8 @@ type DeploymentQueuePanelProps = {
 export function DeploymentQueuePanel({
   applications,
   target,
+  deploymentSlots,
+  healthCheckDraft,
   commitSha,
   imageRef,
   imageName,
@@ -46,7 +53,10 @@ export function DeploymentQueuePanel({
   actor,
   isQueueing,
   isRollingBack,
+  isSavingHealthCheck,
   onApplicationChange,
+  onHealthCheckDraftChange,
+  onSaveHealthCheck,
   onCommitShaChange,
   onImageRefChange,
   onRegistryChange,
@@ -59,11 +69,12 @@ export function DeploymentQueuePanel({
 }: DeploymentQueuePanelProps) {
   const blueGreenError = blueGreenHealthCheckError(target?.health_check_url ?? '')
   const blueGreenReady = blueGreenError === ''
-  const rollbackError = blueGreenError
-  const rollbackReady = rollbackError === ''
+  const activeSlot = deploymentSlots.find((slot) => slot.status === 'active')
+  const standbySlot = deploymentSlots.find((slot) => slot.status === 'standby')
+  const rollbackReady = blueGreenReady && Boolean(standbySlot)
 
   return (
-    <Panel title="Queue deployment">
+    <Panel title="Deploy and rollback">
       <div className="grid gap-3 p-4 md:grid-cols-[minmax(220px,1fr)_150px_180px_180px]">
         <SelectInput label="Application" value={target?.id ?? ''} onChange={onApplicationChange} disabled={applications.length === 0}>
           {applications.map((application) => (
@@ -77,6 +88,30 @@ export function DeploymentQueuePanel({
         <TextInput label="Commit SHA" value={commitSha} onChange={onCommitShaChange} placeholder="optional" />
         <TextInput label="Actor" value={actor} onChange={onActorChange} placeholder="optional" />
       </div>
+      <RollbackSlots
+        activeSlot={activeSlot}
+        standbySlot={standbySlot}
+        blueGreenReady={blueGreenReady}
+        isRollingBack={isRollingBack}
+        onRollback={onRollback}
+      />
+      {blueGreenError && (
+        <div className="grid gap-3 border-t p-4 md:grid-cols-[minmax(280px,1fr)_auto]">
+          <TextInput
+            label="Health check URL"
+            value={healthCheckDraft}
+            onChange={onHealthCheckDraftChange}
+            placeholder="http://127.0.0.1:{port}/healthz?color={color}"
+          />
+          <div className="flex items-end">
+            <Button variant="secondary" disabled={!target || isSavingHealthCheck} onClick={onSaveHealthCheck}>
+              <Save className="size-4" />
+              {isSavingHealthCheck ? 'Saving...' : 'Save health check'}
+            </Button>
+          </div>
+          <div className="md:col-span-2 text-sm text-danger">{blueGreenError}</div>
+        </div>
+      )}
       <div className="grid gap-3 border-t p-4 md:grid-cols-[minmax(220px,0.8fr)_minmax(180px,0.7fr)_120px_minmax(220px,0.8fr)_auto_auto]">
         <SelectInput label="Registry" value={selectedRegistry?.id ?? ''} onChange={onRegistryChange} disabled={registries.length === 0}>
           <option value="">Manual ref</option>
@@ -93,11 +128,8 @@ export function DeploymentQueuePanel({
             {isQueueing ? 'Queueing...' : 'Queue deploy'}
           </Button>
         </div>
-        <div className="flex items-end">
-          <Button variant="secondary" disabled={!target || isRollingBack || !rollbackReady} onClick={onRollback}>
-            <RotateCcw className="size-4" />
-            {isRollingBack ? 'Rolling back...' : 'Rollback'}
-          </Button>
+        <div className="flex items-end text-xs text-muted">
+          {rollbackReady ? 'Rollback is ready.' : 'Rollback needs a standby slot.'}
         </div>
       </div>
       <div className="border-t px-4 py-3 text-sm text-muted">
@@ -119,12 +151,59 @@ export function DeploymentQueuePanel({
       <div className="border-t px-4 py-3 text-sm text-muted">
         Blue-green compose targets must use <span className="font-mono text-ink">DEPLOY_COLOR</span> for color-specific service names, labels, or ports, and the application health check URL must include <span className="font-mono text-ink">{'{color}'}</span>.
       </div>
-      {blueGreenError && (
-        <div className="border-t px-4 py-3 text-sm text-danger">
-          {blueGreenError}
-        </div>
-      )}
     </Panel>
+  )
+}
+
+type RollbackSlotsProps = {
+  activeSlot?: DeploymentSlot
+  standbySlot?: DeploymentSlot
+  blueGreenReady: boolean
+  isRollingBack: boolean
+  onRollback: () => void
+}
+
+function RollbackSlots({ activeSlot, standbySlot, blueGreenReady, isRollingBack, onRollback }: RollbackSlotsProps) {
+  return (
+    <div className="grid gap-3 border-t p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+      <SlotCard label="Live now" slot={activeSlot} empty="No active slot yet." />
+      <SlotCard label="Rollback target" slot={standbySlot} empty="No standby slot yet. Complete two successful deploys to create one." />
+      <div className="flex items-end">
+        <Button variant="secondary" disabled={!standbySlot || !blueGreenReady || isRollingBack} onClick={onRollback}>
+          <RotateCcw className="size-4" />
+          {isRollingBack ? 'Rolling back...' : standbySlot ? `Rollback to ${standbySlot.color}` : 'Rollback'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+type SlotCardProps = {
+  label: string
+  slot?: DeploymentSlot
+  empty: string
+}
+
+function SlotCard({ label, slot, empty }: SlotCardProps) {
+  return (
+    <div className="rounded-md border bg-surface px-3 py-2">
+      <div className="flex items-center gap-2 text-xs font-medium text-muted">
+        <History className="size-3.5" />
+        {label}
+      </div>
+      {slot ? (
+        <div className="mt-2 space-y-1">
+          <div className="flex items-center gap-2">
+            <Badge tone={slot.status === 'active' ? 'success' : 'warning'}>{slot.color}</Badge>
+            <span className="text-xs text-muted">{slot.status}</span>
+          </div>
+          <div className="truncate font-mono text-xs text-ink">{slot.image_ref}</div>
+          <div className="font-mono text-[11px] text-muted">{slot.image_digest?.slice(0, 19) ?? slot.deployment_id?.slice(0, 8) ?? 'not pinned'}</div>
+        </div>
+      ) : (
+        <div className="mt-2 text-sm text-muted">{empty}</div>
+      )}
+    </div>
   )
 }
 
@@ -149,7 +228,7 @@ function canBuildFromSource(target: Application | undefined): boolean {
   return Boolean(target?.repository_url?.trim() && target?.compose_path?.trim())
 }
 
-function blueGreenHealthCheckError(value: string): string {
+export function blueGreenHealthCheckError(value: string): string {
   if (!value.trim().includes('{color}')) {
     return 'Configure a health check URL with {color} before queueing blue-green deployments.'
   }

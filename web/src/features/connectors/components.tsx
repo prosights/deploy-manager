@@ -389,35 +389,49 @@ export function ConnectedRepos({ repositories, searchQuery, isSyncing, isDispatc
   const firstConnectorID = visible[0]?.connector_id
 
   return (
-    <Panel title="Connected repositories">
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <span className="text-xs text-muted">{visible.length} {visible.length === 1 ? 'repository' : 'repositories'}</span>
-        {firstConnectorID && (
-          <Button variant="ghost" disabled={isSyncing} onClick={() => onSync(firstConnectorID)}>
-            <RefreshCw className={`size-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            Sync
-          </Button>
-        )}
+    <Panel
+      title="GitHub repository access"
+      action={firstConnectorID && (
+        <Button variant="ghost" disabled={isSyncing} onClick={() => onSync(firstConnectorID)}>
+          <RefreshCw className={`size-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+          Sync from GitHub
+        </Button>
+      )}
+    >
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <div>
+          <p className="text-sm text-ink">Repositories granted to the Deploy Manager GitHub App.</p>
+          <p className="mt-0.5 text-xs text-muted">Use these to create services or dispatch a GitHub Actions build for a repo and branch.</p>
+        </div>
+        <span className="shrink-0 text-xs text-muted">{visible.length} {visible.length === 1 ? 'repository' : 'repositories'}</span>
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_150px] border-b px-4 py-2 text-xs font-medium text-muted">
+        <span>Repository</span>
+        <span className="text-right">Action</span>
       </div>
       <div className="divide-y">
         {visible.map((repo) => (
-          <div key={`${repo.connector_id}-${repo.repository}-${repo.branch}`} className="flex items-center justify-between gap-4 px-4 py-3">
+          <div key={`${repo.connector_id}-${repo.repository}-${repo.branch}`} className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-4 px-4 py-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <span className="truncate font-medium text-ink text-sm">{repo.repository}</span>
+                <span className="truncate text-sm font-medium text-ink">{repo.repository}</span>
                 <Badge tone="neutral">
                   <GitBranch className="mr-0.5 size-3" />
                   {repo.branch}
                 </Badge>
               </div>
-              {repo.image_ref && (
+              {repo.image_ref ? (
                 <p className="mt-0.5 truncate font-mono text-xs text-muted">{repo.image_ref}</p>
+              ) : (
+                <p className="mt-0.5 text-xs text-muted">No image recorded yet</p>
               )}
             </div>
-            <Button variant="ghost" disabled={isDispatching} onClick={() => onBuild(repo)}>
-              <Rocket className="size-3.5" />
-              Build
-            </Button>
+            <div className="flex justify-end">
+              <Button variant="ghost" disabled={isDispatching} onClick={() => onBuild(repo)}>
+                <Rocket className="size-3.5" />
+                Dispatch build
+              </Button>
+            </div>
           </div>
         ))}
       </div>

@@ -1872,6 +1872,50 @@ func (q *Queries) ListDeploymentLogsAfter(ctx context.Context, arg ListDeploymen
 	return items, nil
 }
 
+const listDeploymentSlotsForApplication = `-- name: ListDeploymentSlotsForApplication :many
+SELECT id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+FROM application_deployment_slots
+WHERE application_id = $1
+ORDER BY CASE status
+    WHEN 'active' THEN 0
+    WHEN 'standby' THEN 1
+    ELSE 2
+END,
+updated_at DESC
+`
+
+func (q *Queries) ListDeploymentSlotsForApplication(ctx context.Context, applicationID pgtype.UUID) ([]ApplicationDeploymentSlot, error) {
+	rows, err := q.db.Query(ctx, listDeploymentSlotsForApplication, applicationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ApplicationDeploymentSlot{}
+	for rows.Next() {
+		var i ApplicationDeploymentSlot
+		if err := rows.Scan(
+			&i.ID,
+			&i.ApplicationID,
+			&i.ServerID,
+			&i.Color,
+			&i.DeploymentID,
+			&i.ImageRef,
+			&i.ImageDigest,
+			&i.Status,
+			&i.PromotedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeployments = `-- name: ListDeployments :many
 SELECT d.id, d.application_id, d.server_id, d.trigger, d.strategy, d.status, d.commit_sha, d.actor, d.started_at, d.finished_at, d.created_at, d.image_ref, d.image_digest,
        a.name AS application_name,
@@ -2576,6 +2620,81 @@ func (q *Queries) StartQueuedDeployment(ctx context.Context, id pgtype.UUID) (De
 		&i.CreatedAt,
 		&i.ImageRef,
 		&i.ImageDigest,
+	)
+	return i, err
+}
+
+const updateApplication = `-- name: UpdateApplication :one
+UPDATE applications
+SET environment_id = $1::uuid,
+    server_id = $2::uuid,
+    name = $3::text,
+    repository_url = $4::text,
+    branch = $5::text,
+    compose_path = $6::text,
+    remote_directory = $7::text,
+    domain = $8::text,
+    health_check_url = $9::text,
+    doppler_project = $10::text,
+    doppler_config = $11::text,
+    github_auto_deploy = $12::boolean,
+    updated_at = now()
+WHERE id = $13::uuid
+RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy
+`
+
+type UpdateApplicationParams struct {
+	EnvironmentID    pgtype.UUID `json:"environment_id"`
+	ServerID         pgtype.UUID `json:"server_id"`
+	Name             string      `json:"name"`
+	RepositoryUrl    pgtype.Text `json:"repository_url"`
+	Branch           string      `json:"branch"`
+	ComposePath      string      `json:"compose_path"`
+	RemoteDirectory  string      `json:"remote_directory"`
+	Domain           pgtype.Text `json:"domain"`
+	HealthCheckUrl   pgtype.Text `json:"health_check_url"`
+	DopplerProject   pgtype.Text `json:"doppler_project"`
+	DopplerConfig    pgtype.Text `json:"doppler_config"`
+	GithubAutoDeploy bool        `json:"github_auto_deploy"`
+	ID               pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
+	row := q.db.QueryRow(ctx, updateApplication,
+		arg.EnvironmentID,
+		arg.ServerID,
+		arg.Name,
+		arg.RepositoryUrl,
+		arg.Branch,
+		arg.ComposePath,
+		arg.RemoteDirectory,
+		arg.Domain,
+		arg.HealthCheckUrl,
+		arg.DopplerProject,
+		arg.DopplerConfig,
+		arg.GithubAutoDeploy,
+		arg.ID,
+	)
+	var i Application
+	err := row.Scan(
+		&i.ID,
+		&i.EnvironmentID,
+		&i.ServerID,
+		&i.Name,
+		&i.RepositoryUrl,
+		&i.Branch,
+		&i.ComposePath,
+		&i.RemoteDirectory,
+		&i.Domain,
+		&i.HealthCheckUrl,
+		&i.DopplerProject,
+		&i.DopplerConfig,
+		&i.Status,
+		&i.CurrentVersion,
+		&i.TargetVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.GithubAutoDeploy,
 	)
 	return i, err
 }

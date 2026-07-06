@@ -1,0 +1,38 @@
+services:
+  app:
+    image: ${DEPLOY_IMAGE:?DEPLOY_IMAGE is required}
+    container_name: deploy-manager-${DEPLOY_COLOR:-blue}
+    restart: unless-stopped
+    env_file:
+      - /srv/deploy-manager/control/.env
+      - .env
+    environment:
+      HTTP_ADDR: ":8080"
+      HOME: /home/deploy
+      STATIC_DIR: /app/web/dist
+      DATABASE_URL: ${DATABASE_URL:-postgres://deploy:${POSTGRES_PASSWORD}@postgres:5432/deploy_manager?sslmode=disable}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SSH_KNOWN_HOSTS_PATH: /app/known_hosts
+      DOPPLER_CLI_PATH: ${DOPPLER_CLI_PATH:-doppler}
+      DOPPLER_CONFIG_DIR: /tmp/.doppler
+    ports:
+      - "127.0.0.1:${DEPLOY_PORT:-3101}:8080"
+    group_add:
+      - "${DOCKER_GROUP_ID:-999}"
+    volumes:
+      - /srv/deploy-manager/apps:/srv/deploy-manager/apps
+      - /srv/deploy-manager/control/secrets:/app/secrets:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+    networks:
+      - deploy-manager-control
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  deploy-manager-control:
+    name: ${DEPLOY_MANAGER_CONTROL_NETWORK:-control_default}
+    external: true

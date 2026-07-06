@@ -90,3 +90,15 @@ html.light .logo-mark {
   background: transparent;
   padding: 0;
 }
+
+.terminal-shell .xterm {
+  padding: 12px;
+}
+
+.terminal-shell .xterm-viewport {
+  background: transparent !important;
+}
+
+.terminal-shell .xterm-screen {
+  width: 100% !important;
+}

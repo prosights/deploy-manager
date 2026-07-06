@@ -207,6 +207,24 @@ func (s Server) rollbackApplication(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, deployment)
 }
 
+func (s Server) listApplicationDeploymentSlots(w http.ResponseWriter, r *http.Request) {
+	applicationID, err := parseUUIDParam(r, "applicationID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, err := s.queries.GetApplication(r.Context(), applicationID); err != nil {
+		writeError(w, applicationLookupError(err, "application not found"))
+		return
+	}
+	slots, err := s.queries.ListDeploymentSlotsForApplication(r.Context(), applicationID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, slots)
+}
+
 type deploymentStatusUpdater interface {
 	UpdateDeploymentStatus(context.Context, db.UpdateDeploymentStatusParams) (db.Deployment, error)
 }

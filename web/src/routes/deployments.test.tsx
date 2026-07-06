@@ -34,6 +34,35 @@ const queryData = vi.hoisted(() => ({
       project_slug: 'billing',
       default_registry_id: null,
       default_registry_name: null,
+      github_auto_deploy: false,
+    },
+  ],
+  deploymentSlots: [
+    {
+      id: 'slot_blue',
+      application_id: 'app_1',
+      server_id: 'server_1',
+      color: 'blue',
+      deployment_id: 'deployment_1',
+      image_ref: 'registry.example.com/api:v1',
+      image_digest: null,
+      status: 'active',
+      promoted_at: '2026-06-23T00:00:00Z',
+      created_at: '2026-06-23T00:00:00Z',
+      updated_at: '2026-06-23T00:00:00Z',
+    },
+    {
+      id: 'slot_green',
+      application_id: 'app_1',
+      server_id: 'server_1',
+      color: 'green',
+      deployment_id: 'deployment_2',
+      image_ref: 'registry.example.com/api:v0',
+      image_digest: null,
+      status: 'standby',
+      promoted_at: '2026-06-22T00:00:00Z',
+      created_at: '2026-06-22T00:00:00Z',
+      updated_at: '2026-06-22T00:00:00Z',
     },
   ],
   registries: [],
@@ -68,6 +97,7 @@ vi.mock('../lib/api', async () => {
     createDeployment: vi.fn(),
     retryDeployment: vi.fn(async (deploymentID: string) => ({ id: deploymentID, status: 'queued' })),
     rollbackApplication: vi.fn(async (applicationID: string) => ({ id: 'rollback_1', application_id: applicationID, status: 'queued' })),
+    updateApplication: vi.fn(async (_applicationID: string, input: object) => ({ ...queryData.applications[0], ...input })),
   }
 })
 
@@ -129,6 +159,10 @@ vi.mock('../lib/queries', () => ({
     queryKey: ['container-registries'],
     queryFn: async () => queryData.registries,
   },
+  deploymentSlotsQuery: () => ({
+    queryKey: ['applications', 'app_1', 'deployment-slots'],
+    queryFn: async () => queryData.deploymentSlots,
+  }),
   deploymentLogsQuery: () => ({
     queryKey: ['deployments', 'deployment_1', 'logs'],
     queryFn: async () => [],
@@ -359,7 +393,7 @@ describe('DeploymentsRoute', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: /^rollback$/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /rollback to green/i }))
 
     await waitFor(() => {
       expect(rollbackApplication).toHaveBeenCalledWith('app_1')

@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-deploy_manager}
+      POSTGRES_USER: ${POSTGRES_USER:-deploy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - deploy_manager_control_pg:/var/lib/postgresql
+    networks:
+      - deploy-manager-control
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deploy} -d ${POSTGRES_DB:-deploy_manager}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - deploy_manager_control_redis:/data
+    networks:
+      - deploy-manager-control
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  deploy-manager-control:
+    name: ${DEPLOY_MANAGER_CONTROL_NETWORK:-control_default}
+
+volumes:
+  deploy_manager_control_pg:
+  deploy_manager_control_redis:

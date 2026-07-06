@@ -215,6 +215,24 @@ INSERT INTO applications (environment_id, server_id, name, repository_url, branc
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy;
 
+-- name: UpdateApplication :one
+UPDATE applications
+SET environment_id = sqlc.arg(environment_id)::uuid,
+    server_id = sqlc.arg(server_id)::uuid,
+    name = sqlc.arg(name)::text,
+    repository_url = sqlc.narg(repository_url)::text,
+    branch = sqlc.arg(branch)::text,
+    compose_path = sqlc.arg(compose_path)::text,
+    remote_directory = sqlc.arg(remote_directory)::text,
+    domain = sqlc.narg(domain)::text,
+    health_check_url = sqlc.narg(health_check_url)::text,
+    doppler_project = sqlc.narg(doppler_project)::text,
+    doppler_config = sqlc.narg(doppler_config)::text,
+    github_auto_deploy = sqlc.arg(github_auto_deploy)::boolean,
+    updated_at = now()
+WHERE id = sqlc.arg(id)::uuid
+RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy;
+
 -- name: ListApplicationsForGitHubPush :many
 SELECT id, server_id, name, repository_url, branch, compose_path, health_check_url
 FROM applications
@@ -389,6 +407,17 @@ WHERE application_id = $1
   AND status = 'standby'
 ORDER BY updated_at DESC
 LIMIT 1;
+
+-- name: ListDeploymentSlotsForApplication :many
+SELECT id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
+FROM application_deployment_slots
+WHERE application_id = $1
+ORDER BY CASE status
+    WHEN 'active' THEN 0
+    WHEN 'standby' THEN 1
+    ELSE 2
+END,
+updated_at DESC;
 
 -- name: UpsertDeploymentSlot :one
 INSERT INTO application_deployment_slots (application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at)

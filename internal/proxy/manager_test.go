@@ -23,8 +23,10 @@ func TestBuildCommandForCaddy(t *testing.T) {
 	}
 
 	assertContains(t, command, "/etc/caddy/conf.d/deploy-manager-app-example-com.caddy")
+	assertContains(t, command, "/opt/infrastructure/Caddyfile")
 	assertContains(t, command, "reverse_proxy http://127.0.0.1:3000")
 	assertContains(t, command, "sudo systemctl reload caddy")
+	assertContains(t, command, "docker exec caddy caddy reload --config /etc/caddy/Caddyfile")
 }
 
 func TestBuildCommandForTraefikWithoutTLS(t *testing.T) {

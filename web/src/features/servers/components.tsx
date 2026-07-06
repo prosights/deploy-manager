@@ -390,28 +390,32 @@ export function ServerTerminalPanel({
     const terminal = new XTerm({
       allowProposedApi: false,
       convertEol: true,
-      cursorBlink: true,
+      cursorBlink: false,
+      cursorStyle: 'block',
       fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
-      fontSize: 13,
+      fontSize: 13.5,
+      lineHeight: 1.35,
+      scrollback: 4000,
       theme: {
-        background: '#09090b',
-        foreground: '#e5e7eb',
-        cursor: '#ffffff',
+        background: '#0a0a0a',
+        foreground: '#d4d4d8',
+        cursor: '#f4f4f5',
+        selectionBackground: '#334155',
         black: '#18181b',
-        red: '#ef4444',
-        green: '#22c55e',
-        yellow: '#eab308',
-        blue: '#3b82f6',
-        magenta: '#a855f7',
-        cyan: '#06b6d4',
-        white: '#f4f4f5',
+        red: '#f87171',
+        green: '#4ade80',
+        yellow: '#facc15',
+        blue: '#60a5fa',
+        magenta: '#c084fc',
+        cyan: '#22d3ee',
+        white: '#e4e4e7',
         brightBlack: '#71717a',
-        brightRed: '#f87171',
-        brightGreen: '#4ade80',
-        brightYellow: '#facc15',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#c084fc',
-        brightCyan: '#22d3ee',
+        brightRed: '#fb7185',
+        brightGreen: '#86efac',
+        brightYellow: '#fde047',
+        brightBlue: '#93c5fd',
+        brightMagenta: '#d8b4fe',
+        brightCyan: '#67e8f9',
         brightWhite: '#ffffff',
       },
     })
@@ -420,7 +424,6 @@ export function ServerTerminalPanel({
     terminal.open(terminalRef.current)
     fitAddon.fit()
     terminal.focus()
-    terminal.writeln(`Connecting to ${selectedServerName}:${selectedApplicationDirectory}...`)
 
     const socket = new WebSocket(webSocketURL(`/api/servers/${selectedServerID}/terminal?application_id=${encodeURIComponent(selectedApplicationID)}`))
     const sendResize = () => {
@@ -435,7 +438,6 @@ export function ServerTerminalPanel({
 
     socket.addEventListener('open', () => {
       setStatus('connected')
-      terminal.clear()
       sendResize()
     })
     socket.addEventListener('message', (event) => {
@@ -511,7 +513,7 @@ export function ServerTerminalPanel({
             </div>
             <div className="font-mono text-xs text-zinc-400">ssh console</div>
           </div>
-          <div ref={terminalRef} className="h-[420px] p-2 [&_.xterm]:h-full [&_.xterm-viewport]:overflow-y-auto" />
+          <div ref={terminalRef} className="terminal-shell h-[420px] [&_.xterm]:h-full [&_.xterm-viewport]:overflow-y-auto" />
         </div>
       </div>
     </Panel>

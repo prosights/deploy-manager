@@ -112,7 +112,7 @@ func (s Server) serverTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if initialDirectory != "" {
-		if err := session.Start(fmt.Sprintf("cd %s && exec ${SHELL:-/bin/bash} -i", stringutil.ShellQuote(initialDirectory))); err != nil {
+		if err := session.Start(fmt.Sprintf("%s; cd %s && exec ${SHELL:-/bin/bash} -i", terminalColorEnv(), stringutil.ShellQuote(initialDirectory))); err != nil {
 			writeTerminalError(conn, err)
 			return
 		}
@@ -152,9 +152,9 @@ func (s Server) serverTerminal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) runLocalTerminal(ctx context.Context, conn *websocket.Conn, r *http.Request, server db.Server, initialDirectory string) {
-	commandText := "exec ${SHELL:-/bin/sh} -i"
+	commandText := terminalColorEnv() + "; " + terminalPromptEnv() + "; exec ${SHELL:-/bin/sh} -i"
 	if initialDirectory != "" {
-		commandText = "cd " + stringutil.ShellQuote(initialDirectory) + " && " + commandText
+		commandText = "cd " + stringutil.ShellQuote(initialDirectory) + " && { " + commandText + "; }"
 	}
 	command := exec.CommandContext(ctx, "sh", "-lc", commandText)
 	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 32, Cols: 120})
@@ -180,7 +180,7 @@ func (s Server) runTailscaleTerminal(ctx context.Context, conn *websocket.Conn, 
 
 	args := []string{"ssh", strings.TrimSpace(server.SshUser) + "@" + strings.TrimSpace(server.Hostname)}
 	if initialDirectory != "" {
-		args = append(args, "cd "+stringutil.ShellQuote(initialDirectory)+" && exec ${SHELL:-/bin/bash} -i")
+		args = append(args, terminalColorEnv()+"; cd "+stringutil.ShellQuote(initialDirectory)+" && exec ${SHELL:-/bin/bash} -i")
 	}
 	command := exec.CommandContext(ctx, "tailscale", args...)
 	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 32, Cols: 120})
@@ -192,6 +192,14 @@ func (s Server) runTailscaleTerminal(ctx context.Context, conn *websocket.Conn, 
 
 	s.audit(r, "server.terminal.open", "server", uuidString(server.ID), server.Name, map[string]any{"connection_mode": server.ConnectionMode, "application_directory": initialDirectory != ""})
 	bridgeTerminal(conn, terminal, command)
+}
+
+func terminalColorEnv() string {
+	return "export TERM=xterm-256color CLICOLOR=1 CLICOLOR_FORCE=1 COLORTERM=truecolor FORCE_COLOR=1"
+}
+
+func terminalPromptEnv() string {
+	return `ESC="$(printf '\033')"; export PS1="${ESC}[1;32m\\u@\\h${ESC}[0m:${ESC}[1;34m\\w${ESC}[0m $ "`
 }
 
 func bridgeTerminal(conn *websocket.Conn, terminal *os.File, command *exec.Cmd) {

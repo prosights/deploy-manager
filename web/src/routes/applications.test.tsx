@@ -335,6 +335,7 @@ function applicationFactory(overrides: Partial<Application>): Application {
     project_slug: 'billing',
     default_registry_id: null,
     default_registry_name: null,
+    github_auto_deploy: false,
     ...overrides,
   }
 }
