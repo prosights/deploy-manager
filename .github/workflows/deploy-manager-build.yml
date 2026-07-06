@@ -32,8 +32,8 @@ on:
         required: false
         default: ubuntu-latest
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -85,7 +85,7 @@ jobs:
           build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           version="${REF_NAME:-$branch}"
           create_version_tag="false"
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$branch" = "main" ]; then
+          if [ "$branch" = "main" ]; then
             git fetch --force --tags origin 'refs/tags/v0.0.*:refs/tags/v0.0.*'
             latest_patch="$(git tag --list 'v0.0.*' --sort=-v:refname | head -n 1 | awk -F. '{print $3}')"
             next_patch="$(( ${latest_patch:-0} + 1 ))"
