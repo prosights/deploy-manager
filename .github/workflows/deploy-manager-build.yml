@@ -80,7 +80,7 @@ jobs:
           build_time="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           version="${REF_NAME:-$branch}"
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$branch" = "main" ]; then
-            version="main-${GITHUB_RUN_NUMBER}-${short_sha}"
+            version="v0.0.${GITHUB_RUN_NUMBER}"
           fi
           image_name="${image_ref%:*}"
           tag_list="$image_ref"

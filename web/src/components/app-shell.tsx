@@ -140,11 +140,12 @@ export function AppShell() {
             })}
           </nav>
           <div className="mt-auto space-y-2 border-t p-3">
-            <div className={cn('rounded-md border bg-background/70 px-2 py-2 text-xs text-muted', collapsed && 'px-1 text-center')} title={versionTitle(appVersion?.version, appVersion?.commit_sha)}>
-              <div className="truncate font-mono font-medium text-ink">{collapsed ? shortVersionLabel(appVersion?.version) : versionLabel(appVersion?.version)}</div>
+            <div className={cn('rounded-md border bg-background/70 px-2 py-2 text-xs text-muted shadow-sm', collapsed && 'px-1 text-center')} title={versionTitle(appVersion?.version, appVersion?.commit_sha)}>
+              {!collapsed && <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Version</div>}
+              <div className="truncate font-mono text-sm font-semibold text-ink">{collapsed ? shortVersionLabel(appVersion?.version) : versionLabel(appVersion?.version)}</div>
               {!collapsed && (
                 <div className="mt-0.5 truncate font-mono">
-                  {appVersion?.commit_sha ? appVersion.commit_sha.slice(0, 12) : 'local build'}
+                  {versionDetail(appVersion?.version, appVersion?.commit_sha)}
                 </div>
               )}
             </div>
@@ -212,22 +213,44 @@ function projectSectionHref(projectID: string, section: string): string {
 }
 
 function versionLabel(version?: string): string {
-  return version ? `v ${version}` : 'v local'
+  const clean = normalizedVersion(version)
+  if (!clean) {
+    return 'Local'
+  }
+  if (clean.startsWith('v')) {
+    return clean
+  }
+  return `v${clean}`
 }
 
 function shortVersionLabel(version?: string): string {
-  if (!version) {
-    return 'v'
+  const clean = normalizedVersion(version)
+  if (!clean) {
+    return 'dev'
   }
-  if (version.startsWith('main-')) {
-    return `#${version.split('-')[1] ?? version.slice(0, 4)}`
+  if (clean.startsWith('v')) {
+    return clean.replace(/^v/, '')
   }
-  return version.slice(0, 6)
+  return clean.slice(0, 7)
 }
 
 function versionTitle(version?: string, commitSHA?: string): string {
   const label = versionLabel(version)
   return commitSHA ? `${label} ${commitSHA}` : label
+}
+
+function versionDetail(version?: string, commitSHA?: string): string {
+  if (!normalizedVersion(version)) {
+    return 'development build'
+  }
+  return commitSHA ? commitSHA.slice(0, 12) : 'commit unknown'
+}
+
+function normalizedVersion(version?: string): string {
+  if (!version || version === 'dev') {
+    return ''
+  }
+  return version.trim()
 }
 
 // Renders nothing for 150ms so fast suspense resolves invisibly.
