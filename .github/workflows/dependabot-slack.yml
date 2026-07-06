@@ -1,0 +1,45 @@
+name: Dependabot Slack notification
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - ready_for_review
+
+permissions:
+  pull-requests: read
+
+jobs:
+  notify:
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send to code-review
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CODE_REVIEW_WEBHOOK_URL }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_CODE_REVIEW_WEBHOOK_URL is not configured; skipping Slack notification."
+            exit 0
+          fi
+
+          payload=$(jq -n \
+            --arg repo "$REPOSITORY" \
+            --arg title "$PR_TITLE" \
+            --arg url "$PR_URL" \
+            --arg number "$PR_NUMBER" \
+            '{
+              text: ("Dependabot opened PR #" + $number + " in " + $repo + ": " + $title + " " + $url)
+            }')
+
+          curl --fail-with-body -X POST \
+            -H "Content-Type: application/json" \
+            --data "$payload" \
+            "$SLACK_WEBHOOK_URL"
