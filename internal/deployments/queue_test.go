@@ -174,6 +174,12 @@ func TestRemoteStepsUseRepositoryWhenConfigured(t *testing.T) {
 	if !strings.Contains(joined, "git clone") {
 		t.Fatal("expected repository sync command")
 	}
+	if strings.Contains(joined, "rm -rf '/srv/app'") {
+		t.Fatal("repository sync must not remove the deployment root")
+	}
+	if !strings.Contains(joined, "find '/srv/app' -mindepth 1 -maxdepth 1 -exec rm -rf {} +") {
+		t.Fatal("expected repository sync to clear deployment root contents")
+	}
 	if !strings.Contains(joined, "docker compose -f 'docker-compose.yml' config --quiet") {
 		t.Fatal("expected compose config validation command")
 	}
