@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, useEffect, useRef } from 'react'
 import { Ban, History, RotateCcw, Rocket, Save, ScrollText } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
@@ -265,6 +265,16 @@ export function DeploymentList({
   onCancel,
   onRetry,
 }: DeploymentListProps) {
+  const selectedDetailRef = useRef<HTMLTableRowElement | null>(null)
+
+  useEffect(() => {
+    if (!selectedDeployment?.id || !selectedDetailRef.current || typeof selectedDetailRef.current.scrollIntoView !== 'function') {
+      return
+    }
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    selectedDetailRef.current.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' })
+  }, [selectedDeployment?.id])
+
   return (
     <Panel>
       <div className="overflow-x-auto">
@@ -325,13 +335,13 @@ export function DeploymentList({
                     </td>
                   </tr>
                   {isSelected && (
-                    <tr className="border-t bg-accent/5">
+                    <tr ref={selectedDetailRef} className="border-t bg-background">
                       <td colSpan={8} className="p-0">
                         <DeploymentLogStream
                           deployment={deployment}
                           logs={selectedDeploymentLogs}
                           live={selectedDeploymentLive}
-                          className="border-t bg-background"
+                          className="border-t bg-background px-4 py-5"
                         />
                       </td>
                     </tr>
