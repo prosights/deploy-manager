@@ -23,6 +23,7 @@ import {
 } from './lib/queries'
 import { OverviewRoute } from './routes/overview'
 import { ProjectsRoute } from './routes/projects'
+import { ProjectDetailRoute } from './routes/project-detail'
 import { ServersRoute } from './routes/servers'
 import { ApplicationsRoute } from './routes/applications'
 import { DeploymentsRoute } from './routes/deployments'
@@ -49,7 +50,8 @@ const rootRoute = createRootRoute({
 
 const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/', component: OverviewRoute, loader: load(serversQuery, applicationsQuery, deploymentsQuery, credentialsQuery, connectorsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/projects', component: ProjectsRoute, loader: load(projectsQuery, environmentsQuery, applicationsQuery, serversQuery, containerRegistriesQuery, proxyRoutesQuery, githubRepositoriesQuery) }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/projects', component: ProjectsRoute, loader: load(projectsQuery, environmentsQuery, applicationsQuery, deploymentsQuery) }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/projects/$projectId', component: ProjectDetailRoute, loader: load(projectsQuery, environmentsQuery, applicationsQuery, serversQuery, containerRegistriesQuery, proxyRoutesQuery, githubRepositoriesQuery) }),
   createRoute({ getParentRoute: () => rootRoute, path: '/servers', component: ServersRoute, loader: load(serversQuery, applicationsQuery) }),
   createRoute({ getParentRoute: () => rootRoute, path: '/applications', component: ApplicationsRoute, loader: load(applicationsQuery, serversQuery, environmentsQuery) }),
   createRoute({ getParentRoute: () => rootRoute, path: '/deployments', component: DeploymentsRoute, loader: load(deploymentsQuery, applicationsQuery, containerRegistriesQuery) }),

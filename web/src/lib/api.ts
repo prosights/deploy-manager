@@ -253,6 +253,9 @@ export type Project = {
   description: string
   default_registry_id: string | null
   default_registry_name?: string | null
+  repository_connector_id: string | null
+  repository_full_name: string | null
+  repository_branch: string | null
   created_at: string
   updated_at: string
 }
@@ -449,6 +452,17 @@ export type GitHubDetectedServicesResponse = {
   services: GitHubDetectedService[]
 }
 
+export type GitHubRepositoryBranchesResponse = {
+  repository: string
+  branches: string[]
+}
+
+export type UpdateProjectRepositoryInput = {
+  connector_id?: string
+  repository?: string
+  branch?: string
+}
+
 export type ImportGitHubServicesInput = {
   connector_id: string
   repository: string
@@ -596,6 +610,13 @@ export function updateProjectRegistry(projectID: string, defaultRegistryID?: str
   })
 }
 
+export function updateProjectRepository(projectID: string, input: UpdateProjectRepositoryInput) {
+  return api<Project>(`/api/projects/${projectID}/repository`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
 export function listDeploymentLogs(deploymentID: string, init?: RequestInit) {
   return api<DeploymentLog[]>(`/api/deployments/${deploymentID}/logs`, init)
 }
@@ -716,6 +737,14 @@ export function deleteEnvironment(environmentID: string) {
 
 export function listGitHubRepositories(init?: RequestInit) {
   return api<GitHubRepository[]>('/api/github/repositories', init)
+}
+
+export function listGitHubRepositoryBranches(input: { connector_id: string, repository: string }) {
+  const params = new URLSearchParams({
+    connector_id: input.connector_id,
+    repository: input.repository,
+  })
+  return api<GitHubRepositoryBranchesResponse>(`/api/github/repositories/branches?${params}`)
 }
 
 export function detectGitHubRepositoryServices(input: { connector_id: string, repository: string, branch?: string }) {

@@ -183,13 +183,16 @@ type InstanceSetting struct {
 }
 
 type Project struct {
-	ID                pgtype.UUID        `json:"id"`
-	Name              string             `json:"name"`
-	Slug              string             `json:"slug"`
-	Description       string             `json:"description"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	DefaultRegistryID pgtype.UUID        `json:"default_registry_id"`
+	ID                    pgtype.UUID        `json:"id"`
+	Name                  string             `json:"name"`
+	Slug                  string             `json:"slug"`
+	Description           string             `json:"description"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	DefaultRegistryID     pgtype.UUID        `json:"default_registry_id"`
+	RepositoryConnectorID pgtype.UUID        `json:"repository_connector_id"`
+	RepositoryFullName    pgtype.Text        `json:"repository_full_name"`
+	RepositoryBranch      pgtype.Text        `json:"repository_branch"`
 }
 
 type ProxyRoute struct {

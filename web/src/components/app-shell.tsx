@@ -23,10 +23,9 @@ const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
 
 const projectNav: Array<{ hash: string, label: string, icon: typeof Gauge }> = [
   { hash: 'overview', label: 'Overview', icon: Layers3 },
-  { hash: 'environments', label: 'Environments', icon: GitBranch },
   { hash: 'services', label: 'Services', icon: Package },
+  { hash: 'environments', label: 'Environments', icon: GitBranch },
   { hash: 'deployments', label: 'Deployments', icon: Rocket },
-  { hash: 'targets', label: 'Deploy Targets', icon: Server },
   { hash: 'registry', label: 'Registry', icon: Container },
   { hash: 'routes', label: 'Proxy Routes', icon: Route },
   { hash: 'settings', label: 'Settings', icon: Settings },
@@ -63,7 +62,7 @@ export function AppShell() {
     '--color-accent-fg': accentForeground(safeAccent),
     '--color-accent-text': accentTextColor(safeAccent, theme),
   } as CSSProperties
-  const projectID = projectIDFromSearch(window.location.search)
+  const projectID = projectIDFromPath(location.pathname) || projectIDFromSearch(window.location.search)
   const activeProject = projects.find((project) => project.id === projectID)
   const activeEnvironments = activeProject ? environments.filter((environment) => environment.project_id === activeProject.id) : []
   const projectSection = activeProject ? projectSectionFromHash(location.hash) : ''
@@ -99,7 +98,7 @@ export function AppShell() {
           <nav className="flex flex-1 flex-col gap-1 px-3 py-3">
             {nav.map((item) => {
               const active = item.to === '/projects'
-                ? location.pathname === '/projects' || (location.pathname === '/deployments' && Boolean(activeProject))
+                ? location.pathname.startsWith('/projects') || (location.pathname === '/deployments' && Boolean(activeProject))
                 : location.pathname === item.to && !(item.to === '/deployments' && activeProject)
               const Icon = item.icon
               const to = item.to === '/deployments' && activeProject ? scopedHref('/deployments', activeProject.id) : item.to
@@ -128,7 +127,7 @@ export function AppShell() {
                         : projectSectionHref(activeProject.id, projectItem.hash)
                       const projectItemActive = projectItem.hash === 'deployments'
                         ? location.pathname === '/deployments'
-                        : projectSection === projectItem.hash && location.pathname === '/projects'
+                        : projectSection === projectItem.hash && location.pathname.startsWith('/projects/')
                       return (
                         <a
                           key={projectItem.hash}
@@ -211,7 +210,13 @@ export function AppShell() {
 
 function projectSectionFromHash(hash: string): string {
   const value = hash.replace(/^#/, '')
+  if (value === 'targets') return 'services'
   return projectNav.some((item) => item.hash === value && item.hash !== 'deployments') ? value : 'overview'
+}
+
+function projectIDFromPath(pathname: string): string {
+  const match = pathname.match(/^\/projects\/([^/]+)/)
+  return match ? decodeURIComponent(match[1]) : ''
 }
 
 function projectIDFromSearch(search: string): string {
@@ -219,7 +224,7 @@ function projectIDFromSearch(search: string): string {
 }
 
 function projectSectionHref(projectID: string, section: string): string {
-  return `/projects?project=${encodeURIComponent(projectID)}#${section}`
+  return `/projects/${encodeURIComponent(projectID)}#${section}`
 }
 
 function scopedHref(path: string, projectID: string): string {

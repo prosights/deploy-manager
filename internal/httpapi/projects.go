@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"deploy-manager/internal/db"
+	deploymentpkg "deploy-manager/internal/deployments"
+	"deploy-manager/internal/stringutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -118,6 +120,78 @@ func (s Server) updateProjectRegistry(w http.ResponseWriter, r *http.Request) {
 
 type updateProjectRegistryRequest struct {
 	DefaultRegistryID pgtype.UUID `json:"default_registry_id"`
+}
+
+type updateProjectRepositoryRequest struct {
+	ConnectorID string `json:"connector_id"`
+	Repository  string `json:"repository"`
+	Branch      string `json:"branch"`
+}
+
+// updateProjectRepository connects a project to one GitHub repository and
+// branch, or disconnects it when repository is blank. Services imported into
+// the project deploy from this source.
+func (s Server) updateProjectRepository(w http.ResponseWriter, r *http.Request) {
+	projectID, err := parseUUIDParam(r, "projectID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var request updateProjectRepositoryRequest
+	if err := readJSON(w, r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+	request.ConnectorID = strings.TrimSpace(request.ConnectorID)
+	request.Repository = strings.TrimSpace(request.Repository)
+	request.Branch = strings.TrimSpace(request.Branch)
+
+	params := db.UpdateProjectRepositoryParams{ID: projectID}
+	if request.Repository != "" {
+		connectorID, err := stringutil.PgUUID(request.ConnectorID)
+		if err != nil {
+			writeError(w, validationError("connector_id must be a uuid"))
+			return
+		}
+		account, err := s.queries.GetConnectorAccount(r.Context(), connectorID)
+		if err != nil {
+			writeError(w, applicationLookupError(err, "connector not found"))
+			return
+		}
+		if account.Provider != "github" || !account.Enabled {
+			writeError(w, validationError("connector must be an enabled github connector"))
+			return
+		}
+		repository, err := githubConnectorRepositoryAnyBranch(account.Config, request.Repository)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if request.Branch == "" {
+			request.Branch = repository.Branch
+		}
+		if request.Branch == "" {
+			request.Branch = "main"
+		}
+		if err := deploymentpkg.ValidateGitRefName(request.Branch); err != nil {
+			writeError(w, validationError("branch "+err.Error()))
+			return
+		}
+		params.RepositoryConnectorID = connectorID
+		params.RepositoryFullName = blankStringAsText(repository.Repository)
+		params.RepositoryBranch = blankStringAsText(request.Branch)
+	}
+	project, err := s.queries.UpdateProjectRepository(r.Context(), params)
+	if err != nil {
+		writeError(w, applicationLookupError(err, "project not found"))
+		return
+	}
+	s.audit(r, "project.repository_update", "project", uuidString(project.ID), project.Name, map[string]any{
+		"repository": project.RepositoryFullName.String,
+		"branch":     project.RepositoryBranch.String,
+		"connected":  project.RepositoryFullName.Valid,
+	})
+	writeJSON(w, http.StatusOK, project)
 }
 
 func (s Server) listEnvironments(w http.ResponseWriter, r *http.Request) {

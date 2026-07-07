@@ -55,6 +55,7 @@ type GitHubWebhookConfig struct {
 type GitHubAppRepositorySource interface {
 	ListInstallationRepositories(context.Context, string) ([]githubconnector.AppRepository, error)
 	ListRepositoryContents(context.Context, string, string, string, string) ([]githubconnector.RepositoryContent, error)
+	ListRepositoryBranches(context.Context, string, string) ([]string, error)
 	DispatchWorkflow(context.Context, string, string, string, string, map[string]string) error
 }
 
@@ -100,6 +101,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Patch("/projects/{projectID}", server.updateProject)
 			r.Delete("/projects/{projectID}", server.deleteProject)
 			r.Patch("/projects/{projectID}/registry", server.updateProjectRegistry)
+			r.Patch("/projects/{projectID}/repository", server.updateProjectRepository)
 			r.Get("/environments", server.listEnvironments)
 			r.Post("/environments", server.createEnvironment)
 			r.Delete("/environments/{environmentID}", server.deleteEnvironment)
@@ -140,6 +142,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Get("/github/status", server.githubStatus)
 			r.Get("/github/repositories", server.listGitHubRepositories)
 			r.Get("/github/repositories/detect", server.detectGitHubRepositoryServices)
+			r.Get("/github/repositories/branches", server.listGitHubRepositoryBranches)
 			r.Post("/projects/{projectID}/github/import", server.importGitHubRepositoryServices)
 			r.Get("/doppler/status", server.dopplerStatus)
 			r.Get("/container-registries", server.listContainerRegistries)
