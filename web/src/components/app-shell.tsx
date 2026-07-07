@@ -63,7 +63,7 @@ export function AppShell() {
     '--color-accent-text': accentTextColor(safeAccent, theme),
   } as CSSProperties
   const projectID = projectIDFromSearch(window.location.search)
-  const activeProject = location.pathname === '/projects' ? projects.find((project) => project.id === projectID) : undefined
+  const activeProject = projects.find((project) => project.id === projectID)
   const activeEnvironments = activeProject ? environments.filter((environment) => environment.project_id === activeProject.id) : []
   const projectSection = activeProject ? projectSectionFromHash(location.hash) : ''
   const contextLabel = activeProject
@@ -99,10 +99,11 @@ export function AppShell() {
             {nav.map((item) => {
               const active = location.pathname === item.to
               const Icon = item.icon
+              const to = item.to === '/deployments' && activeProject ? scopedHref('/deployments', activeProject.id) : item.to
               return (
                 <div key={item.to}>
                   <Link
-                    to={item.to}
+                    to={to}
                     className={cn(
                       'flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
                       active && 'bg-accent/15 text-accent-text',
@@ -210,6 +211,10 @@ function projectIDFromSearch(search: string): string {
 
 function projectSectionHref(projectID: string, section: string): string {
   return `/projects?project=${encodeURIComponent(projectID)}#${section}`
+}
+
+function scopedHref(path: string, projectID: string): string {
+  return `${path}?project=${encodeURIComponent(projectID)}`
 }
 
 function versionLabel(version?: string): string {

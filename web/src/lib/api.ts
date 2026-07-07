@@ -98,6 +98,13 @@ export type Deployment = {
   actor: string | null
   application_name?: string
   server_name?: string
+  environment_name?: string
+  environment_slug?: string
+  environment_kind?: 'production' | 'development' | 'preview'
+  environment_is_ephemeral?: boolean
+  project_id?: string
+  project_name?: string
+  project_slug?: string
   created_at: string
   started_at: string | null
   finished_at: string | null

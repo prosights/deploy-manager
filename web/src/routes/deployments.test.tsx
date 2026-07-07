@@ -7,6 +7,30 @@ import { useUiStore } from '../store/ui'
 import { DeploymentsRoute } from './deployments'
 
 const queryData = vi.hoisted(() => ({
+  projects: [
+    {
+      id: 'project_1',
+      name: 'Billing',
+      slug: 'billing',
+      description: 'Billing services',
+      default_environment_id: 'env_1',
+      default_registry_id: null,
+      default_registry_name: null,
+      created_at: '2026-06-23T00:00:00Z',
+      updated_at: '2026-06-23T00:00:00Z',
+    },
+    {
+      id: 'project_2',
+      name: 'Internal',
+      slug: 'internal',
+      description: 'Internal services',
+      default_environment_id: 'env_2',
+      default_registry_id: null,
+      default_registry_name: null,
+      created_at: '2026-06-23T00:00:00Z',
+      updated_at: '2026-06-23T00:00:00Z',
+    },
+  ],
   applications: [
     {
       id: 'app_1',
@@ -32,6 +56,34 @@ const queryData = vi.hoisted(() => ({
       project_id: 'project_1',
       project_name: 'Billing',
       project_slug: 'billing',
+      default_registry_id: null,
+      default_registry_name: null,
+      github_auto_deploy: false,
+    },
+    {
+      id: 'app_2',
+      environment_id: 'env_2',
+      server_id: 'server_2',
+      name: 'worker',
+      repository_url: null,
+      branch: 'main',
+      compose_path: 'docker-compose.yml',
+      remote_directory: '/srv/worker',
+      domain: null,
+      health_check_url: 'http://127.0.0.1:{port}/healthz?color={color}' as string | null,
+      doppler_project: null,
+      doppler_config: null,
+      status: 'idle',
+      current_version: null,
+      target_version: null,
+      server_name: 'prod-2',
+      environment_name: 'Production',
+      environment_slug: 'production',
+      environment_kind: 'production',
+      environment_is_ephemeral: false,
+      project_id: 'project_2',
+      project_name: 'Internal',
+      project_slug: 'internal',
       default_registry_id: null,
       default_registry_name: null,
       github_auto_deploy: false,
@@ -106,6 +158,10 @@ vi.mock('../lib/queries', () => ({
     queryKey: ['applications'],
     queryFn: async () => queryData.applications,
   },
+  projectsQuery: {
+    queryKey: ['projects'],
+    queryFn: async () => queryData.projects,
+  },
   deploymentsQuery: {
     queryKey: ['deployments'],
     queryFn: async () => [
@@ -120,13 +176,13 @@ vi.mock('../lib/queries', () => ({
         actor: 'local-user',
         application_name: 'api',
         server_name: 'prod-1',
-      environment_name: 'Production',
-      environment_slug: 'production',
-      environment_kind: 'production',
-      environment_is_ephemeral: false,
-      project_id: 'project_1',
-      project_name: 'Billing',
-      project_slug: 'billing',
+        environment_name: 'Production',
+        environment_slug: 'production',
+        environment_kind: 'production',
+        environment_is_ephemeral: false,
+        project_id: 'project_1',
+        project_name: 'Billing',
+        project_slug: 'billing',
         created_at: '2026-06-23T00:00:00Z',
         started_at: null,
         finished_at: null,
@@ -142,13 +198,35 @@ vi.mock('../lib/queries', () => ({
         actor: 'local-user',
         application_name: 'api',
         server_name: 'prod-1',
-      environment_name: 'Production',
-      environment_slug: 'production',
-      environment_kind: 'production',
-      environment_is_ephemeral: false,
-      project_id: 'project_1',
-      project_name: 'Billing',
-      project_slug: 'billing',
+        environment_name: 'Production',
+        environment_slug: 'production',
+        environment_kind: 'production',
+        environment_is_ephemeral: false,
+        project_id: 'project_1',
+        project_name: 'Billing',
+        project_slug: 'billing',
+        created_at: '2026-06-23T00:00:00Z',
+        started_at: '2026-06-23T00:00:01Z',
+        finished_at: '2026-06-23T00:00:02Z',
+      },
+      {
+        id: 'deployment_3',
+        application_id: 'app_2',
+        server_id: 'server_2',
+        trigger: 'manual',
+        strategy: 'blue_green',
+        status: 'succeeded',
+        commit_sha: 'def5678',
+        actor: 'local-user',
+        application_name: 'worker',
+        server_name: 'prod-2',
+        environment_name: 'Production',
+        environment_slug: 'production',
+        environment_kind: 'production',
+        environment_is_ephemeral: false,
+        project_id: 'project_2',
+        project_name: 'Internal',
+        project_slug: 'internal',
         created_at: '2026-06-23T00:00:00Z',
         started_at: '2026-06-23T00:00:01Z',
         finished_at: '2026-06-23T00:00:02Z',
@@ -173,6 +251,7 @@ describe('DeploymentsRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     MockEventSource.instances = []
+    window.history.pushState(null, '', '/deployments')
     queryData.applications[0].health_check_url = 'http://127.0.0.1:{port}/healthz?color={color}'
     useDeploymentSelection.setState({ selectedDeploymentID: '' })
     useUiStore.setState({ searchQuery: '', sidebarCollapsed: false })
@@ -381,6 +460,25 @@ describe('DeploymentsRoute', () => {
       expect(retryDeployment).toHaveBeenCalledWith('deployment_2')
     })
     expect(createDeployment).not.toHaveBeenCalled()
+  })
+
+  it('scopes deployment history and queue targets to the selected project', async () => {
+    const client = new QueryClient()
+
+    render(
+      <QueryClientProvider client={client}>
+        <DeploymentsRoute />
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('Billing deployments')).toBeInTheDocument()
+    expect(screen.getAllByText('api / prod-1')).not.toHaveLength(0)
+    expect(screen.queryByText('worker')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Project scope'), { target: { value: 'all' } })
+
+    expect(await screen.findByText('All deployments')).toBeInTheDocument()
+    expect(screen.getAllByText('worker')).not.toHaveLength(0)
   })
 
   it('rolls back blue-green targets without changing the strategy dropdown first', async () => {

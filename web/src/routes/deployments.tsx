@@ -2,20 +2,22 @@ import { useMutation, useQuery, useQueryClient, useSuspenseQueries } from '@tans
 import { useEffect, useMemo, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
+import { SelectInput } from '../components/ui/select-input'
 import { blueGreenHealthCheckError, DeploymentList, DeploymentQueuePanel } from '../features/deployments/components'
 import { useDeploymentLogs } from '../features/deployments/logs'
-import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, updateApplication, type Application, type ContainerRegistry, type CreateDeploymentInput } from '../lib/api'
-import { applicationsQuery, containerRegistriesQuery, deploymentsQuery, deploymentSlotsQuery } from '../lib/queries'
+import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, updateApplication, type Application, type ContainerRegistry, type CreateDeploymentInput, type Deployment } from '../lib/api'
+import { applicationsQuery, containerRegistriesQuery, deploymentsQuery, deploymentSlotsQuery, projectsQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
 import { useDeploymentSelection } from '../store/deployments'
 import { useUiStore } from '../store/ui'
 
 const manualRegistryID = '__manual__'
+const allProjectsID = 'all'
 
 export function DeploymentsRoute() {
   const queryClient = useQueryClient()
-  const [{ data: deployments }, { data: applications }, { data: registries }] = useSuspenseQueries({
-    queries: [deploymentsQuery, applicationsQuery, containerRegistriesQuery],
+  const [{ data: deployments }, { data: applications }, { data: registries }, { data: projects }] = useSuspenseQueries({
+    queries: [deploymentsQuery, applicationsQuery, containerRegistriesQuery, projectsQuery],
   })
   const searchQuery = useUiStore((state) => state.searchQuery)
   const selectedDeploymentID = useDeploymentSelection((state) => state.selectedDeploymentID)
@@ -30,10 +32,30 @@ export function DeploymentsRoute() {
   const [healthCheckDraft, setHealthCheckDraft] = useState({ applicationID: '', value: '' })
   const [actor, setActor] = useState('')
   const [formError, setFormError] = useState<string>()
-  const visibleDeployments = deployments.filter((deployment) => matchesSearch(searchQuery, [
+  const projectIDFromURL = deploymentProjectIDFromSearch(window.location.search)
+  const selectedProjectID = validDeploymentProjectID(projectIDFromURL, projects)
+  const selectedProject = selectedProjectID === allProjectsID ? undefined : projects.find((project) => project.id === selectedProjectID)
+  const applicationProjectIDs = useMemo(
+    () => new Map(applications.map((application) => [application.id, application.project_id])),
+    [applications],
+  )
+  const scopedApplications = useMemo(
+    () => selectedProjectID === allProjectsID
+      ? applications
+      : applications.filter((application) => application.project_id === selectedProjectID),
+    [applications, selectedProjectID],
+  )
+  const scopedDeployments = useMemo(
+    () => selectedProjectID === allProjectsID
+      ? deployments
+      : deployments.filter((deployment) => deploymentProjectID(deployment, applicationProjectIDs) === selectedProjectID),
+    [applicationProjectIDs, deployments, selectedProjectID],
+  )
+  const visibleDeployments = scopedDeployments.filter((deployment) => matchesSearch(searchQuery, [
     deployment.id,
     deployment.application_name,
     deployment.server_name,
+    deployment.project_name,
     deployment.trigger,
     deployment.strategy,
     deployment.status,
@@ -41,8 +63,8 @@ export function DeploymentsRoute() {
     deployment.actor,
   ]))
   const target = useMemo(
-    () => applications.find((application) => application.id === applicationID) ?? applications[0],
-    [applications, applicationID],
+    () => scopedApplications.find((application) => application.id === applicationID) ?? scopedApplications[0],
+    [applicationID, scopedApplications],
   )
   const selectedDeployment = useMemo(
     () => visibleDeployments.find((deployment) => deployment.id === selectedDeploymentID),
@@ -125,6 +147,12 @@ export function DeploymentsRoute() {
   })
 
   useEffect(() => {
+    if (!projectIDFromURL && projects[0]) {
+      replaceDeploymentProjectURL(projects[0].id)
+    }
+  }, [projectIDFromURL, projects])
+
+  useEffect(() => {
     if (!visibleDeployments.length && selectedDeploymentID) {
       setSelectedDeploymentID('')
       return
@@ -137,11 +165,32 @@ export function DeploymentsRoute() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Deployments"
-        description="Audit trail, blue-green strategy, webhook/manual triggers, and historical logs."
+        title={selectedProject ? `${selectedProject.name} deployments` : 'All deployments'}
+        description={selectedProject
+          ? 'Project-scoped deploy queue, blue-green history, rollback, and logs.'
+          : 'All project deployment history. Pick a project to reduce noise.'}
+        actionNode={(
+          <div className="w-full max-w-xs">
+            <SelectInput
+              label="Project scope"
+              value={selectedProjectID}
+              onChange={(projectID) => {
+                replaceDeploymentProjectURL(projectID)
+                setApplicationID('')
+                setRegistryOverrideID(null)
+                setSelectedDeploymentID('')
+              }}
+            >
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>{project.name}</option>
+              ))}
+              <option value={allProjectsID}>All projects</option>
+            </SelectInput>
+          </div>
+        )}
       />
       <DeploymentQueuePanel
-        applications={applications}
+        applications={scopedApplications}
         target={target}
         deploymentSlots={deploymentSlots}
         healthCheckDraft={healthCheckDraftValue}
@@ -188,7 +237,7 @@ export function DeploymentsRoute() {
       />
       {!target && (
         <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
-          Create an application target before queueing a deployment.
+          {selectedProject ? `Create a service in ${selectedProject.name} before queueing a deployment.` : 'Create an application target before queueing a deployment.'}
         </div>
       )}
       {(formError || deploy.error) && <BlockError message={formError ?? deploy.error?.message ?? 'Deployment could not be queued.'} />}
@@ -209,6 +258,30 @@ export function DeploymentsRoute() {
       {rollback.error && <BlockError message={rollback.error.message} />}
     </div>
   )
+}
+
+function deploymentProjectIDFromSearch(search: string): string {
+  return new URLSearchParams(search).get('project') ?? ''
+}
+
+function validDeploymentProjectID(projectID: string, projects: Array<{ id: string }>): string {
+  if (projectID === allProjectsID) {
+    return allProjectsID
+  }
+  if (projects.some((project) => project.id === projectID)) {
+    return projectID
+  }
+  return projects[0]?.id ?? allProjectsID
+}
+
+function replaceDeploymentProjectURL(projectID: string): void {
+  const nextProjectID = projectID || allProjectsID
+  const url = nextProjectID === allProjectsID ? '/deployments?project=all' : `/deployments?project=${encodeURIComponent(nextProjectID)}`
+  window.history.replaceState(null, '', url)
+}
+
+function deploymentProjectID(deployment: Deployment, applicationProjectIDs: Map<string, string>): string | undefined {
+  return deployment.project_id ?? applicationProjectIDs.get(deployment.application_id)
 }
 
 function applicationUpdateInput(application: Application, healthCheckURL: string) {
