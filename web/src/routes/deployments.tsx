@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { BlockError } from '../components/ui/error-message'
 import { blueGreenHealthCheckError, DeploymentList, DeploymentQueuePanel } from '../features/deployments/components'
-import { DeploymentLogsPanel, useDeploymentLogs } from '../features/deployments/logs'
+import { useDeploymentLogs } from '../features/deployments/logs'
 import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, updateApplication, type Application, type ContainerRegistry, type CreateDeploymentInput } from '../lib/api'
 import { applicationsQuery, containerRegistriesQuery, deploymentsQuery, deploymentSlotsQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
@@ -196,16 +196,17 @@ export function DeploymentsRoute() {
       <DeploymentList
         deployments={visibleDeployments}
         selectedDeployment={selectedDeployment}
+        selectedDeploymentLogs={logs}
+        selectedDeploymentLive={live}
         isCancelling={cancel.isPending}
         isRetrying={retry.isPending}
-        onInspect={setSelectedDeploymentID}
+        onInspect={(deploymentID) => setSelectedDeploymentID(selectedDeploymentID === deploymentID ? '' : deploymentID)}
         onCancel={(deploymentID) => cancel.mutate(deploymentID)}
         onRetry={(deploymentID) => retry.mutate(deploymentID)}
       />
       {cancel.error && <BlockError message={cancel.error.message} />}
       {retry.error && <BlockError message={retry.error.message} />}
       {rollback.error && <BlockError message={rollback.error.message} />}
-      <DeploymentLogsPanel deployment={selectedDeployment} logs={logs} live={live} />
     </div>
   )
 }

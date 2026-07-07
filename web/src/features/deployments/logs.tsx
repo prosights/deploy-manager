@@ -78,33 +78,47 @@ export function DeploymentLogsPanel({
   return (
     <Panel title="Deployment logs">
       {!deployment && <div className="p-4 text-sm text-muted">Select a deployment to inspect logs.</div>}
-      {deployment && (
-        <>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-            <div>
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <ScrollText className="size-4 text-accent" />
-                {deployment.application_name ?? deployment.id.slice(0, 8)}
-              </div>
-              <div className="mt-1 text-xs text-muted">{deployment.server_name ?? 'server'} / {deployment.id}</div>
-            </div>
-            <Badge tone={live ? 'accent' : 'neutral'}>
-              <Radio className="mr-1 size-3" />
-              {live ? 'live stream' : 'disconnected'}
-            </Badge>
-          </div>
-          <div className="max-h-[420px] overflow-auto bg-background p-4 font-mono text-xs leading-6">
-            {logs.length === 0 && <div className="text-muted">No logs have been written yet.</div>}
-            {logs.map((entry, index) => (
-              <div key={`${entry.id ?? 'live'}-${index}`} className={entry.stream === 'stderr' ? 'text-danger' : entry.stream === 'system' ? 'text-accent' : 'text-muted'}>
-                <span className="mr-2 text-muted/70">{entry.stream}</span>
-                <span className="whitespace-pre-wrap">{entry.message}</span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
+      {deployment && <DeploymentLogStream deployment={deployment} logs={logs} live={live} />}
     </Panel>
+  )
+}
+
+export function DeploymentLogStream({
+  deployment,
+  logs,
+  live = false,
+  className = '',
+}: {
+  deployment: DeploymentSummary
+  logs: DeploymentLog[]
+  live?: boolean
+  className?: string
+}) {
+  return (
+    <div className={className}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <ScrollText className="size-4 text-accent" />
+            {deployment.application_name ?? deployment.id.slice(0, 8)}
+          </div>
+          <div className="mt-1 text-xs text-muted">{deployment.server_name ?? 'server'} / {deployment.id}</div>
+        </div>
+        <Badge tone={live ? 'accent' : 'neutral'}>
+          <Radio className="mr-1 size-3" />
+          {live ? 'live stream' : 'disconnected'}
+        </Badge>
+      </div>
+      <div className="max-h-[min(52vh,520px)] overflow-auto bg-background p-4 font-mono text-xs leading-6">
+        {logs.length === 0 && <div className="text-muted">No logs have been written yet.</div>}
+        {logs.map((entry, index) => (
+          <div key={`${entry.id ?? 'live'}-${index}`} className={entry.stream === 'stderr' ? 'text-danger' : entry.stream === 'system' ? 'text-accent' : 'text-muted'}>
+            <span className="mr-2 text-muted/70">{entry.stream}</span>
+            <span className="whitespace-pre-wrap">{entry.message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 

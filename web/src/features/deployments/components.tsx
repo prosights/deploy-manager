@@ -1,12 +1,14 @@
+import { Fragment } from 'react'
 import { Ban, History, RotateCcw, Rocket, Save, ScrollText } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Panel } from '../../components/ui/panel'
 import { SelectInput } from '../../components/ui/select-input'
 import { TextInput } from '../../components/ui/text-input'
-import type { Application, ContainerRegistry, Deployment, DeploymentSlot } from '../../lib/api'
+import type { Application, ContainerRegistry, Deployment, DeploymentLog, DeploymentSlot } from '../../lib/api'
 import { validateHealthCheckURL } from '../../lib/urls'
 import { statusTone } from '../status'
+import { DeploymentLogStream } from './logs'
 
 type DeploymentQueuePanelProps = {
   applications: Application[]
@@ -243,6 +245,8 @@ export function blueGreenHealthCheckError(value: string): string {
 type DeploymentListProps = {
   deployments: Deployment[]
   selectedDeployment?: Deployment
+  selectedDeploymentLogs: DeploymentLog[]
+  selectedDeploymentLive: boolean
   isCancelling: boolean
   isRetrying: boolean
   onInspect: (deploymentID: string) => void
@@ -253,6 +257,8 @@ type DeploymentListProps = {
 export function DeploymentList({
   deployments,
   selectedDeployment,
+  selectedDeploymentLogs,
+  selectedDeploymentLive,
   isCancelling,
   isRetrying,
   onInspect,
@@ -276,42 +282,63 @@ export function DeploymentList({
             </tr>
           </thead>
           <tbody>
-            {deployments.map((deployment) => (
-              <tr key={deployment.id} className={deployment.id === selectedDeployment?.id ? 'border-t bg-accent/5' : 'border-t'}>
-                <td className="px-4 py-3 font-mono text-xs text-muted">{deployment.id.slice(0, 8)}</td>
-                <td className="px-4 py-3">
-                  <div className="font-medium">{deployment.application_name}</div>
-                  <div className="text-xs text-muted">{deployment.server_name}</div>
-                </td>
-                <td className="px-4 py-3 text-muted">{deployment.strategy}</td>
-                <td className="px-4 py-3 text-muted">{deployment.trigger}</td>
-                <td className="px-4 py-3">
-                  <Badge tone={statusTone(deployment.status)}>{deployment.status}</Badge>
-                </td>
-                <td className="px-4 py-3 text-muted">{deployment.actor ?? 'system'}</td>
-                <td className="max-w-60 truncate px-4 py-3 font-mono text-xs text-muted">{deployment.image_digest?.slice(0, 19) ?? deployment.image_ref ?? deployment.commit_sha?.slice(0, 12) ?? 'n/a'}</td>
-                <td className="px-4 py-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="ghost" onClick={() => onInspect(deployment.id)}>
-                      <ScrollText className="size-4" />
-                      Inspect
-                    </Button>
-                    {deployment.status === 'queued' && (
-                      <Button variant="ghost" disabled={isCancelling} onClick={() => onCancel(deployment.id)}>
-                        <Ban className="size-4" />
-                        Cancel
-                      </Button>
-                    )}
-                    {(deployment.status === 'failed' || deployment.status === 'cancelled') && (
-                      <Button variant="ghost" disabled={isRetrying} onClick={() => onRetry(deployment.id)}>
-                        <RotateCcw className="size-4" />
-                        Retry
-                      </Button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {deployments.map((deployment) => {
+              const isSelected = deployment.id === selectedDeployment?.id
+              return (
+                <Fragment key={deployment.id}>
+                  <tr className={isSelected ? 'border-t bg-accent/5' : 'border-t'}>
+                    <td className="px-4 py-3 font-mono text-xs text-muted">{deployment.id.slice(0, 8)}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{deployment.application_name}</div>
+                      <div className="text-xs text-muted">{deployment.server_name}</div>
+                    </td>
+                    <td className="px-4 py-3 text-muted">{deployment.strategy}</td>
+                    <td className="px-4 py-3 text-muted">{deployment.trigger}</td>
+                    <td className="px-4 py-3">
+                      <Badge tone={statusTone(deployment.status)}>{deployment.status}</Badge>
+                    </td>
+                    <td className="px-4 py-3 text-muted">{deployment.actor ?? 'system'}</td>
+                    <td className="max-w-60 truncate px-4 py-3 font-mono text-xs text-muted">{deployment.image_digest?.slice(0, 19) ?? deployment.image_ref ?? deployment.commit_sha?.slice(0, 12) ?? 'n/a'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant={isSelected ? 'secondary' : 'ghost'}
+                          aria-expanded={isSelected}
+                          onClick={() => onInspect(deployment.id)}
+                        >
+                          <ScrollText className="size-4" />
+                          {isSelected ? 'Hide logs' : 'Inspect'}
+                        </Button>
+                        {deployment.status === 'queued' && (
+                          <Button variant="ghost" disabled={isCancelling} onClick={() => onCancel(deployment.id)}>
+                            <Ban className="size-4" />
+                            Cancel
+                          </Button>
+                        )}
+                        {(deployment.status === 'failed' || deployment.status === 'cancelled') && (
+                          <Button variant="ghost" disabled={isRetrying} onClick={() => onRetry(deployment.id)}>
+                            <RotateCcw className="size-4" />
+                            Retry
+                          </Button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                  {isSelected && (
+                    <tr className="border-t bg-accent/5">
+                      <td colSpan={8} className="p-0">
+                        <DeploymentLogStream
+                          deployment={deployment}
+                          logs={selectedDeploymentLogs}
+                          live={selectedDeploymentLive}
+                          className="border-t bg-background"
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       </div>
