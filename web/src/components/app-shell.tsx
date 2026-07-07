@@ -25,6 +25,7 @@ const projectNav: Array<{ hash: string, label: string, icon: typeof Gauge }> = [
   { hash: 'overview', label: 'Overview', icon: Layers3 },
   { hash: 'environments', label: 'Environments', icon: GitBranch },
   { hash: 'services', label: 'Services', icon: Package },
+  { hash: 'deployments', label: 'Deployments', icon: Rocket },
   { hash: 'targets', label: 'Deploy Targets', icon: Server },
   { hash: 'registry', label: 'Registry', icon: Container },
   { hash: 'routes', label: 'Proxy Routes', icon: Route },
@@ -97,7 +98,9 @@ export function AppShell() {
           </div>
           <nav className="flex flex-1 flex-col gap-1 px-3 py-3">
             {nav.map((item) => {
-              const active = location.pathname === item.to
+              const active = item.to === '/projects'
+                ? location.pathname === '/projects' || (location.pathname === '/deployments' && Boolean(activeProject))
+                : location.pathname === item.to && !(item.to === '/deployments' && activeProject)
               const Icon = item.icon
               const to = item.to === '/deployments' && activeProject ? scopedHref('/deployments', activeProject.id) : item.to
               return (
@@ -120,13 +123,19 @@ export function AppShell() {
                     </div>
                     {projectNav.map((projectItem) => {
                       const ProjectIcon = projectItem.icon
+                      const href = projectItem.hash === 'deployments'
+                        ? scopedHref('/deployments', activeProject.id)
+                        : projectSectionHref(activeProject.id, projectItem.hash)
+                      const projectItemActive = projectItem.hash === 'deployments'
+                        ? location.pathname === '/deployments'
+                        : projectSection === projectItem.hash && location.pathname === '/projects'
                       return (
                         <a
                           key={projectItem.hash}
-                          href={projectSectionHref(activeProject.id, projectItem.hash)}
+                          href={href}
                           className={cn(
                             'flex h-8 items-center gap-2 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
-                            projectSection === projectItem.hash && 'bg-accent/15 text-accent-text',
+                            projectItemActive && 'bg-accent/15 text-accent-text',
                           )}
                         >
                           <ProjectIcon className="size-3.5 shrink-0" aria-hidden="true" />
@@ -202,7 +211,7 @@ export function AppShell() {
 
 function projectSectionFromHash(hash: string): string {
   const value = hash.replace(/^#/, '')
-  return projectNav.some((item) => item.hash === value) ? value : 'overview'
+  return projectNav.some((item) => item.hash === value && item.hash !== 'deployments') ? value : 'overview'
 }
 
 function projectIDFromSearch(search: string): string {

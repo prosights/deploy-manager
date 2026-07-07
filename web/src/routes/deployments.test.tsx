@@ -462,7 +462,7 @@ describe('DeploymentsRoute', () => {
     expect(createDeployment).not.toHaveBeenCalled()
   })
 
-  it('scopes deployment history and queue targets to the selected project', async () => {
+  it('scopes deployment history and queue targets to the selected project service', async () => {
     const client = new QueryClient()
 
     render(
@@ -471,13 +471,14 @@ describe('DeploymentsRoute', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByText('Billing deployments')).toBeInTheDocument()
+    expect(await screen.findByText('api deployments')).toBeInTheDocument()
+    expect(screen.getByText('Deployments are scoped to one service at a time.')).toBeInTheDocument()
     expect(screen.getAllByText('api / prod-1')).not.toHaveLength(0)
     expect(screen.queryByText('worker')).not.toBeInTheDocument()
 
-    fireEvent.change(screen.getByLabelText('Project scope'), { target: { value: 'all' } })
+    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'project_2' } })
 
-    expect(await screen.findByText('All deployments')).toBeInTheDocument()
+    expect(await screen.findByText('worker deployments')).toBeInTheDocument()
     expect(screen.getAllByText('worker')).not.toHaveLength(0)
   })
 
