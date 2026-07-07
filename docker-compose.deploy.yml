@@ -15,6 +15,7 @@ services:
       - "${DOCKER_GROUP_ID:-988}"
       - "${DEPLOY_APPS_GROUP_ID:-987}"
     volumes:
+      - /srv/deploy-manager/control/.env:/srv/deploy-manager/control/.env:ro
       - /srv/deploy-manager/control/secrets:/app/secrets:ro
       - /srv/deploy-manager/apps:/srv/deploy-manager/apps
       - /var/run/docker.sock:/var/run/docker.sock
