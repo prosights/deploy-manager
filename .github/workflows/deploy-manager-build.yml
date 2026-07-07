@@ -1,6 +1,9 @@
 name: Deploy Manager image
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       deploy_manager_build_id:
@@ -46,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.commit_sha || inputs.branch || github.ref_name }}
+          ref: ${{ inputs.commit_sha || inputs.branch || github.sha }}
           fetch-depth: 0
 
       - id: image
@@ -91,11 +94,13 @@ jobs:
           image_name="${image_ref%:*}"
           tag_list="$image_ref"
           tag_list="$tag_list"$'\n'"$image_name:sha-$short_sha"
+          deploy_image_ref="$image_name:sha-$short_sha"
 
           if [ "$branch" = "main" ]; then
             tag_list="$tag_list"$'\n'"$image_name:main"
             tag_list="$tag_list"$'\n'"$image_name:main-$short_sha"
             tag_list="$tag_list"$'\n'"$image_name:$version"
+            deploy_image_ref="$image_name:main-$short_sha"
           fi
 
           if [[ "$REF_NAME" == v* ]]; then
@@ -107,6 +112,7 @@ jobs:
             printf '%s\n' "$tag_list" | awk 'NF && !seen[$0]++'
             echo EOF
             echo "image_ref=$image_ref"
+            echo "deploy_image_ref=$deploy_image_ref"
             echo "version=$version"
             echo "commit_sha=$commit_sha"
             echo "build_time=$build_time"
@@ -170,6 +176,33 @@ jobs:
             -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data "{\"status\":\"succeeded\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"external_url\":\"$RUN_URL\"}"
+
+      - name: Queue deploy-manager deployment
+        if: ${{ success() && github.event_name == 'push' }}
+        env:
+          DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_DEPLOY_URL || vars.DEPLOY_MANAGER_API_URL }}
+          DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
+          DEPLOY_MANAGER_APPLICATION_ID: ${{ vars.DEPLOY_MANAGER_APPLICATION_ID }}
+          IMAGE_REF: ${{ steps.image.outputs.deploy_image_ref }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          COMMIT_SHA: ${{ steps.image.outputs.commit_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DEPLOY_MANAGER_API_URL" ]; then
+            echo "DEPLOY_MANAGER_DEPLOY_URL or DEPLOY_MANAGER_API_URL repo variable is required" >&2
+            exit 1
+          fi
+          if [ -z "$DEPLOY_MANAGER_APPLICATION_ID" ]; then
+            echo "DEPLOY_MANAGER_APPLICATION_ID repo variable is required" >&2
+            exit 1
+          fi
+
+          curl --fail-with-body -X POST "$DEPLOY_MANAGER_API_URL/api/deployments" \
+            -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"application_id\":\"$DEPLOY_MANAGER_APPLICATION_ID\",\"trigger\":\"github_push\",\"strategy\":\"blue_green\",\"commit_sha\":\"$COMMIT_SHA\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"actor\":\"github-actions:$RUN_ID\"}"
 
       - name: Report failure
         if: ${{ failure() && github.event_name == 'workflow_dispatch' }}
