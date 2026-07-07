@@ -1,0 +1,33 @@
+services:
+  app:
+    image: "${DEPLOY_IMAGE:?DEPLOY_IMAGE is required}"
+    env_file:
+      - "${CONTROL_ENV_FILE:-/srv/deploy-manager/control/.env}"
+    environment:
+      HTTP_ADDR: ":8080"
+      STATIC_DIR: /app/web/dist
+      SSH_KNOWN_HOSTS_PATH: /app/known_hosts
+      DEPLOY_COLOR: "${DEPLOY_COLOR:-blue}"
+      DEPLOY_PORT: "${DEPLOY_PORT:?DEPLOY_PORT is required}"
+    ports:
+      - "127.0.0.1:${DEPLOY_PORT}:8080"
+    group_add:
+      - "${DOCKER_GROUP_ID:-988}"
+      - "${DEPLOY_APPS_GROUP_ID:-987}"
+    volumes:
+      - /srv/deploy-manager/control/secrets:/app/secrets:ro
+      - /srv/deploy-manager/apps:/srv/deploy-manager/apps
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+    networks:
+      - control
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+networks:
+  control:
+    external: true
+    name: control_default

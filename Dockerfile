@@ -16,7 +16,7 @@ RUN go build -o /out/deploy-manager ./cmd/server
 
 FROM alpine:3.23
 WORKDIR /app
-RUN apk add --no-cache ca-certificates docker-cli docker-cli-compose git openssh-client tailscale && \
+RUN apk add --no-cache ca-certificates curl docker-cli docker-cli-compose git openssh-client tailscale && \
     wget -q -t3 'https://packages.doppler.com/public/cli/rsa.8004D9FF50437357.key' -O /etc/apk/keys/cli@doppler-8004D9FF50437357.rsa.pub && \
     echo 'https://packages.doppler.com/public/cli/alpine/any-version/main' >> /etc/apk/repositories && \
     apk add --no-cache doppler && \
