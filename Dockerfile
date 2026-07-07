@@ -21,8 +21,9 @@ RUN apk add --no-cache ca-certificates curl docker-cli docker-cli-compose git op
     echo 'https://packages.doppler.com/public/cli/alpine/any-version/main' >> /etc/apk/repositories && \
     apk add --no-cache doppler && \
     adduser -D deploy && \
+    mkdir -p /home/deploy/.docker && \
     touch /app/known_hosts && \
-    chown deploy:deploy /app/known_hosts && \
+    chown -R deploy:deploy /app/known_hosts /home/deploy/.docker && \
     chmod 600 /app/known_hosts
 COPY --from=server /out/deploy-manager /usr/local/bin/deploy-manager
 COPY --from=web /src/web/dist ./web/dist

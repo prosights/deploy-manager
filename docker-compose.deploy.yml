@@ -18,6 +18,7 @@ services:
       - /srv/deploy-manager/control/.env:/srv/deploy-manager/control/.env:ro
       - /srv/deploy-manager/control/secrets:/app/secrets:ro
       - /srv/deploy-manager/apps:/srv/deploy-manager/apps
+      - /srv/deploy-manager/control/docker-config/config.json:/home/deploy/.docker/config.json:ro
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
     networks:
