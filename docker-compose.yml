@@ -52,6 +52,7 @@ services:
       - "8080:8080"
     group_add:
       - "${DOCKER_GROUP_ID:-999}"
+      - "${DEPLOY_APPS_GROUP_ID:-987}"
     volumes:
       - ~/.config/deploy-manager:/app/secrets:ro
       - /srv/deploy-manager/apps:/srv/deploy-manager/apps
