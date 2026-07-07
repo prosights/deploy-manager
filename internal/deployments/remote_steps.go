@@ -21,6 +21,8 @@ type remoteStep struct {
 type remoteStepOptions struct {
 	targetColor string
 	imageRef    string
+	bluePort    string
+	greenPort   string
 }
 
 const (
@@ -297,21 +299,21 @@ func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions)
 	if isSourceDeploy(target) {
 		steps = append(steps, remoteStep{
 			label:   "Building next color images",
-			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s build --pull", remoteDir, colorPortCommand(), project, composePath),
+			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s build --pull", remoteDir, colorPortCommand(options), project, composePath),
 		})
 	} else {
 		steps = append(steps, remoteStep{
 			label:   "Pulling next color images",
-			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s pull", remoteDir, colorPortCommand(), project, composePath),
+			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s pull", remoteDir, colorPortCommand(options), project, composePath),
 		})
 	}
 	steps = append(steps, remoteStep{
 		label:   "Starting next color stack",
-		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s up -d --remove-orphans", remoteDir, colorPortCommand(), project, composePath),
+		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s up -d --remove-orphans", remoteDir, colorPortCommand(options), project, composePath),
 	})
 	steps = append(steps, remoteStep{
 		label:   "Checking next color health",
-		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 \"$url\" >/dev/null", remoteDir, colorPortCommand(), stringutil.ShellQuote(target.HealthCheckUrl.String)),
+		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 \"$url\" >/dev/null", remoteDir, colorPortCommand(options), stringutil.ShellQuote(target.HealthCheckUrl.String)),
 	})
 	steps = append(steps,
 		remoteStep{
@@ -322,8 +324,16 @@ func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions)
 	return steps
 }
 
-func colorPortCommand() string {
-	return "if [ \"$color\" = \"blue\" ]; then printf %s \"${BLUE_DEPLOY_PORT:-3101}\"; else printf %s \"${GREEN_DEPLOY_PORT:-3102}\"; fi"
+func colorPortCommand(options remoteStepOptions) string {
+	bluePort := strings.TrimSpace(options.bluePort)
+	if bluePort == "" {
+		bluePort = "3101"
+	}
+	greenPort := strings.TrimSpace(options.greenPort)
+	if greenPort == "" {
+		greenPort = "3102"
+	}
+	return fmt.Sprintf("if [ \"$color\" = \"blue\" ]; then printf %%s \"${BLUE_DEPLOY_PORT:-%s}\"; else printf %%s \"${GREEN_DEPLOY_PORT:-%s}\"; fi", bluePort, greenPort)
 }
 
 func defaultTargetColor(color string) string {

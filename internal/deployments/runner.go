@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"unicode/utf8"
 
@@ -196,7 +197,11 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 	if err != nil {
 		return err
 	}
-	steps, err := remoteSteps(target, variables, remoteStepOptions{targetColor: targetColor})
+	ports, err := r.blueGreenPorts(ctx, target)
+	if err != nil {
+		return err
+	}
+	steps, err := remoteSteps(target, variables, remoteStepOptions{targetColor: targetColor, bluePort: ports.blue, greenPort: ports.green})
 	if err != nil {
 		return err
 	}
@@ -347,7 +352,11 @@ func (r Runner) checkColorHealth(ctx context.Context, target db.GetDeploymentTar
 	if !target.HealthCheckUrl.Valid || healthCheckURL == "" {
 		return fmt.Errorf("blue_green deployments require a health_check_url")
 	}
-	command := fmt.Sprintf("curl -fsS --retry 3 --retry-delay 1 %s >/dev/null", shellQuoteColorURL(healthCheckURL, color))
+	ports, err := r.blueGreenPorts(ctx, target)
+	if err != nil {
+		return err
+	}
+	command := fmt.Sprintf("curl -fsS --retry 3 --retry-delay 1 %s >/dev/null", shellQuoteColorURL(healthCheckURL, color, ports))
 	if output, err := client.Run(ctx, command); err != nil {
 		if strings.TrimSpace(output) != "" {
 			return fmt.Errorf("rollback health check failed: %w: %s", err, strings.TrimSpace(output))
@@ -357,17 +366,62 @@ func (r Runner) checkColorHealth(ctx context.Context, target db.GetDeploymentTar
 	return nil
 }
 
-func shellQuoteColorURL(healthCheckURL string, color string) string {
+func shellQuoteColorURL(healthCheckURL string, color string, ports blueGreenPorts) string {
 	healthCheckURL = strings.ReplaceAll(healthCheckURL, "{color}", color)
-	healthCheckURL = strings.ReplaceAll(healthCheckURL, "{port}", colorPort(color))
+	healthCheckURL = strings.ReplaceAll(healthCheckURL, "{port}", colorPort(color, ports))
 	return stringutil.ShellQuote(healthCheckURL)
 }
 
-func colorPort(color string) string {
+func colorPort(color string, ports blueGreenPorts) string {
 	if color == "green" {
+		if ports.green != "" {
+			return ports.green
+		}
 		return "3102"
 	}
+	if ports.blue != "" {
+		return ports.blue
+	}
 	return "3101"
+}
+
+type blueGreenPorts struct {
+	blue  string
+	green string
+}
+
+func (r Runner) blueGreenPorts(ctx context.Context, target db.GetDeploymentTargetRow) (blueGreenPorts, error) {
+	if target.Strategy != "blue_green" {
+		return blueGreenPorts{}, nil
+	}
+	routes, err := r.queries.ListProxyRouteTargetsForApplication(ctx, db.ListProxyRouteTargetsForApplicationParams{
+		ApplicationID: target.ApplicationID,
+		ServerID:      target.ServerID,
+	})
+	if err != nil {
+		return blueGreenPorts{}, fmt.Errorf("load proxy route ports: %w", err)
+	}
+	for _, route := range routes {
+		ports := blueGreenPorts{
+			blue:  upstreamPort(route.BlueUpstreamUrl),
+			green: upstreamPort(route.GreenUpstreamUrl),
+		}
+		if ports.blue != "" || ports.green != "" {
+			return ports, nil
+		}
+	}
+	return blueGreenPorts{}, nil
+}
+
+func upstreamPort(value pgtype.Text) string {
+	if !value.Valid {
+		return ""
+	}
+	parsed, err := url.Parse(strings.TrimSpace(value.String))
+	if err != nil {
+		return ""
+	}
+	return parsed.Port()
 }
 
 func (r Runner) applyProxyRoutes(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow, client remoteRunner, color string) error {
