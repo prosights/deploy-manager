@@ -313,7 +313,7 @@ func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions)
 	})
 	steps = append(steps, remoteStep{
 		label:   "Checking next color health",
-		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 \"$url\" >/dev/null", remoteDir, colorPortCommand(options), stringutil.ShellQuote(target.HealthCheckUrl.String)),
+		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 --retry-connrefused \"$url\" >/dev/null", remoteDir, colorPortCommand(options), stringutil.ShellQuote(target.HealthCheckUrl.String)),
 	})
 	steps = append(steps,
 		remoteStep{
