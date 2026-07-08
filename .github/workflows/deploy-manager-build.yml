@@ -130,7 +130,7 @@ jobs:
 
       - name: Show Google deploy identity
         if: ${{ github.event_name == 'push' }}
-        run: gcloud auth list --filter=status:ACTIVE --format='value(account)'
+        run: gcloud auth list --filter=status:ACTIVE --format='value(account)' | sed 's/@/ at /'
 
       - uses: docker/setup-buildx-action@v3
 
