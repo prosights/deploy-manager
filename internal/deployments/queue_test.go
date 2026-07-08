@@ -174,6 +174,9 @@ func TestRemoteStepsUseRepositoryWhenConfigured(t *testing.T) {
 	if !strings.Contains(joined, "git clone") {
 		t.Fatal("expected repository sync command")
 	}
+	if !strings.Contains(joined, "git reset --hard origin/'main'") {
+		t.Fatal("expected repository sync to reset tracked local changes before deploy")
+	}
 	if strings.Contains(joined, "rm -rf '/srv/app'") {
 		t.Fatal("repository sync must not remove the deployment root")
 	}

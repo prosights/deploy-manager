@@ -128,10 +128,6 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Show Google deploy identity
-        if: ${{ github.event_name == 'push' }}
-        run: gcloud auth list --filter=status:ACTIVE --format='value(account)' | sed 's/@/ at /'
-
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to Artifact Registry
@@ -182,36 +178,6 @@ jobs:
             -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data "{\"status\":\"succeeded\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"external_url\":\"$RUN_URL\"}"
-
-      - name: Sync deploy compose over IAP
-        if: ${{ success() && github.event_name == 'push' }}
-        env:
-          GCE_PROJECT: ${{ vars.DEPLOY_MANAGER_GCE_PROJECT }}
-          GCE_ZONE: ${{ vars.DEPLOY_MANAGER_GCE_ZONE }}
-          GCE_INSTANCE: ${{ vars.DEPLOY_MANAGER_GCE_INSTANCE }}
-          REMOTE_DIR: ${{ vars.DEPLOY_MANAGER_REMOTE_DIR }}
-        run: |
-          set -euo pipefail
-
-          if [ -z "$GCE_PROJECT" ] || [ -z "$GCE_ZONE" ] || [ -z "$GCE_INSTANCE" ] || [ -z "$REMOTE_DIR" ]; then
-            echo "DEPLOY_MANAGER_GCE_PROJECT, DEPLOY_MANAGER_GCE_ZONE, DEPLOY_MANAGER_GCE_INSTANCE, and DEPLOY_MANAGER_REMOTE_DIR repo variables are required" >&2
-            exit 1
-          fi
-
-          gcloud compute scp docker-compose.deploy.yml "$GCE_INSTANCE:/tmp/deploy-manager-compose.yml" \
-            --project "$GCE_PROJECT" \
-            --zone "$GCE_ZONE" \
-            --tunnel-through-iap \
-            --port 2345 \
-            --quiet
-
-          gcloud compute ssh "$GCE_INSTANCE" \
-            --project "$GCE_PROJECT" \
-            --zone "$GCE_ZONE" \
-            --tunnel-through-iap \
-            --ssh-flag="-p 2345" \
-            --quiet \
-            --command "set -euo pipefail; if [ ! -d '$REMOTE_DIR' ]; then sudo install -d -g deployers -m 2775 '$REMOTE_DIR'; fi; sudo install -m 0644 /tmp/deploy-manager-compose.yml '$REMOTE_DIR/docker-compose.deploy.yml'; rm -f /tmp/deploy-manager-compose.yml"
 
       - name: Queue deploy-manager deployment over IAP
         if: ${{ success() && github.event_name == 'push' }}

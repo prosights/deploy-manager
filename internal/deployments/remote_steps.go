@@ -59,7 +59,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 		steps = append(steps, remoteStep{
 			label: "Syncing repository",
 			command: fmt.Sprintf(
-				"if [ -d %[1]s/.git ]; then cd %[1]s && git fetch --prune origin %[2]s && git checkout %[2]s && git pull --ff-only origin %[2]s; else find %[1]s -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --branch %[2]s %[3]s %[1]s; fi%[4]s",
+				"if [ -d %[1]s/.git ]; then cd %[1]s && git fetch --prune origin %[2]s && git reset --hard && git checkout %[2]s && git reset --hard origin/%[2]s; else find %[1]s -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --branch %[2]s %[3]s %[1]s; fi%[4]s",
 				remoteDir,
 				branch,
 				repository,
