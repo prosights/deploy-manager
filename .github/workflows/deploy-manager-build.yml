@@ -142,7 +142,8 @@ jobs:
         with:
           context: ${{ inputs.build_context || '.' }}
           file: ${{ inputs.dockerfile || 'Dockerfile' }}
-          push: true
+          load: true
+          push: false
           tags: ${{ steps.image.outputs.tags }}
           build-args: |
             APP_VERSION=${{ steps.image.outputs.version }}
@@ -150,6 +151,39 @@ jobs:
             APP_BUILD_TIME=${{ steps.image.outputs.build_time }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - id: push
+        name: Push image tags
+        shell: bash
+        env:
+          TAGS: ${{ steps.image.outputs.tags }}
+          DEPLOY_IMAGE_REF: ${{ steps.image.outputs.deploy_image_ref }}
+        run: |
+          set -euo pipefail
+
+          push_tag() {
+            local tag="$1"
+            local attempt
+            for attempt in 1 2 3; do
+              if docker push "$tag"; then
+                return 0
+              fi
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+
+          while IFS= read -r tag; do
+            if [ -n "$tag" ]; then
+              push_tag "$tag"
+            fi
+          done <<< "$TAGS"
+
+          digest="$(docker buildx imagetools inspect "$DEPLOY_IMAGE_REF" --format '{{ .Manifest.Digest }}' 2>/dev/null || true)"
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            digest=""
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Store version tag
         if: ${{ success() && steps.image.outputs.create_version_tag == 'true' }}
@@ -170,7 +204,7 @@ jobs:
           DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}
           DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
           IMAGE_REF: ${{ steps.image.outputs.image_ref }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
           BUILD_ID: ${{ inputs.deploy_manager_build_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -188,7 +222,7 @@ jobs:
           GCE_ZONE: ${{ vars.DEPLOY_MANAGER_GCE_ZONE }}
           GCE_INSTANCE: ${{ vars.DEPLOY_MANAGER_GCE_INSTANCE }}
           IMAGE_REF: ${{ steps.image.outputs.deploy_image_ref }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
           COMMIT_SHA: ${{ steps.image.outputs.commit_sha }}
           RUN_ID: ${{ github.run_id }}
         run: |
