@@ -51,8 +51,9 @@ import {
   serversQuery,
 } from '../lib/queries'
 import { validateHealthCheckURL } from '../lib/urls'
+import { DeploymentsRoute } from './deployments'
 
-type ProjectSection = 'overview' | 'services' | 'environments' | 'registry' | 'routes' | 'settings'
+type ProjectSection = 'overview' | 'applications' | 'environments' | 'deployments' | 'registry' | 'routes' | 'settings'
 
 type EnvironmentForm = {
   name: string
@@ -95,12 +96,13 @@ type RouteForm = {
   tls_enabled: boolean
 }
 
-const projectSections: ProjectSection[] = ['overview', 'services', 'environments', 'registry', 'routes', 'settings']
+const projectSections: ProjectSection[] = ['overview', 'applications', 'environments', 'deployments', 'registry', 'routes', 'settings']
 
 const sectionLabels: Record<ProjectSection, string> = {
   overview: 'Overview',
-  services: 'Services',
+  applications: 'Applications',
   environments: 'Environments',
+  deployments: 'Deployments',
   registry: 'Registry',
   routes: 'Routes',
   settings: 'Settings',
@@ -169,11 +171,11 @@ export function ProjectDetailRoute({ projectId: projectIdProp }: { projectId?: s
         <div className="space-y-5">
           <ProjectSourcePanel project={project} githubRepositories={githubRepositories} />
           <ProjectSetupPath project={project} environments={projectEnvironments} applications={projectApplications} proxyRoutes={projectRoutes} />
-          <EnvironmentBoard title="Services by environment" environments={projectEnvironments} applications={projectApplications} />
+          <EnvironmentBoard title="Applications by environment" environments={projectEnvironments} applications={projectApplications} />
         </div>
       )}
-      {section === 'services' && (
-        <ProjectServicesSection
+      {section === 'applications' && (
+        <ProjectApplicationsSection
           project={project}
           environments={projectEnvironments}
           applications={projectApplications}
@@ -182,6 +184,7 @@ export function ProjectDetailRoute({ projectId: projectIdProp }: { projectId?: s
         />
       )}
       {section === 'environments' && <ProjectEnvironments project={project} environments={projectEnvironments} applications={projectApplications} />}
+      {section === 'deployments' && <DeploymentsRoute projectId={project.id} embedded />}
       {section === 'registry' && <ProjectRegistry project={project} registries={registries} />}
       {section === 'routes' && <ProjectRoutes applications={projectApplications} routes={projectRoutes} />}
       {section === 'settings' && <ProjectSettings project={project} />}
@@ -223,12 +226,12 @@ function ProjectHeader({
               <Badge tone={project.default_registry_id ? 'success' : 'neutral'}>{project.default_registry_name ?? 'registry not set'}</Badge>
             </div>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
-              {project.description || `${project.name} groups the environments, services, and routes for one product.`}
+              {project.description || `${project.name} groups the environments, applications, and routes for one product.`}
             </p>
           </div>
           <dl className="grid grid-cols-3 gap-3 text-sm">
             <ProjectFact label="Envs" value={String(environments.length)} />
-            <ProjectFact label="Services" value={String(applications.length)} />
+            <ProjectFact label="Applications" value={String(applications.length)} />
             <ProjectFact label="Routes" value={String(proxyRoutes.length)} />
           </dl>
         </div>
@@ -352,7 +355,7 @@ function ProjectSourcePanel({ project, githubRepositories }: { project: Project,
         {connected
           ? <>Deploys build from <span className="font-mono text-xs text-ink">{project.repository_full_name}#{project.repository_branch}</span>. Change the branch here to deploy a different one.</>
           : repoOptions.length > 0
-            ? 'Connect the repository this project deploys from, then pick the services inside it on the Services tab.'
+            ? 'Connect the repository this project deploys from, then pick the applications inside it on the Applications tab.'
             : 'No GitHub repositories available. Install the GitHub app on the Connectors page first.'}
       </div>
       {(loadBranches.error || save.error || disconnect.error) && (
@@ -376,7 +379,7 @@ function ProjectSetupPath({
   proxyRoutes: ProxyRouteRecord[]
 }) {
   const production = environments.find((environment) => environment.kind === 'production')
-  const activeServices = applications.filter((application) => application.status === 'healthy' || application.status === 'deploying')
+  const activeApplications = applications.filter((application) => application.status === 'healthy' || application.status === 'deploying')
   return (
     <Panel title="Setup path">
       <div className="divide-y">
@@ -390,10 +393,10 @@ function ProjectSetupPath({
         />
         <SetupAction
           icon={Server}
-          label="Services"
-          value={`${activeServices.length} active / ${applications.length} service${applications.length === 1 ? '' : 's'}`}
-          action="Deploy"
-          href="#services"
+          label="Applications"
+          value={`${activeApplications.length} active / ${applications.length} application${applications.length === 1 ? '' : 's'}`}
+          action="Create"
+          href="#applications"
           complete={applications.length > 0}
         />
         <SetupAction
@@ -445,7 +448,7 @@ function SetupAction({ icon: Icon, label, value, action, href, complete }: { ico
   )
 }
 
-function ProjectServicesSection({
+function ProjectApplicationsSection({
   project,
   environments,
   applications,
@@ -470,13 +473,13 @@ function ProjectServicesSection({
             />
           )
         : <ProjectSourcePanel project={project} githubRepositories={githubRepositories} />}
-      <ManualServicePlacement project={project} environments={environments} servers={servers} githubRepositories={githubRepositories} />
-      <ServiceList applications={applications} />
+      <ManualApplicationPlacement project={project} environments={environments} servers={servers} githubRepositories={githubRepositories} />
+      <ApplicationList applications={applications} />
     </div>
   )
 }
 
-// ProjectRepositoryDeploy detects deployable services inside the connected
+// ProjectRepositoryDeploy detects deployable applications inside the connected
 // repository (monorepo folders with a compose file) and creates the selected
 // ones on a chosen environment and server.
 function ProjectRepositoryDeploy({
@@ -512,7 +515,7 @@ function ProjectRepositoryDeploy({
     mutationFn: () => {
       const services = detectedServices.filter((service) => selectedServices.has(service.name))
       if (!environmentID || !serverID || services.length === 0) {
-        throw new Error('Select an environment, a server, and at least one service.')
+        throw new Error('Select an environment, a server, and at least one application.')
       }
       return importGitHubRepositoryServices(project.id, {
         connector_id: project.repository_connector_id ?? '',
@@ -535,7 +538,7 @@ function ProjectRepositoryDeploy({
   })
 
   return (
-    <Panel title={`Deploy from ${project.repository_full_name}#${project.repository_branch ?? 'main'}`}>
+    <Panel title={`Create applications from ${project.repository_full_name}#${project.repository_branch ?? 'main'}`}>
       <div className="grid gap-4 p-4 lg:grid-cols-[1fr_auto]">
         <div className="grid gap-3 md:grid-cols-2">
           <SelectInput label="Environment" value={environmentID} onChange={setEnvironmentID}>
@@ -549,7 +552,7 @@ function ProjectRepositoryDeploy({
         </div>
         <div className="flex items-end gap-2">
           <Button type="button" variant="ghost" disabled={detect.isPending} onClick={() => detect.mutate()}>
-            {detect.isPending ? 'Scanning repository...' : 'Detect services'}
+            {detect.isPending ? 'Scanning repository...' : 'Detect applications'}
           </Button>
           <Button
             type="button"
@@ -558,16 +561,16 @@ function ProjectRepositoryDeploy({
             onClick={() => importServices.mutate()}
           >
             {importServices.isPending
-              ? 'Deploying...'
+              ? 'Creating...'
               : selectedServices.size > 0
-                ? `Deploy ${selectedServices.size} service${selectedServices.size === 1 ? '' : 's'}`
-                : 'Deploy services'}
+                ? `Create ${selectedServices.size} application${selectedServices.size === 1 ? '' : 's'}`
+                : 'Create applications'}
           </Button>
         </div>
       </div>
       {detectedServices.length > 0 && (
         <div className="border-t p-4">
-          <div className="mb-3 text-sm font-medium text-ink">Services found in this repository</div>
+          <div className="mb-3 text-sm font-medium text-ink">Applications found in this repository</div>
           <div className="grid gap-2 md:grid-cols-3">
             {detectedServices.map((service) => (
               <label key={service.name} className="flex items-start gap-3 rounded-md border bg-background p-3 text-sm">
@@ -596,11 +599,11 @@ function ProjectRepositoryDeploy({
       )}
       {detect.isSuccess && detectedServices.length === 0 && (
         <div className="border-t px-4 py-3 text-sm text-muted">
-          No compose services detected. Each deployable service needs a folder with a docker-compose file.
+          No compose applications detected. Each deployable application needs a folder with a docker-compose file.
         </div>
       )}
       <div className="border-t px-4 py-3 text-sm text-muted">
-        Several services from one repository can share a single server. Each one becomes its own compose stack with an independent deploy lifecycle.
+        Several applications from one repository can share a single server. Each one becomes its own compose stack with an independent deploy lifecycle.
       </div>
       {(detect.error || importServices.error) && (
         <div className="border-t px-4 py-3">
@@ -611,7 +614,7 @@ function ProjectRepositoryDeploy({
   )
 }
 
-function ManualServicePlacement({
+function ManualApplicationPlacement({
   project,
   environments,
   servers,
@@ -639,7 +642,7 @@ function ManualServicePlacement({
   const selectedEnvironment = environments.find((environment) => environment.id === validEnvironmentID)
   const selectedRepository = githubRepositories.find((repository) => repository.clone_url === form.repository_url)
   return (
-    <Panel title="Add service manually">
+    <Panel title="Add application manually">
       <form
         className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-[180px_220px_1fr_220px_auto]"
         onSubmit={(event) => {
@@ -648,7 +651,7 @@ function ManualServicePlacement({
           try {
             validateServiceForm({ ...form, environment_id: validEnvironmentID })
           } catch (cause) {
-            setError(cause instanceof Error ? cause.message : 'Service placement is invalid.')
+            setError(cause instanceof Error ? cause.message : 'Application placement is invalid.')
             return
           }
           create.mutate()
@@ -694,7 +697,7 @@ function ManualServicePlacement({
           ))}
         </SelectInput>
         <TextInput
-          label="Service"
+          label="Application"
           value={form.name}
           onChange={(name) => setForm((state) => ({
             ...state,
@@ -721,13 +724,13 @@ function ManualServicePlacement({
           </>
         )}
       </form>
-      <div className="border-t px-4 py-3 text-sm text-muted">One service is one compose stack in one environment on one server.</div>
-      {(error || create.error) && <div className="border-t px-4 py-3"><InlineError message={error ?? create.error?.message ?? 'Service placement could not be saved.'} /></div>}
+      <div className="border-t px-4 py-3 text-sm text-muted">One application is one compose stack in one environment on one server.</div>
+      {(error || create.error) && <div className="border-t px-4 py-3"><InlineError message={error ?? create.error?.message ?? 'Application placement could not be saved.'} /></div>}
     </Panel>
   )
 }
 
-function ServiceList({ applications }: { applications: Application[] }) {
+function ApplicationList({ applications }: { applications: Application[] }) {
   const queryClient = useQueryClient()
   const remove = useMutation({
     mutationFn: deleteApplication,
@@ -736,12 +739,12 @@ function ServiceList({ applications }: { applications: Application[] }) {
     },
   })
   return (
-    <Panel title="Services">
+    <Panel title="Applications">
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead className="text-xs text-muted">
             <tr>
-              <th className="px-4 py-3 font-medium">Service</th>
+              <th className="px-4 py-3 font-medium">Application</th>
               <th className="px-4 py-3 font-medium">Environment</th>
               <th className="px-4 py-3 font-medium">Server</th>
               <th className="px-4 py-3 font-medium">Branch</th>
@@ -767,9 +770,9 @@ function ServiceList({ applications }: { applications: Application[] }) {
                     type="button"
                     variant="ghost"
                     className="h-8 px-2 text-danger"
-                    aria-label={`Delete service ${application.name}`}
+                    aria-label={`Delete application ${application.name}`}
                     onClick={() => {
-                      if (window.confirm(`Delete service ${application.name}?`)) {
+                      if (window.confirm(`Delete application ${application.name}?`)) {
                         remove.mutate(application.id)
                       }
                     }}
@@ -782,7 +785,7 @@ function ServiceList({ applications }: { applications: Application[] }) {
           </tbody>
         </table>
       </div>
-      {applications.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No services in this project yet. Deploy some from the repository above.</div>}
+      {applications.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No applications in this project yet. Create some from the repository above.</div>}
       {remove.error && <div className="border-t px-4 py-3"><InlineError message={remove.error.message} /></div>}
     </Panel>
   )
@@ -965,14 +968,14 @@ function ProjectRoutes({ applications, routes }: { applications: Application[], 
           }}
         >
           <SelectInput
-            label="Service"
+            label="Application"
             value={form.application_id}
             onChange={(application_id) => {
               const app = applications.find((item) => item.id === application_id)
               setForm((state) => ({ ...state, application_id, domain: app?.domain ?? state.domain }))
             }}
           >
-            <option value="" disabled>Select service</option>
+            <option value="" disabled>Select application</option>
             {applications.map((application) => <option key={application.id} value={application.id}>{application.name} / {application.environment_name}</option>)}
           </SelectInput>
           <TextInput label="Domain" value={form.domain} onChange={(domain) => setForm((state) => ({ ...state, domain }))} required />
@@ -995,7 +998,7 @@ function ProjectRoutes({ applications, routes }: { applications: Application[], 
             <thead className="text-xs text-muted">
               <tr>
                 <th className="px-4 py-3 font-medium">Domain</th>
-                <th className="px-4 py-3 font-medium">Service</th>
+                <th className="px-4 py-3 font-medium">Application</th>
                 <th className="px-4 py-3 font-medium">Upstream</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Actions</th>
@@ -1005,7 +1008,7 @@ function ProjectRoutes({ applications, routes }: { applications: Application[], 
               {routes.map((route) => (
                 <tr key={route.id} className="border-t">
                   <td className="px-4 py-3 font-medium">{route.domain}</td>
-                  <td className="px-4 py-3 text-muted">{route.application_name ?? 'unlinked service'}</td>
+                  <td className="px-4 py-3 text-muted">{route.application_name ?? 'unlinked application'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-muted">{route.upstream_url}</td>
                   <td className="px-4 py-3"><Badge tone={statusTone(route.status)}>{route.status}</Badge></td>
                   <td className="px-4 py-3">
@@ -1116,7 +1119,7 @@ function ProjectSettings({ project }: { project: Project }) {
       <Panel title="Danger zone">
         <div className="flex flex-wrap items-center justify-between gap-3 p-4">
           <p className="max-w-2xl text-sm leading-6 text-muted">
-            Deleting a project only works once its services are removed. Environments are deleted with it.
+            Deleting a project only works once its applications are removed. Environments are deleted with it.
           </p>
           <Button
             type="button"
@@ -1125,7 +1128,7 @@ function ProjectSettings({ project }: { project: Project }) {
             disabled={remove.isPending}
             aria-label={`Delete project ${project.name}`}
             onClick={() => {
-              if (window.confirm(`Delete ${project.name}? This only works when no services depend on it.`)) {
+              if (window.confirm(`Delete ${project.name}? This only works when no applications depend on it.`)) {
                 remove.mutate()
               }
             }}
@@ -1166,12 +1169,12 @@ function EnvironmentBoard({ title = 'Environments', environments, applications }
             environment={environment}
             applications={applications.filter((application) => application.environment_id === environment.id)}
             onDeleteEnvironment={() => {
-              if (window.confirm(`Delete ${environment.name}? Remove services first.`)) {
+              if (window.confirm(`Delete ${environment.name}? Remove applications first.`)) {
                 removeEnvironment.mutate(environment.id)
               }
             }}
             onDeleteApplication={(application) => {
-              if (window.confirm(`Delete service ${application.name}?`)) {
+              if (window.confirm(`Delete application ${application.name}?`)) {
                 removeApplication.mutate(application.id)
               }
             }}
@@ -1199,7 +1202,7 @@ function EnvironmentColumn({ environment, applications, onDeleteEnvironment, onD
           <div className="mt-1 truncate text-xs text-muted">{environmentDetail(environment)}</div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="text-xs text-muted">{applications.length} service{applications.length === 1 ? '' : 's'}</div>
+          <div className="text-xs text-muted">{applications.length} app{applications.length === 1 ? '' : 's'}</div>
           <Button type="button" variant="ghost" className="h-8 px-2 text-danger" aria-label={`Delete environment ${environment.name}`} onClick={onDeleteEnvironment}>
             <Trash2 className="size-4" />
           </Button>
@@ -1207,7 +1210,7 @@ function EnvironmentColumn({ environment, applications, onDeleteEnvironment, onD
       </header>
       <div className="divide-y">
         {applications.map((application) => <ApplicationRow key={application.id} application={application} onDelete={() => onDeleteApplication(application)} />)}
-        {applications.length === 0 && <div className="px-3 py-4 text-sm text-muted">No services in this environment.</div>}
+        {applications.length === 0 && <div className="px-3 py-4 text-sm text-muted">No applications in this environment.</div>}
       </div>
     </section>
   )
@@ -1223,7 +1226,7 @@ function ApplicationRow({ application, onDelete }: { application: Application, o
         </div>
         <div className="flex items-center gap-2">
           <Badge tone={statusTone(application.status)}>{application.status}</Badge>
-          <Button type="button" variant="ghost" className="h-8 px-2 text-danger" aria-label={`Delete service ${application.name}`} onClick={onDelete}>
+          <Button type="button" variant="ghost" className="h-8 px-2 text-danger" aria-label={`Delete application ${application.name}`} onClick={onDelete}>
             <Trash2 className="size-4" />
           </Button>
         </div>
@@ -1401,7 +1404,7 @@ function validateEnvironmentForm(form: EnvironmentForm): void {
 
 function validateServiceForm(form: ServiceForm): void {
   if (!form.environment_id || !form.server_id || !form.name.trim() || !form.remote_directory.trim()) {
-    throw new Error('Environment, server, service name, and remote directory are required.')
+    throw new Error('Environment, server, application name, and remote directory are required.')
   }
   validateRemoteDirectory(form.remote_directory)
   validateGitBranch(form.branch)
@@ -1429,7 +1432,7 @@ function validateRegistryForm(form: RegistryForm): void {
 
 function validateRouteForm(form: RouteForm): void {
   if (!form.application_id.trim()) {
-    throw new Error('Service is required.')
+    throw new Error('Application is required.')
   }
   validateDomain(form.domain)
   validateProxyUpstream(form.upstream_url)
@@ -1555,6 +1558,6 @@ function hasControlCharacters(value: string): boolean {
 
 function sectionFromHash(hash: string): ProjectSection {
   const value = hash.replace(/^#/, '')
-  if (value === 'targets') return 'services'
+  if (value === 'targets' || value === 'services') return 'applications'
   return projectSections.includes(value as ProjectSection) ? value as ProjectSection : 'overview'
 }

@@ -14,7 +14,12 @@ import { useUiStore } from '../store/ui'
 
 const manualRegistryID = '__manual__'
 
-export function DeploymentsRoute() {
+type DeploymentsRouteProps = {
+  projectId?: string
+  embedded?: boolean
+}
+
+export function DeploymentsRoute({ projectId, embedded = false }: DeploymentsRouteProps = {}) {
   const queryClient = useQueryClient()
   const [{ data: deployments }, { data: applications }, { data: registries }, { data: projects }] = useSuspenseQueries({
     queries: [deploymentsQuery, applicationsQuery, containerRegistriesQuery, projectsQuery],
@@ -32,9 +37,10 @@ export function DeploymentsRoute() {
   const [actor, setActor] = useState('')
   const [formError, setFormError] = useState<string>()
   const [scopeSearch, setScopeSearch] = useState(window.location.search)
+  const [embeddedApplicationID, setEmbeddedApplicationID] = useState('')
   const projectIDFromURL = deploymentProjectIDFromSearch(scopeSearch)
-  const serviceIDFromURL = deploymentServiceIDFromSearch(scopeSearch)
-  const selectedProjectID = validDeploymentProjectID(projectIDFromURL, projects)
+  const applicationIDFromURL = deploymentApplicationIDFromSearch(scopeSearch)
+  const selectedProjectID = validDeploymentProjectID(projectId ?? projectIDFromURL, projects)
   const selectedProject = projects.find((project) => project.id === selectedProjectID)
   const applicationProjectIDs = useMemo(
     () => new Map(applications.map((application) => [application.id, application.project_id])),
@@ -46,10 +52,10 @@ export function DeploymentsRoute() {
       : [],
     [applications, selectedProject],
   )
-  const selectedServiceID = validDeploymentServiceID(serviceIDFromURL, scopedApplications)
-  const selectedService = useMemo(
-    () => scopedApplications.find((application) => application.id === selectedServiceID),
-    [scopedApplications, selectedServiceID],
+  const selectedApplicationID = validDeploymentApplicationID(projectId ? embeddedApplicationID : applicationIDFromURL, scopedApplications)
+  const selectedApplication = useMemo(
+    () => scopedApplications.find((application) => application.id === selectedApplicationID),
+    [scopedApplications, selectedApplicationID],
   )
   const scopedProjectDeployments = useMemo(
     () => selectedProject
@@ -58,18 +64,18 @@ export function DeploymentsRoute() {
     [applicationProjectIDs, deployments, selectedProject],
   )
   const scopedDeployments = useMemo(
-    () => selectedServiceID
-      ? scopedProjectDeployments.filter((deployment) => deployment.application_id === selectedServiceID)
+    () => selectedApplicationID
+      ? scopedProjectDeployments.filter((deployment) => deployment.application_id === selectedApplicationID)
       : scopedProjectDeployments,
-    [scopedProjectDeployments, selectedServiceID],
+    [scopedProjectDeployments, selectedApplicationID],
   )
-  const serviceDeploymentCounts = useMemo(
+  const applicationDeploymentCounts = useMemo(
     () => deploymentCountsByApplication(scopedProjectDeployments),
     [scopedProjectDeployments],
   )
   const target = useMemo(
-    () => selectedService ?? scopedApplications[0],
-    [scopedApplications, selectedService],
+    () => selectedApplication ?? scopedApplications[0],
+    [scopedApplications, selectedApplication],
   )
   const visibleDeployments = scopedDeployments.filter((deployment) => matchesSearch(searchQuery, [
     deployment.id,
@@ -103,9 +109,13 @@ export function DeploymentsRoute() {
     enabled: Boolean(target?.id),
   })
   const healthCheckDraftValue = target && healthCheckDraft.applicationID === target.id ? healthCheckDraft.value : target?.health_check_url ?? ''
-  const applyDeploymentScope = useCallback((projectID: string, serviceID?: string) => {
-    setScopeSearch(replaceDeploymentScopeURL(projectID, serviceID))
-  }, [])
+  const applyDeploymentScope = useCallback((nextProjectID: string, applicationID?: string) => {
+    if (projectId) {
+      setEmbeddedApplicationID(applicationID ?? '')
+      return
+    }
+    setScopeSearch(replaceDeploymentScopeURL(nextProjectID, applicationID))
+  }, [projectId])
   const deploy = useMutation({
     mutationFn: () => {
       if (!target) {
@@ -178,35 +188,37 @@ export function DeploymentsRoute() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title={selectedService ? `${selectedService.name} deployments` : selectedProject ? `${selectedProject.name} deployments` : 'Deployments'}
-        description={selectedService
-          ? `Deploy, inspect logs, and rollback ${selectedService.name} inside ${selectedProject?.name}.`
-          : 'Pick a project service to view its deploy queue, history, rollback slots, and logs.'}
-        actionNode={(
-          <div className="w-full max-w-xs">
-            <SelectInput
-              label="Project"
-              value={selectedProjectID}
-              onChange={(projectID) => {
-                applyDeploymentScope(projectID)
-                setRegistryOverrideID(null)
-                setSelectedDeploymentID('')
-              }}
-            >
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>{project.name}</option>
-              ))}
-            </SelectInput>
-          </div>
-        )}
+        title={selectedApplication ? `${selectedApplication.name} deployments` : selectedProject ? `${selectedProject.name} deployments` : 'Deployments'}
+        description={selectedApplication
+          ? `Deploy, inspect logs, and rollback ${selectedApplication.name} inside ${selectedProject?.name}.`
+          : 'Pick a project application to view its deploy queue, history, rollback slots, and logs.'}
+        actionNode={embedded
+          ? undefined
+          : (
+              <div className="w-full max-w-xs">
+                <SelectInput
+                  label="Project"
+                  value={selectedProjectID}
+                  onChange={(nextProjectID) => {
+                    applyDeploymentScope(nextProjectID)
+                    setRegistryOverrideID(null)
+                    setSelectedDeploymentID('')
+                  }}
+                >
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>{project.name}</option>
+                  ))}
+                </SelectInput>
+              </div>
+            )}
       />
       {selectedProject && (
-        <DeploymentServiceScope
+        <DeploymentApplicationScope
           applications={scopedApplications}
-          selectedServiceID={selectedServiceID}
-          deploymentCounts={serviceDeploymentCounts}
-          onServiceChange={(serviceID) => {
-            applyDeploymentScope(selectedProject.id, serviceID)
+          selectedApplicationID={selectedApplicationID}
+          deploymentCounts={applicationDeploymentCounts}
+          onApplicationChange={(applicationID) => {
+            applyDeploymentScope(selectedProject.id, applicationID)
             setRegistryOverrideID(null)
             setSelectedDeploymentID('')
           }}
@@ -263,7 +275,7 @@ export function DeploymentsRoute() {
       />
       {!target && (
         <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
-          {selectedProject ? `Create a service in ${selectedProject.name} before queueing a deployment.` : 'Create an application target before queueing a deployment.'}
+          {selectedProject ? `Create an application in ${selectedProject.name} before queueing a deployment.` : 'Create an application target before queueing a deployment.'}
         </div>
       )}
       {(formError || deploy.error) && <BlockError message={formError ?? deploy.error?.message ?? 'Deployment could not be queued.'} />}
@@ -286,21 +298,21 @@ export function DeploymentsRoute() {
   )
 }
 
-function DeploymentServiceScope({
+function DeploymentApplicationScope({
   applications,
-  selectedServiceID,
+  selectedApplicationID,
   deploymentCounts,
-  onServiceChange,
+  onApplicationChange,
 }: {
   applications: Application[]
-  selectedServiceID: string
+  selectedApplicationID: string
   deploymentCounts: Map<string, number>
-  onServiceChange: (serviceID: string) => void
+  onApplicationChange: (applicationID: string) => void
 }) {
   if (applications.length === 0) {
     return (
       <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
-        No services exist in this project yet.
+        No applications exist in this project yet.
       </div>
     )
   }
@@ -308,12 +320,12 @@ function DeploymentServiceScope({
   return (
     <section className="rounded-lg border bg-surface">
       <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold text-ink">Project services</h2>
-        <p className="mt-1 text-xs text-muted">Deployments are scoped to one service at a time.</p>
+        <h2 className="text-sm font-semibold text-ink">Project applications</h2>
+        <p className="mt-1 text-xs text-muted">Deployments are scoped to one application at a time.</p>
       </div>
       <div className="flex gap-2 overflow-x-auto p-3">
         {applications.map((application) => {
-          const active = application.id === selectedServiceID
+          const active = application.id === selectedApplicationID
           const deploymentCount = deploymentCounts.get(application.id) ?? 0
           return (
             <button
@@ -324,7 +336,7 @@ function DeploymentServiceScope({
                 'min-w-56 rounded-md border px-3 py-2 text-left transition-colors hover:bg-panel',
                 active ? 'border-accent bg-accent/10 text-accent-text' : 'bg-background text-muted',
               )}
-              onClick={() => onServiceChange(application.id)}
+              onClick={() => onApplicationChange(application.id)}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -345,7 +357,7 @@ function deploymentProjectIDFromSearch(search: string): string {
   return new URLSearchParams(search).get('project') ?? ''
 }
 
-function deploymentServiceIDFromSearch(search: string): string {
+function deploymentApplicationIDFromSearch(search: string): string {
   return new URLSearchParams(search).get('service') ?? ''
 }
 
@@ -356,9 +368,9 @@ function validDeploymentProjectID(projectID: string, projects: Array<{ id: strin
   return projects[0]?.id ?? ''
 }
 
-function validDeploymentServiceID(serviceID: string, applications: Application[]): string {
-  if (applications.some((application) => application.id === serviceID)) {
-    return serviceID
+function validDeploymentApplicationID(applicationID: string, applications: Application[]): string {
+  if (applications.some((application) => application.id === applicationID)) {
+    return applicationID
   }
   return applications[0]?.id ?? ''
 }

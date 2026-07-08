@@ -23,7 +23,7 @@ const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
 
 const projectNav: Array<{ hash: string, label: string, icon: typeof Gauge }> = [
   { hash: 'overview', label: 'Overview', icon: Layers3 },
-  { hash: 'services', label: 'Services', icon: Package },
+  { hash: 'applications', label: 'Applications', icon: Package },
   { hash: 'environments', label: 'Environments', icon: GitBranch },
   { hash: 'deployments', label: 'Deployments', icon: Rocket },
   { hash: 'registry', label: 'Registry', icon: Container },
@@ -122,12 +122,8 @@ export function AppShell() {
                     </div>
                     {projectNav.map((projectItem) => {
                       const ProjectIcon = projectItem.icon
-                      const href = projectItem.hash === 'deployments'
-                        ? scopedHref('/deployments', activeProject.id)
-                        : projectSectionHref(activeProject.id, projectItem.hash)
-                      const projectItemActive = projectItem.hash === 'deployments'
-                        ? location.pathname === '/deployments'
-                        : projectSection === projectItem.hash && location.pathname.startsWith('/projects/')
+                      const href = projectSectionHref(activeProject.id, projectItem.hash)
+                      const projectItemActive = projectSection === projectItem.hash && location.pathname.startsWith('/projects/')
                       return (
                         <a
                           key={projectItem.hash}
@@ -210,8 +206,8 @@ export function AppShell() {
 
 function projectSectionFromHash(hash: string): string {
   const value = hash.replace(/^#/, '')
-  if (value === 'targets') return 'services'
-  return projectNav.some((item) => item.hash === value && item.hash !== 'deployments') ? value : 'overview'
+  if (value === 'targets' || value === 'services') return 'applications'
+  return projectNav.some((item) => item.hash === value) ? value : 'overview'
 }
 
 function projectIDFromPath(pathname: string): string {

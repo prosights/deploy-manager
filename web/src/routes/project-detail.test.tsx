@@ -235,11 +235,11 @@ describe('ProjectDetailRoute', () => {
     })
   })
 
-  it('detects and deploys repository services onto one server', async () => {
-    window.location.hash = '#services'
+  it('detects and creates repository applications onto one server', async () => {
+    window.location.hash = '#applications'
     renderRoute('project_2')
 
-    fireEvent.click(await screen.findByRole('button', { name: /detect services/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /detect applications/i }))
 
     await waitFor(() => {
       expect(detectGitHubRepositoryServices).toHaveBeenCalledWith({
@@ -250,7 +250,7 @@ describe('ProjectDetailRoute', () => {
     })
 
     expect(await screen.findByText('web/docker-compose.yml')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /deploy 2 services/i }))
+    fireEvent.click(screen.getByRole('button', { name: /create 2 applications/i }))
 
     await waitFor(() => {
       expect(importGitHubRepositoryServices).toHaveBeenCalledWith('project_2', {
@@ -286,7 +286,7 @@ describe('ProjectDetailRoute', () => {
     })
   })
 
-  it('shows services inside the project environment board', async () => {
+  it('shows applications inside the project environment board', async () => {
     renderRoute('project_1')
 
     expect(await screen.findByText('API')).toBeInTheDocument()
@@ -294,12 +294,12 @@ describe('ProjectDetailRoute', () => {
     expect(screen.getByText('api / prd')).toBeInTheDocument()
   })
 
-  it('creates manual service placements from connected github repositories', async () => {
-    window.location.hash = '#services'
+  it('creates manual application placements from connected github repositories', async () => {
+    window.location.hash = '#applications'
     renderRoute('project_1')
 
     fireEvent.change(await screen.findByLabelText('GitHub repo'), { target: { value: 'https://github.com/prosights/recreate.git' } })
-    fireEvent.change(screen.getByLabelText('Service'), { target: { value: 'recreate' } })
+    fireEvent.change(screen.getByLabelText('Application'), { target: { value: 'recreate' } })
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }))
 
     await waitFor(() => {
@@ -317,7 +317,7 @@ describe('ProjectDetailRoute', () => {
     fireEvent.click(await screen.findByLabelText('Delete environment Production'))
     await waitFor(() => expect(vi.mocked(deleteEnvironment).mock.calls[0]?.[0]).toBe('env_1'))
 
-    fireEvent.click(screen.getByLabelText('Delete service API'))
+    fireEvent.click(screen.getByLabelText('Delete application API'))
     await waitFor(() => expect(vi.mocked(deleteApplication).mock.calls[0]?.[0]).toBe('app_1'))
 
     window.location.hash = '#routes'
