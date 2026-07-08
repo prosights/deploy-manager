@@ -35,6 +35,7 @@ type Config struct {
 	DopplerToken            string
 	DopplerCLIPath          string
 	SSHKnownHostsPath       string
+	DeploymentWorkerEnabled bool
 	Shutdown                time.Duration
 }
 
@@ -61,6 +62,7 @@ func Load() Config {
 		DopplerToken:            env("DOPPLER_TOKEN", ""),
 		DopplerCLIPath:          env("DOPPLER_CLI_PATH", "doppler"),
 		SSHKnownHostsPath:       env("SSH_KNOWN_HOSTS_PATH", ""),
+		DeploymentWorkerEnabled: boolEnv("DEPLOYMENT_WORKER_ENABLED", true),
 		Shutdown:                durationEnv("SHUTDOWN_TIMEOUT_SECONDS", 10*time.Second),
 	}
 }

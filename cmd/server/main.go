@@ -53,7 +53,12 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	workerDone := app.queue.StartWorker(ctx)
+	var workerDone <-chan struct{}
+	if cfg.DeploymentWorkerEnabled {
+		workerDone = app.queue.StartWorker(ctx)
+	} else {
+		slog.Info("deployment queue worker disabled")
+	}
 	serve(ctx, stop, server, cfg.Addr)
 	shutdown(server, cfg.Shutdown)
 	waitForWorker(workerDone, cfg.Shutdown)
@@ -107,19 +112,21 @@ func newApplication(ctx context.Context, cfg config.Config) (*application, error
 	gcs := objectstorage.NewConnector("gcs")
 	runner := deployments.NewRunner(queries, logBus, notifier, runtime)
 	queue := deployments.NewQueue(redisClient, queries, runner)
-	if recovered, err := queue.RecoverInterrupted(ctx); err != nil {
-		_ = redisClient.Close()
-		pool.Close()
-		return nil, fmt.Errorf("recover interrupted deployments: %w", err)
-	} else if recovered > 0 {
-		slog.Info("recovered interrupted deployments", "count", recovered)
-	}
-	if recovered, err := queue.RecoverQueued(ctx, 0); err != nil {
-		_ = redisClient.Close()
-		pool.Close()
-		return nil, fmt.Errorf("recover queued deployments: %w", err)
-	} else if recovered > 0 {
-		slog.Info("recovered queued deployments", "count", recovered)
+	if cfg.DeploymentWorkerEnabled {
+		if recovered, err := queue.RecoverInterrupted(ctx); err != nil {
+			_ = redisClient.Close()
+			pool.Close()
+			return nil, fmt.Errorf("recover interrupted deployments: %w", err)
+		} else if recovered > 0 {
+			slog.Info("recovered interrupted deployments", "count", recovered)
+		}
+		if recovered, err := queue.RecoverQueued(ctx, 0); err != nil {
+			_ = redisClient.Close()
+			pool.Close()
+			return nil, fmt.Errorf("recover queued deployments: %w", err)
+		} else if recovered > 0 {
+			slog.Info("recovered queued deployments", "count", recovered)
+		}
 	}
 	proxyManager := proxy.NewManager(queries)
 	readiness := []httpapi.ReadinessCheck{{

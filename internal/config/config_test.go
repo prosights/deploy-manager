@@ -249,6 +249,14 @@ func TestEnvTrimsWhitespaceBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestLoadAllowsDisablingDeploymentWorker(t *testing.T) {
+	t.Setenv("DEPLOYMENT_WORKER_ENABLED", "false")
+
+	if Load().DeploymentWorkerEnabled {
+		t.Fatal("expected deployment worker to be disabled")
+	}
+}
+
 func validConfig() Config {
 	return Config{
 		Addr:           ":8080",
