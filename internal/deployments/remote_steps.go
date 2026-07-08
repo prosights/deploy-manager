@@ -52,6 +52,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	if target.RepositoryUrl.Valid && strings.TrimSpace(target.RepositoryUrl.String) != "" {
 		repository := stringutil.ShellQuote(target.RepositoryUrl.String)
 		branch := stringutil.ShellQuote(target.Branch)
+		git := "git -c safe.directory=" + remoteDir
 		commitCheckout, err := gitCommitCheckout(remoteDir, deploymentCommit(target))
 		if err != nil {
 			return nil, err
@@ -59,11 +60,12 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 		steps = append(steps, remoteStep{
 			label: "Syncing repository",
 			command: fmt.Sprintf(
-				"if [ -d %[1]s/.git ]; then cd %[1]s && git fetch --prune origin %[2]s && git reset --hard && git checkout %[2]s && git reset --hard origin/%[2]s; else find %[1]s -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --branch %[2]s %[3]s %[1]s; fi%[4]s",
+				"if [ -d %[1]s/.git ]; then cd %[1]s && %[5]s fetch --prune origin %[2]s && %[5]s reset --hard && %[5]s checkout %[2]s && %[5]s reset --hard origin/%[2]s; else find %[1]s -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --branch %[2]s %[3]s %[1]s; fi%[4]s",
 				remoteDir,
 				branch,
 				repository,
 				commitCheckout,
+				git,
 			),
 		})
 	}
@@ -441,7 +443,7 @@ func gitCommitCheckout(remoteDir string, commit string) (string, error) {
 	if !ValidCommitSHA(commit) {
 		return "", fmt.Errorf("commit_sha must be a 7 to 40 character hexadecimal SHA")
 	}
-	return fmt.Sprintf(" && cd %s && git checkout --detach %s", remoteDir, stringutil.ShellQuote(commit)), nil
+	return fmt.Sprintf(" && cd %[1]s && git -c safe.directory=%[1]s checkout --detach %s", remoteDir, stringutil.ShellQuote(commit)), nil
 }
 
 var gitCommitSHAPattern = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)

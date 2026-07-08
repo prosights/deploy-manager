@@ -174,7 +174,7 @@ func TestRemoteStepsUseRepositoryWhenConfigured(t *testing.T) {
 	if !strings.Contains(joined, "git clone") {
 		t.Fatal("expected repository sync command")
 	}
-	if !strings.Contains(joined, "git reset --hard origin/'main'") {
+	if !strings.Contains(joined, "git -c safe.directory='/srv/app' reset --hard origin/'main'") {
 		t.Fatal("expected repository sync to reset tracked local changes before deploy")
 	}
 	if strings.Contains(joined, "rm -rf '/srv/app'") {
@@ -223,7 +223,7 @@ func TestRemoteStepsCheckoutDeploymentCommitWhenConfigured(t *testing.T) {
 	}
 
 	joined := strings.Join(commands(steps), "\n")
-	if !strings.Contains(joined, "cd '/srv/app' && git checkout --detach 'abc1234'") {
+	if !strings.Contains(joined, "cd '/srv/app' && git -c safe.directory='/srv/app' checkout --detach 'abc1234'") {
 		t.Fatalf("expected deployment commit checkout, got %s", joined)
 	}
 }
