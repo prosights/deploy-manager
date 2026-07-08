@@ -202,12 +202,14 @@ jobs:
             --project "$GCE_PROJECT" \
             --zone "$GCE_ZONE" \
             --tunnel-through-iap \
+            --port 2345 \
             --quiet
 
           gcloud compute ssh "$GCE_INSTANCE" \
             --project "$GCE_PROJECT" \
             --zone "$GCE_ZONE" \
             --tunnel-through-iap \
+            --ssh-flag="-p 2345" \
             --quiet \
             --command "set -euo pipefail; if [ ! -d '$REMOTE_DIR' ]; then sudo install -d -g deployers -m 2775 '$REMOTE_DIR'; fi; sudo install -m 0644 /tmp/deploy-manager-compose.yml '$REMOTE_DIR/docker-compose.deploy.yml'; rm -f /tmp/deploy-manager-compose.yml"
 
