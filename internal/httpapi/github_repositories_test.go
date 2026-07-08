@@ -100,6 +100,37 @@ func TestGitHubConnectorRepositoryRequiresConnectedRepository(t *testing.T) {
 	}
 }
 
+func TestGitHubConnectorRepositoryAllowsBranchOverride(t *testing.T) {
+	config := []byte(`{
+		"installation_id": "123456",
+		"repositories": [{"repository":"prosights/recreate","branch":"main"}]
+	}`)
+	repository, err := githubConnectorRepository(config, "prosights/recreate", "release/2026-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.Branch != "release/2026-07" || repository.InstallationID != "123456" {
+		t.Fatalf("expected connected repository with overridden branch, got %+v", repository)
+	}
+}
+
+func TestGitHubConnectorRepositoryAnyBranchMatchesByName(t *testing.T) {
+	config := []byte(`{
+		"installation_id": "123456",
+		"repositories": [{"repository":"prosights/recreate","branch":"main"}]
+	}`)
+	repository, err := githubConnectorRepositoryAnyBranch(config, "PROSIGHTS/RECREATE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.Repository != "prosights/recreate" || repository.Branch != "main" {
+		t.Fatalf("expected case-insensitive repository match, got %+v", repository)
+	}
+	if _, err := githubConnectorRepositoryAnyBranch(config, "prosights/other"); err == nil {
+		t.Fatal("expected unconnected repository to fail")
+	}
+}
+
 func TestGitHubBuildWorkflowInputsIncludesCallbackIdentity(t *testing.T) {
 	buildID := pgtype.UUID{Bytes: [16]byte{1, 2, 3}, Valid: true}
 	inputs := githubBuildWorkflowInputs(map[string]string{"custom": "value", "branch": "override"}, db.BuildRun{

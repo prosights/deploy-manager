@@ -108,6 +108,7 @@ SET updated_at = now();
 
 -- name: ListProjects :many
 SELECT p.id, p.name, p.slug, p.description, p.created_at, p.updated_at, p.default_registry_id,
+       p.repository_connector_id, p.repository_full_name, p.repository_branch,
        cr.name AS default_registry_name
 FROM projects p
 LEFT JOIN container_registries cr ON cr.id = p.default_registry_id
@@ -117,7 +118,7 @@ ORDER BY p.name;
 WITH created_project AS (
     INSERT INTO projects (name, slug, description)
     VALUES ($1, $2, $3)
-    RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
+    RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 ),
 created_environments AS (
     INSERT INTO environments (project_id, name, slug, kind, is_ephemeral)
@@ -126,11 +127,11 @@ created_environments AS (
     SELECT id, 'Development', 'development', 'development', false FROM created_project
     RETURNING id
 )
-SELECT id, name, slug, description, created_at, updated_at, default_registry_id
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 FROM created_project;
 
 -- name: GetProject :one
-SELECT id, name, slug, description, created_at, updated_at, default_registry_id
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 FROM projects
 WHERE id = $1;
 
@@ -141,7 +142,7 @@ SET name = $2,
     description = $4,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, slug, description, created_at, updated_at, default_registry_id;
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch;
 
 -- name: DeleteProject :exec
 DELETE FROM projects
@@ -152,7 +153,16 @@ UPDATE projects
 SET default_registry_id = sqlc.narg(default_registry_id)::uuid,
     updated_at = now()
 WHERE id = sqlc.arg(id)::uuid
-RETURNING id, name, slug, description, created_at, updated_at, default_registry_id;
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch;
+
+-- name: UpdateProjectRepository :one
+UPDATE projects
+SET repository_connector_id = sqlc.narg(repository_connector_id)::uuid,
+    repository_full_name = sqlc.narg(repository_full_name)::text,
+    repository_branch = sqlc.narg(repository_branch)::text,
+    updated_at = now()
+WHERE id = sqlc.arg(id)::uuid
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch;
 
 -- name: ListEnvironments :many
 SELECT e.id, e.project_id, e.name, e.slug, e.kind, e.is_ephemeral, e.pull_request_number, e.branch, e.expires_at, e.created_at, e.updated_at,

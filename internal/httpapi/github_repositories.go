@@ -288,6 +288,56 @@ func (s Server) detectGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 	})
 }
 
+type githubRepositoryBranchesResponse struct {
+	Repository string   `json:"repository"`
+	Branches   []string `json:"branches"`
+}
+
+func (s Server) listGitHubRepositoryBranches(w http.ResponseWriter, r *http.Request) {
+	if s.github.App == nil {
+		writeError(w, validationError("github app is not configured"))
+		return
+	}
+	connectorID := strings.TrimSpace(r.URL.Query().Get("connector_id"))
+	repositoryName := strings.TrimSpace(r.URL.Query().Get("repository"))
+	if connectorID == "" || repositoryName == "" {
+		writeError(w, validationError("connector_id and repository are required"))
+		return
+	}
+	id, err := stringutil.PgUUID(connectorID)
+	if err != nil {
+		writeError(w, validationError("connector_id must be a uuid"))
+		return
+	}
+	account, err := s.queries.GetConnectorAccount(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, notFoundError("connector not found"))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	repository, err := githubConnectorRepositoryAnyBranch(account.Config, repositoryName)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if repository.InstallationID == "" {
+		writeError(w, validationError("repository has no github installation"))
+		return
+	}
+	branches, err := s.github.App.ListRepositoryBranches(r.Context(), repository.InstallationID, repository.Repository)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, githubRepositoryBranchesResponse{
+		Repository: repository.Repository,
+		Branches:   branches,
+	})
+}
+
 func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Request) {
 	projectID, err := parseUUIDParam(r, "projectID")
 	if err != nil {
@@ -413,6 +463,16 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	// First import wires the project to its source repository so the project
+	// page shows one repo/branch of record.
+	if !project.RepositoryFullName.Valid {
+		_, _ = s.queries.UpdateProjectRepository(r.Context(), db.UpdateProjectRepositoryParams{
+			ID:                    projectID,
+			RepositoryConnectorID: account.ID,
+			RepositoryFullName:    blankStringAsText(repository.Repository),
+			RepositoryBranch:      blankStringAsText(repository.Branch),
+		})
 	}
 	s.audit(r, "github.services_import", "project", uuidString(project.ID), project.Name, map[string]any{
 		"repository": repository.Repository,
@@ -678,12 +738,34 @@ func githubRepositoryResponses(account db.ConnectorAccount, raw []byte) []github
 	return repositories
 }
 
+// githubConnectorRepository resolves a connector repository entry for the
+// requested branch. The connector config stores one entry per repository and
+// default branch; deploying from another branch reuses that entry with the
+// branch overridden so users can pick any branch of a connected repository.
 func githubConnectorRepository(raw []byte, repositoryName string, branch string) (githubconnector.Repository, error) {
 	repositories, err := githubConnectorRepositories(raw, repositoryName, branch)
-	if err != nil {
-		return githubconnector.Repository{}, err
+	if err == nil {
+		return repositories[0], nil
 	}
-	return repositories[0], nil
+	repository, anyBranchErr := githubConnectorRepositoryAnyBranch(raw, repositoryName)
+	if anyBranchErr != nil {
+		return githubconnector.Repository{}, anyBranchErr
+	}
+	repository.Branch = branch
+	return repository, nil
+}
+
+func githubConnectorRepositoryAnyBranch(raw []byte, repositoryName string) (githubconnector.Repository, error) {
+	repositories, err := githubconnector.RepositoriesFromConfig(raw)
+	if err != nil {
+		return githubconnector.Repository{}, validationError("github connector config " + err.Error())
+	}
+	for _, repository := range repositories {
+		if strings.EqualFold(repository.Repository, repositoryName) {
+			return repository, nil
+		}
+	}
+	return githubconnector.Repository{}, validationError("repository is not connected to this github connector")
 }
 
 func githubConnectorRepositoryForApplication(raw []byte, repositoryName string, branch string, applicationID string) (githubconnector.Repository, error) {

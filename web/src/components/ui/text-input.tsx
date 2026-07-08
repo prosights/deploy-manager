@@ -5,6 +5,7 @@ export function TextInput({
   required,
   placeholder,
   disabled,
+  list,
 }: {
   label: string
   value: string
@@ -12,6 +13,7 @@ export function TextInput({
   required?: boolean
   placeholder?: string
   disabled?: boolean
+  list?: string
 }) {
   return (
     <label className="space-y-1 text-xs text-muted">
@@ -23,6 +25,7 @@ export function TextInput({
         required={required}
         placeholder={placeholder}
         disabled={disabled}
+        list={list}
       />
     </label>
   )

@@ -81,6 +81,7 @@ type Querier interface {
 	UpdateInstanceSettings(ctx context.Context, arg UpdateInstanceSettingsParams) (InstanceSetting, error)
 	UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error)
 	UpdateProjectRegistry(ctx context.Context, arg UpdateProjectRegistryParams) (Project, error)
+	UpdateProjectRepository(ctx context.Context, arg UpdateProjectRepositoryParams) (Project, error)
 	UpdateProxyRouteUpstream(ctx context.Context, arg UpdateProxyRouteUpstreamParams) (ProxyRoute, error)
 	UpdateServerHealth(ctx context.Context, arg UpdateServerHealthParams) (Server, error)
 	UpsertConnectorAccount(ctx context.Context, arg UpsertConnectorAccountParams) (ConnectorAccount, error)

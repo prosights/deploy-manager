@@ -420,7 +420,7 @@ const createProjectWithDefaultEnvironments = `-- name: CreateProjectWithDefaultE
 WITH created_project AS (
     INSERT INTO projects (name, slug, description)
     VALUES ($1, $2, $3)
-    RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
+    RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 ),
 created_environments AS (
     INSERT INTO environments (project_id, name, slug, kind, is_ephemeral)
@@ -429,7 +429,7 @@ created_environments AS (
     SELECT id, 'Development', 'development', 'development', false FROM created_project
     RETURNING id
 )
-SELECT id, name, slug, description, created_at, updated_at, default_registry_id
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 FROM created_project
 `
 
@@ -440,13 +440,16 @@ type CreateProjectWithDefaultEnvironmentsParams struct {
 }
 
 type CreateProjectWithDefaultEnvironmentsRow struct {
-	ID                pgtype.UUID        `json:"id"`
-	Name              string             `json:"name"`
-	Slug              string             `json:"slug"`
-	Description       string             `json:"description"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-	DefaultRegistryID pgtype.UUID        `json:"default_registry_id"`
+	ID                    pgtype.UUID        `json:"id"`
+	Name                  string             `json:"name"`
+	Slug                  string             `json:"slug"`
+	Description           string             `json:"description"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	DefaultRegistryID     pgtype.UUID        `json:"default_registry_id"`
+	RepositoryConnectorID pgtype.UUID        `json:"repository_connector_id"`
+	RepositoryFullName    pgtype.Text        `json:"repository_full_name"`
+	RepositoryBranch      pgtype.Text        `json:"repository_branch"`
 }
 
 func (q *Queries) CreateProjectWithDefaultEnvironments(ctx context.Context, arg CreateProjectWithDefaultEnvironmentsParams) (CreateProjectWithDefaultEnvironmentsRow, error) {
@@ -460,6 +463,9 @@ func (q *Queries) CreateProjectWithDefaultEnvironments(ctx context.Context, arg 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DefaultRegistryID,
+		&i.RepositoryConnectorID,
+		&i.RepositoryFullName,
+		&i.RepositoryBranch,
 	)
 	return i, err
 }
@@ -1197,7 +1203,7 @@ func (q *Queries) GetInstanceSettings(ctx context.Context) (InstanceSetting, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, name, slug, description, created_at, updated_at, default_registry_id
+SELECT id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 FROM projects
 WHERE id = $1
 `
@@ -1213,6 +1219,9 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DefaultRegistryID,
+		&i.RepositoryConnectorID,
+		&i.RepositoryFullName,
+		&i.RepositoryBranch,
 	)
 	return i, err
 }
@@ -2081,6 +2090,7 @@ func (q *Queries) ListEnvironmentsForProject(ctx context.Context, projectID pgty
 
 const listProjects = `-- name: ListProjects :many
 SELECT p.id, p.name, p.slug, p.description, p.created_at, p.updated_at, p.default_registry_id,
+       p.repository_connector_id, p.repository_full_name, p.repository_branch,
        cr.name AS default_registry_name
 FROM projects p
 LEFT JOIN container_registries cr ON cr.id = p.default_registry_id
@@ -2088,14 +2098,17 @@ ORDER BY p.name
 `
 
 type ListProjectsRow struct {
-	ID                  pgtype.UUID        `json:"id"`
-	Name                string             `json:"name"`
-	Slug                string             `json:"slug"`
-	Description         string             `json:"description"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-	DefaultRegistryID   pgtype.UUID        `json:"default_registry_id"`
-	DefaultRegistryName pgtype.Text        `json:"default_registry_name"`
+	ID                    pgtype.UUID        `json:"id"`
+	Name                  string             `json:"name"`
+	Slug                  string             `json:"slug"`
+	Description           string             `json:"description"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	DefaultRegistryID     pgtype.UUID        `json:"default_registry_id"`
+	RepositoryConnectorID pgtype.UUID        `json:"repository_connector_id"`
+	RepositoryFullName    pgtype.Text        `json:"repository_full_name"`
+	RepositoryBranch      pgtype.Text        `json:"repository_branch"`
+	DefaultRegistryName   pgtype.Text        `json:"default_registry_name"`
 }
 
 func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
@@ -2115,6 +2128,9 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DefaultRegistryID,
+			&i.RepositoryConnectorID,
+			&i.RepositoryFullName,
+			&i.RepositoryBranch,
 			&i.DefaultRegistryName,
 		); err != nil {
 			return nil, err
@@ -2846,7 +2862,7 @@ SET name = $2,
     description = $4,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 `
 
 type UpdateProjectParams struct {
@@ -2872,6 +2888,9 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DefaultRegistryID,
+		&i.RepositoryConnectorID,
+		&i.RepositoryFullName,
+		&i.RepositoryBranch,
 	)
 	return i, err
 }
@@ -2881,7 +2900,7 @@ UPDATE projects
 SET default_registry_id = $1::uuid,
     updated_at = now()
 WHERE id = $2::uuid
-RETURNING id, name, slug, description, created_at, updated_at, default_registry_id
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
 `
 
 type UpdateProjectRegistryParams struct {
@@ -2900,6 +2919,49 @@ func (q *Queries) UpdateProjectRegistry(ctx context.Context, arg UpdateProjectRe
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DefaultRegistryID,
+		&i.RepositoryConnectorID,
+		&i.RepositoryFullName,
+		&i.RepositoryBranch,
+	)
+	return i, err
+}
+
+const updateProjectRepository = `-- name: UpdateProjectRepository :one
+UPDATE projects
+SET repository_connector_id = $1::uuid,
+    repository_full_name = $2::text,
+    repository_branch = $3::text,
+    updated_at = now()
+WHERE id = $4::uuid
+RETURNING id, name, slug, description, created_at, updated_at, default_registry_id, repository_connector_id, repository_full_name, repository_branch
+`
+
+type UpdateProjectRepositoryParams struct {
+	RepositoryConnectorID pgtype.UUID `json:"repository_connector_id"`
+	RepositoryFullName    pgtype.Text `json:"repository_full_name"`
+	RepositoryBranch      pgtype.Text `json:"repository_branch"`
+	ID                    pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) UpdateProjectRepository(ctx context.Context, arg UpdateProjectRepositoryParams) (Project, error) {
+	row := q.db.QueryRow(ctx, updateProjectRepository,
+		arg.RepositoryConnectorID,
+		arg.RepositoryFullName,
+		arg.RepositoryBranch,
+		arg.ID,
+	)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DefaultRegistryID,
+		&i.RepositoryConnectorID,
+		&i.RepositoryFullName,
+		&i.RepositoryBranch,
 	)
 	return i, err
 }

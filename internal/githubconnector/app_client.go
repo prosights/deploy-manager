@@ -152,6 +152,39 @@ func (c *AppClient) ListRepositoryContents(ctx context.Context, installationID s
 	return contents, nil
 }
 
+func (c *AppClient) ListRepositoryBranches(ctx context.Context, installationID string, repository string) ([]string, error) {
+	installationID = strings.TrimSpace(installationID)
+	if !validNumericID(installationID) {
+		return nil, fmt.Errorf("installation_id must be numeric")
+	}
+	repository = strings.TrimSpace(repository)
+	if !validRepository(repository) {
+		return nil, fmt.Errorf("repository must be owner/name")
+	}
+	token, err := c.installationToken(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	branches := make([]string, 0)
+	path := "/repos/" + repository + "/branches?per_page=100"
+	for path != "" {
+		var response []struct {
+			Name string `json:"name"`
+		}
+		next, err := c.getJSON(ctx, path, token, &response)
+		if err != nil {
+			return nil, err
+		}
+		for _, branch := range response {
+			if branch.Name != "" {
+				branches = append(branches, branch.Name)
+			}
+		}
+		path = next
+	}
+	return branches, nil
+}
+
 func (c *AppClient) installationToken(ctx context.Context, installationID string) (string, error) {
 	jwt, err := c.jwt(time.Now())
 	if err != nil {
