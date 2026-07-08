@@ -239,7 +239,7 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 func deploymentSSHClient(ctx context.Context, target db.GetDeploymentTargetRow, signerSource sshutil.SignerSource) (sshutil.Client, error) {
 	if target.ConnectionMode == sshutil.ConnectionModeTailscaleSSH {
 		if sshutil.IsLocalTailscaleHost(ctx, target.Hostname) {
-			return sshutil.NewLocalClient(), nil
+			return sshutil.NewLocalDockerHostClient(target.SshUser), nil
 		}
 		return sshutil.NewTailscaleSSHClient(target.Hostname, target.SshPort, target.SshUser), nil
 	}

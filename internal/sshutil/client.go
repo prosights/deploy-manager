@@ -28,6 +28,7 @@ type Client struct {
 	hostKeyCallback ssh.HostKeyCallback
 	tailscaleCLI    bool
 	localShell      bool
+	localDockerHost bool
 }
 
 type ClientOptions struct {
@@ -81,6 +82,10 @@ func NewLocalClient() Client {
 	return Client{localShell: true}
 }
 
+func NewLocalDockerHostClient(user string) Client {
+	return Client{localDockerHost: true, user: strings.TrimSpace(user)}
+}
+
 // maxSSHOutputBytes caps how much combined stdout+stderr we buffer from a
 // remote command. A misbehaving or compromised host could otherwise stream
 // unbounded output and exhaust memory before any downstream truncation runs.
@@ -89,6 +94,9 @@ const maxSSHOutputBytes = 1 << 20
 func (c Client) Run(ctx context.Context, command string) (string, error) {
 	if c.localShell {
 		return runLocalShell(ctx, command)
+	}
+	if c.localDockerHost {
+		return runLocalDockerHostShell(ctx, c.user, command)
 	}
 	if c.tailscaleCLI {
 		return c.runTailscaleSSH(ctx, command)
@@ -136,6 +144,30 @@ func runLocalShell(ctx context.Context, command string) (string, error) {
 		return buffer.String(), err
 	}
 	return buffer.String(), nil
+}
+
+func runLocalDockerHostShell(ctx context.Context, user string, command string) (string, error) {
+	if strings.TrimSpace(command) == "" {
+		return "", fmt.Errorf("shell command is required")
+	}
+	if strings.TrimSpace(user) == "" {
+		return "", fmt.Errorf("local docker host user is required")
+	}
+
+	hostCommand := fmt.Sprintf(
+		"docker image inspect deploy-manager-host-runner:latest >/dev/null 2>&1 || docker build -t deploy-manager-host-runner:latest - <<'EOF'\nFROM alpine:3.23\nRUN apk add --no-cache git curl docker-cli docker-cli-compose\nEOF\n"+
+			"target_user=%s\n"+
+			"user_id=$(docker run --rm -e TARGET_USER=\"$target_user\" -v /etc/passwd:/host/passwd:ro deploy-manager-host-runner:latest sh -lc 'awk -F: -v user=\"$TARGET_USER\" '\\''$1 == user { print $3 \":\" $4 }'\\'' /host/passwd')\n"+
+			"deployers_group=$(docker run --rm -v /etc/group:/host/group:ro deploy-manager-host-runner:latest sh -lc 'awk -F: '\\''$1 == \"deployers\" { print $3 }'\\'' /host/group')\n"+
+			"docker_group=$(docker run --rm -v /etc/group:/host/group:ro deploy-manager-host-runner:latest sh -lc 'awk -F: '\\''$1 == \"docker\" { print $3 }'\\'' /host/group')\n"+
+			"[ -n \"$user_id\" ] || { echo \"host user not found: $target_user\" >&2; exit 1; }\n"+
+			"[ -n \"$deployers_group\" ] || { echo \"host group not found: deployers\" >&2; exit 1; }\n"+
+			"[ -n \"$docker_group\" ] || { echo \"host group not found: docker\" >&2; exit 1; }\n"+
+			"docker run --rm --network host --user \"$user_id\" --group-add \"$deployers_group\" --group-add \"$docker_group\" -e HOME=/tmp -e DOCKER_CONFIG=/docker-config -v /srv/deploy-manager:/srv/deploy-manager -v /var/run/docker.sock:/var/run/docker.sock -v /srv/deploy-manager/control/docker-config:/docker-config:ro deploy-manager-host-runner:latest sh -lc %s",
+		stringutil.ShellQuote(user),
+		stringutil.ShellQuote(command),
+	)
+	return runLocalShell(ctx, hostCommand)
 }
 
 func (c Client) runTailscaleSSH(ctx context.Context, command string) (string, error) {
