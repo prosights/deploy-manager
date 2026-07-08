@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { ArrowLeft, Container, GitBranch, Globe2, RefreshCw, Server, Settings, ShieldCheck, Trash2 } from 'lucide-react'
+import { ArrowLeft, Container, GitBranch, Globe2, RefreshCw, Rocket, Server, Settings, ShieldCheck, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { Badge } from '../components/ui/badge'
@@ -13,6 +13,7 @@ import { statusTone } from '../features/status'
 import {
   applyProxyRoute,
   createApplication,
+  createDeployment,
   createEnvironment,
   createProxyRoute,
   deleteApplication,
@@ -51,6 +52,7 @@ import {
   serversQuery,
 } from '../lib/queries'
 import { validateHealthCheckURL } from '../lib/urls'
+import { toast } from '../store/toasts'
 
 type ProjectSection = 'overview' | 'services' | 'environments' | 'registry' | 'routes' | 'settings'
 
@@ -283,13 +285,15 @@ function ProjectSourcePanel({ project, githubRepositories }: { project: Project,
         branch: branch.trim() || selectedRepo.branch || 'main',
       })
     },
-    onSuccess: async () => {
+    onSuccess: async (updated) => {
+      toast.success('Repository connected', `${updated.repository_full_name}#${updated.repository_branch} now feeds every deploy in this project.`)
       await queryClient.invalidateQueries({ queryKey: projectsQuery.queryKey })
     },
   })
   const disconnect = useMutation({
     mutationFn: () => updateProjectRepository(project.id, {}),
     onSuccess: async () => {
+      toast.info('Repository disconnected', 'Services keep their existing sources until you connect a new repository.')
       await queryClient.invalidateQueries({ queryKey: projectsQuery.queryKey })
     },
   })
@@ -523,9 +527,10 @@ function ProjectRepositoryDeploy({
         services: services.map((service) => service.name),
       })
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setDetectedServices([])
       setSelectedServices(new Set())
+      toast.success(`${result.applications.length} service${result.applications.length === 1 ? '' : 's'} created`, 'Build targets were registered on the GitHub connector. Trigger the first deploy from the service row.')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey }),
         queryClient.invalidateQueries({ queryKey: githubRepositoriesQuery.queryKey }),
@@ -735,6 +740,16 @@ function ServiceList({ applications }: { applications: Application[] }) {
       await queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey })
     },
   })
+  const deploy = useMutation({
+    mutationFn: (application: Application) => createDeployment({ application_id: application.id, trigger: 'manual' }),
+    onSuccess: async (_deployment, application) => {
+      toast.success(`Deployment queued for ${application.name}`, 'Follow progress on the Deployments page.')
+      await queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey })
+    },
+    onError: (error, application) => {
+      toast.error(`Could not deploy ${application.name}`, error.message)
+    },
+  })
   return (
     <Panel title="Services">
       <div className="overflow-x-auto">
@@ -763,19 +778,33 @@ function ServiceList({ applications }: { applications: Application[] }) {
                 <td className="px-4 py-3 text-muted">{application.domain ?? 'not routed'}</td>
                 <td className="px-4 py-3"><Badge tone={statusTone(application.status)}>{application.status}</Badge></td>
                 <td className="px-4 py-3">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="h-8 px-2 text-danger"
-                    aria-label={`Delete service ${application.name}`}
-                    onClick={() => {
-                      if (window.confirm(`Delete service ${application.name}?`)) {
-                        remove.mutate(application.id)
-                      }
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 px-2"
+                      aria-label={`Deploy service ${application.name}`}
+                      title="Queue a deployment for this service"
+                      disabled={deploy.isPending || application.status === 'deploying'}
+                      onClick={() => deploy.mutate(application)}
+                    >
+                      <Rocket className="size-4" />
+                      Deploy
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-8 px-2 text-danger"
+                      aria-label={`Delete service ${application.name}`}
+                      onClick={() => {
+                        if (window.confirm(`Delete service ${application.name}?`)) {
+                          remove.mutate(application.id)
+                        }
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -937,7 +966,8 @@ function ProjectRoutes({ applications, routes }: { applications: Application[], 
   })
   const apply = useMutation({
     mutationFn: (routeID: string) => applyProxyRoute(routeID),
-    onSuccess: async () => {
+    onSuccess: async (route) => {
+      toast.success(`Route ${route.domain ?? ''} applied`.trim())
       await queryClient.invalidateQueries({ queryKey: proxyRoutesQuery.queryKey })
     },
   })
@@ -1062,6 +1092,7 @@ function ProjectSettings({ project }: { project: Project }) {
         queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey }),
         queryClient.invalidateQueries({ queryKey: proxyRoutesQuery.queryKey }),
       ])
+      toast.info(`Project ${project.name} deleted`)
       void navigate({ to: '/projects' })
     },
   })

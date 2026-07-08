@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createApplication,
+  createDeployment,
   createEnvironment,
   deleteApplication,
   deleteEnvironment,
@@ -19,6 +20,7 @@ import { ProjectDetailRoute } from './project-detail'
 vi.mock('../lib/api', () => ({
   applyProxyRoute: vi.fn(async (routeID) => ({ id: routeID, status: 'applied' })),
   createApplication: vi.fn(async (input) => ({ id: 'app_2', ...input })),
+  createDeployment: vi.fn(async (input) => ({ id: 'deploy_1', status: 'queued', ...input })),
   createEnvironment: vi.fn(async (input) => ({ id: 'env_9', ...input })),
   createProxyRoute: vi.fn(async (input) => ({ id: 'route_2', ...input })),
   deleteApplication: vi.fn(async () => undefined),
@@ -292,6 +294,17 @@ describe('ProjectDetailRoute', () => {
     expect(await screen.findByText('API')).toBeInTheDocument()
     expect(screen.getAllByText('api.example.com').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('api / prd')).toBeInTheDocument()
+  })
+
+  it('queues a deployment from the service row', async () => {
+    window.location.hash = '#services'
+    renderRoute('project_1')
+
+    fireEvent.click(await screen.findByLabelText('Deploy service API'))
+
+    await waitFor(() => {
+      expect(createDeployment).toHaveBeenCalledWith({ application_id: 'app_1', trigger: 'manual' })
+    })
   })
 
   it('creates manual service placements from connected github repositories', async () => {

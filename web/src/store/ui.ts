@@ -13,9 +13,11 @@ type UiState = {
   sidebarCollapsed: boolean
   searchQuery: string
   theme: Theme
+  commandPaletteOpen: boolean
   setSearchQuery: (searchQuery: string) => void
   toggleSidebar: () => void
   setTheme: (theme: Theme) => void
+  setCommandPaletteOpen: (commandPaletteOpen: boolean) => void
 }
 
 const themeStorageKey = 'theme'
@@ -57,12 +59,14 @@ export const useUiStore = create<UiState>((set) => ({
   sidebarCollapsed: false,
   searchQuery: '',
   theme: initialTheme,
+  commandPaletteOpen: false,
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setTheme: (theme) => {
     applyTheme(theme, true)
     set({ theme })
   },
+  setCommandPaletteOpen: (commandPaletteOpen) => set({ commandPaletteOpen }),
 }))
 
 // Always track the OS preference so that switching to 'system' at any time

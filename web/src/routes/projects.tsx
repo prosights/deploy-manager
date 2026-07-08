@@ -18,6 +18,7 @@ import {
   type Project,
 } from '../lib/api'
 import { applicationsQuery, deploymentsQuery, environmentsQuery, projectsQuery } from '../lib/queries'
+import { toast } from '../store/toasts'
 
 type ProjectForm = {
   name: string
@@ -60,6 +61,7 @@ export function ProjectsRoute() {
     onSuccess: async (project) => {
       setForm(defaultProjectForm)
       setFormError(undefined)
+      toast.success(`Project ${project.name} created`, 'Connect its GitHub repository to start deploying services.')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQuery.queryKey }),
         queryClient.invalidateQueries({ queryKey: environmentsQuery.queryKey }),

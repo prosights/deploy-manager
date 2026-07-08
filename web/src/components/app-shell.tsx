@@ -7,6 +7,8 @@ import type { InstanceSettings } from '../lib/api'
 import { appVersionQuery, environmentsQuery, projectsQuery, settingsQuery } from '../lib/queries'
 import { nextTheme, useUiStore } from '../store/ui'
 import { Button } from './ui/button'
+import { Toaster } from './ui/toaster'
+import { CommandPalette } from './command-palette'
 import { cn } from '../lib/cn'
 
 const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
@@ -54,6 +56,7 @@ export function AppShell() {
   const searchQuery = useUiStore((state) => state.searchQuery)
   const setSearchQuery = useUiStore((state) => state.setSearchQuery)
   const toggleSidebar = useUiStore((state) => state.toggleSidebar)
+  const setCommandPaletteOpen = useUiStore((state) => state.setCommandPaletteOpen)
   const theme = useUiStore((state) => state.theme)
   const setTheme = useUiStore((state) => state.setTheme)
   const safeAccent = ensureVisibleAccent(settings.primary_color || '#0980fd', theme)
@@ -178,8 +181,17 @@ export function AppShell() {
               className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-muted/70"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search servers, deployments, credentials"
+              placeholder="Filter this page"
             />
+            <button
+              type="button"
+              className="shrink-0 rounded border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted hover:text-ink"
+              aria-label="Open command palette"
+              title="Jump to a project, service, server, or page"
+              onClick={() => setCommandPaletteOpen(true)}
+            >
+              ⌘K
+            </button>
           </label>
           <div className="flex items-center gap-3">
             <Button
@@ -204,6 +216,8 @@ export function AppShell() {
           </Suspense>
         </div>
       </main>
+      <CommandPalette />
+      <Toaster />
     </div>
   )
 }
@@ -272,7 +286,8 @@ function normalizedVersion(version?: string): string {
   return version.trim()
 }
 
-// Renders nothing for 150ms so fast suspense resolves invisibly.
+// Renders nothing for 150ms so fast suspense resolves invisibly, then a
+// skeleton of the typical page shape instead of a bare loading label.
 function DeferredFallback() {
   const [show, setShow] = useState(false)
   useEffect(() => {
@@ -280,7 +295,20 @@ function DeferredFallback() {
     return () => clearTimeout(id)
   }, [])
   if (!show) return null
-  return <div className="text-sm text-muted">Loading...</div>
+  return (
+    <div aria-label="Loading" role="status" className="space-y-5">
+      <div className="space-y-2">
+        <div className="h-6 w-48 animate-pulse rounded-md bg-panel" />
+        <div className="h-4 w-96 max-w-full animate-pulse rounded-md bg-panel" />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {[0, 1, 2].map((index) => (
+          <div key={index} className="h-44 animate-pulse rounded-lg border bg-surface" />
+        ))}
+      </div>
+      <div className="h-64 animate-pulse rounded-lg border bg-surface" />
+    </div>
+  )
 }
 
 function setMetaDescription(content: string) {
