@@ -237,10 +237,13 @@ jobs:
             exit 1
           fi
 
-          gcloud compute start-iap-tunnel "$GCE_INSTANCE" 8088 \
+          gcloud compute ssh "$GCE_INSTANCE" \
             --project "$GCE_PROJECT" \
             --zone "$GCE_ZONE" \
-            --local-host-port=127.0.0.1:18088 \
+            --tunnel-through-iap \
+            --ssh-flag="-p 2345" \
+            --ssh-flag="-N" \
+            --ssh-flag="-L 127.0.0.1:18088:127.0.0.1:8088" \
             --quiet >iap-tunnel.log 2>&1 &
           tunnel_pid="$!"
           trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
@@ -251,7 +254,10 @@ jobs:
             fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:18088/api/readyz >/dev/null
+          curl -fsS http://127.0.0.1:18088/api/readyz >/dev/null || {
+            cat iap-tunnel.log >&2
+            exit 1
+          }
 
           curl --fail-with-body -X POST "http://127.0.0.1:18088/api/deployments" \
             -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
