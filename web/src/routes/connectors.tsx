@@ -1,14 +1,17 @@
 import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { PageHeader } from '../components/page-header'
-import { IntegrationGrid, ConnectedRepos, RecentBuilds } from '../features/connectors/components'
+import { ConnectorAccountsPanel, ConnectedRepos, IntegrationGrid, RecentBuilds } from '../features/connectors/components'
 import {
   dispatchGitHubBuild,
   syncGitHubConnectorRepositories,
+  upsertConnector,
   upsertContainerRegistry,
+  type ConnectorAccount,
   type GitHubRepository,
+  type UpsertConnectorInput,
   type UpsertContainerRegistryInput,
 } from '../lib/api'
-import { buildRunsQuery, containerRegistriesQuery, dopplerStatusQuery, githubRepositoriesQuery, githubStatusQuery } from '../lib/queries'
+import { buildRunsQuery, connectorsQuery, containerRegistriesQuery, dopplerStatusQuery, githubRepositoriesQuery, githubStatusQuery } from '../lib/queries'
 import { useUiStore } from '../store/ui'
 
 export function ConnectorsRoute() {
@@ -18,12 +21,16 @@ export function ConnectorsRoute() {
   const { data: githubRepositories } = useSuspenseQuery(githubRepositoriesQuery)
   const { data: buildRuns } = useSuspenseQuery(buildRunsQuery)
   const { data: registries } = useSuspenseQuery(containerRegistriesQuery)
+  const { data: connectors } = useSuspenseQuery(connectorsQuery)
   const searchQuery = useUiStore((state) => state.searchQuery)
 
   const syncRepos = useMutation({
     mutationFn: (connectorID: string) => syncGitHubConnectorRepositories(connectorID),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: githubRepositoriesQuery.queryKey })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: connectorsQuery.queryKey }),
+        queryClient.invalidateQueries({ queryKey: githubRepositoriesQuery.queryKey }),
+      ])
     },
   })
   const dispatchBuild = useMutation({
@@ -42,6 +49,20 @@ export function ConnectorsRoute() {
       await queryClient.invalidateQueries({ queryKey: containerRegistriesQuery.queryKey })
     },
   })
+  const saveConnector = useMutation({
+    mutationFn: (input: UpsertConnectorInput) => upsertConnector(input),
+    onSuccess: async (connector: ConnectorAccount) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: connectorsQuery.queryKey }),
+        queryClient.invalidateQueries({ queryKey: githubRepositoriesQuery.queryKey }),
+        connector.provider === 'github' ? queryClient.invalidateQueries({ queryKey: githubStatusQuery.queryKey }) : Promise.resolve(),
+        connector.provider === 'doppler' ? queryClient.invalidateQueries({ queryKey: dopplerStatusQuery.queryKey }) : Promise.resolve(),
+      ])
+      if (connector.provider === 'github' && connector.enabled && githubStatus.repository_sync_enabled) {
+        syncRepos.mutate(connector.id)
+      }
+    },
+  })
 
   return (
     <div className="space-y-8">
@@ -56,6 +77,15 @@ export function ConnectorsRoute() {
         onSaveRegistry={(input) => saveRegistry.mutate(input)}
         isSavingRegistry={saveRegistry.isPending}
       />
+      <ConnectorAccountsPanel
+        connectors={connectors}
+        githubStatus={githubStatus}
+        isSaving={saveConnector.isPending}
+        isSyncing={syncRepos.isPending}
+        errorMessage={saveConnector.error?.message ?? syncRepos.error?.message}
+        onSave={(input) => saveConnector.mutate(input)}
+        onSync={(connectorID) => syncRepos.mutate(connectorID)}
+      />
       <ConnectedRepos
         repositories={githubRepositories}
         searchQuery={searchQuery}
@@ -68,6 +98,7 @@ export function ConnectorsRoute() {
       {dispatchBuild.error && <div className="text-sm text-danger">{dispatchBuild.error.message}</div>}
       {syncRepos.error && <div className="text-sm text-danger">{syncRepos.error.message}</div>}
       {saveRegistry.error && <div className="text-sm text-danger">{saveRegistry.error.message}</div>}
+      {saveConnector.error && <div className="text-sm text-danger">{saveConnector.error.message}</div>}
     </div>
   )
 }

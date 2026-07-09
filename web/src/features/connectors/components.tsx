@@ -5,7 +5,7 @@ import { Button } from '../../components/ui/button'
 import { Panel } from '../../components/ui/panel'
 import { TextInput } from '../../components/ui/text-input'
 import { SelectInput } from '../../components/ui/select-input'
-import type { BuildRun, ContainerRegistry, DopplerIntegrationStatus, GitHubIntegrationStatus, GitHubRepository, UpsertContainerRegistryInput } from '../../lib/api'
+import type { BuildRun, ConnectorAccount, ContainerRegistry, DopplerIntegrationStatus, GitHubIntegrationStatus, GitHubRepository, UpsertConnectorInput, UpsertContainerRegistryInput } from '../../lib/api'
 import { matchesSearch } from '../../lib/search'
 import { statusTone } from '../status'
 
@@ -37,7 +37,7 @@ function buildCards(github: GitHubIntegrationStatus, doppler: DopplerIntegration
       connected: github.app_configured && github.build_dispatch_enabled,
       statusLabel: github.app_configured ? 'Connected' : 'Not connected',
       actionLabel: github.app_configured ? undefined : 'Connect',
-      actionHref: github.install_url || undefined,
+      actionHref: github.app_configured ? undefined : github.install_url || undefined,
       configurable: true,
       missing: github.missing,
     },
@@ -80,6 +80,17 @@ const categoryLabels: Record<string, string> = {
   secrets: 'Secrets & Variables',
   registry: 'Container Registry',
   notifications: 'Notifications',
+}
+
+type ConnectorFormProvider = 'github' | 'doppler'
+
+type ConnectorFormState = {
+  provider: ConnectorFormProvider
+  name: string
+  enabled: boolean
+  installationID: string
+  project: string
+  config: string
 }
 
 // --- Main integration grid ---
@@ -195,6 +206,200 @@ function IntegrationDetail({ card, githubStatus, dopplerStatus, registries, onSa
       {card.id === 'slack' && <SlackDetail />}
     </div>
   )
+}
+
+type ConnectorAccountsPanelProps = {
+  connectors: ConnectorAccount[]
+  githubStatus: GitHubIntegrationStatus
+  isSaving: boolean
+  isSyncing: boolean
+  errorMessage?: string
+  onSave: (input: UpsertConnectorInput) => void
+  onSync: (connectorID: string) => void
+}
+
+export function ConnectorAccountsPanel({ connectors, githubStatus, isSaving, isSyncing, errorMessage, onSave, onSync }: ConnectorAccountsPanelProps) {
+  const accounts = connectors.filter((connector) => connector.provider === 'github' || connector.provider === 'doppler')
+  const hasGitHubAccount = accounts.some((connector) => connector.provider === 'github')
+  const [form, setForm] = useState<ConnectorFormState>(() => defaultConnectorForm('github'))
+  const [formError, setFormError] = useState<string>()
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setFormError(undefined)
+    try {
+      onSave(connectorInput(form))
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Connector metadata is invalid.')
+    }
+  }
+
+  return (
+    <Panel title="Connector metadata">
+      <div className="grid gap-5 p-4 xl:grid-cols-[1fr_360px]">
+        <div className="space-y-2">
+          {!hasGitHubAccount && githubStatus.install_url && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-ink">Connect GitHub App</p>
+                <p className="mt-0.5 text-xs text-muted">Install the app to grant repository access, then Deploy Manager will save the connector from the callback.</p>
+              </div>
+              <a
+                href={githubStatus.install_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md bg-ink px-3 py-2 text-sm font-medium text-surface hover:bg-ink/80"
+              >
+                Install GitHub App
+                <ExternalLink className="size-3.5" />
+              </a>
+            </div>
+          )}
+          {accounts.map((connector) => (
+            <div key={connector.id} className="grid gap-3 rounded-md border bg-background p-3 md:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-ink">{connector.name}</span>
+                  <Badge tone={connector.enabled ? 'success' : 'neutral'}>{connector.enabled ? 'enabled' : 'disabled'}</Badge>
+                  <Badge tone="neutral">{providerTitle(connector.provider)}</Badge>
+                  {connector.last_sync_status && <Badge tone={connector.last_sync_status === 'ok' ? 'success' : 'danger'}>{connector.last_sync_status}</Badge>}
+                </div>
+                <p className="mt-1 truncate font-mono text-xs text-muted">{connectorSummary(connector)}</p>
+                {connector.last_sync_message && <p className="mt-1 truncate text-xs text-muted">{connector.last_sync_message}</p>}
+              </div>
+              {connector.provider === 'github' && (
+                <div className="flex items-start justify-end">
+                  <Button variant="ghost" disabled={isSyncing || !connector.enabled} onClick={() => onSync(connector.id)}>
+                    <RefreshCw className={`size-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    Sync repos
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+          {accounts.length === 0 && (
+            <div className="rounded-md border bg-background px-4 py-6 text-sm text-muted">
+              Add connector metadata so the rest of the app can connect repositories and reference runtime secret scopes.
+            </div>
+          )}
+        </div>
+        <form className="space-y-3 rounded-md border bg-background p-4" onSubmit={submit}>
+          <div className="grid grid-cols-2 gap-2">
+            {(['github', 'doppler'] as const).map((provider) => (
+              <button
+                key={provider}
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-panel ${form.provider === provider ? 'border-accent bg-accent/10 text-ink' : 'text-muted'}`}
+                onClick={() => {
+                  setForm(defaultConnectorForm(provider))
+                  setFormError(undefined)
+                }}
+              >
+                {providerTitle(provider)}
+              </button>
+            ))}
+          </div>
+          <TextInput label="Name" value={form.name} onChange={(name) => setForm((state) => ({ ...state, name }))} required />
+          {form.provider === 'github' ? (
+            <TextInput label="Installation ID" value={form.installationID} onChange={(installationID) => setForm((state) => ({ ...state, installationID }))} placeholder="12345678" required />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <TextInput label="Doppler project" value={form.project} onChange={(project) => setForm((state) => ({ ...state, project }))} placeholder="internal" required />
+              <TextInput label="Doppler config" value={form.config} onChange={(config) => setForm((state) => ({ ...state, config }))} placeholder="prd" required />
+            </div>
+          )}
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              className="size-4 rounded border bg-background accent-[var(--color-accent)]"
+              type="checkbox"
+              checked={form.enabled}
+              onChange={(event) => setForm((state) => ({ ...state, enabled: event.target.checked }))}
+            />
+            Enabled
+          </label>
+          <Button variant="primary" disabled={isSaving || !form.name.trim()}>
+            {isSaving ? 'Saving...' : 'Save connector'}
+          </Button>
+          {(formError || errorMessage) && <p className="text-sm text-danger">{formError ?? errorMessage}</p>}
+        </form>
+      </div>
+    </Panel>
+  )
+}
+
+function defaultConnectorForm(provider: ConnectorFormProvider): ConnectorFormState {
+  return {
+    provider,
+    name: providerTitle(provider),
+    enabled: true,
+    installationID: '',
+    project: '',
+    config: '',
+  }
+}
+
+function connectorInput(form: ConnectorFormState): UpsertConnectorInput {
+  const name = form.name.trim()
+  if (!name) {
+    throw new Error('Connector name is required.')
+  }
+  if (hasControlCharacters(name)) {
+    throw new Error('Connector name cannot contain control characters.')
+  }
+  if (form.provider === 'github') {
+    const installationID = form.installationID.trim()
+    if (!/^[0-9]+$/.test(installationID)) {
+      throw new Error('GitHub installation ID must be numeric.')
+    }
+    return {
+      provider: 'github',
+      name,
+      enabled: form.enabled,
+      config: { installation_id: installationID },
+    }
+  }
+  const project = form.project.trim()
+  const config = form.config.trim()
+  if (!project || !config) {
+    throw new Error('Doppler project and config are required.')
+  }
+  if (hasControlCharacters(project) || hasControlCharacters(config)) {
+    throw new Error('Doppler project and config cannot contain control characters.')
+  }
+  return {
+    provider: 'doppler',
+    name,
+    enabled: form.enabled,
+    config: { project, config },
+  }
+}
+
+function connectorSummary(connector: ConnectorAccount): string {
+  if (connector.provider === 'github') {
+    const installationID = stringValue(connector.config.installation_id)
+    const repositories = Array.isArray(connector.config.repositories) ? connector.config.repositories.length : 0
+    return installationID ? `installation ${installationID}${repositories ? ` · ${repositories} repositories` : ''}` : `${repositories} repositories`
+  }
+  if (connector.provider === 'doppler') {
+    const project = stringValue(connector.config.project)
+    const config = stringValue(connector.config.config)
+    return project && config ? `${project}/${config}` : 'runtime scope metadata'
+  }
+  return connector.has_config ? 'metadata configured' : 'no metadata'
+}
+
+function providerTitle(provider: string): string {
+  if (provider === 'github') return 'GitHub'
+  if (provider === 'doppler') return 'Doppler'
+  return provider
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function hasControlCharacters(value: string): boolean {
+  return value.includes('\n') || value.includes('\r') || value.includes('\t')
 }
 
 function GitHubDetail({ status }: { status: GitHubIntegrationStatus }) {

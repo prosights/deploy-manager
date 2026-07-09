@@ -66,6 +66,7 @@ export function AppShell() {
   const activeProject = projects.find((project) => project.id === projectID)
   const activeEnvironments = activeProject ? environments.filter((environment) => environment.project_id === activeProject.id) : []
   const projectSection = activeProject ? projectSectionFromHash(location.hash) : ''
+  const visibleNav = activeProject ? nav.filter((item) => item.to !== '/deployments') : nav
   const contextLabel = activeProject
     ? `${activeProject.slug} / ${activeEnvironments.length} env${activeEnvironments.length === 1 ? '' : 's'}`
     : 'all projects'
@@ -96,7 +97,7 @@ export function AppShell() {
             )}
           </div>
           <nav className="flex flex-1 flex-col gap-1 px-3 py-3">
-            {nav.map((item) => {
+            {visibleNav.map((item) => {
               const active = item.to === '/projects'
                 ? location.pathname.startsWith('/projects') || (location.pathname === '/deployments' && Boolean(activeProject))
                 : location.pathname === item.to && !(item.to === '/deployments' && activeProject)
