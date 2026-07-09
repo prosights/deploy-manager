@@ -3,18 +3,37 @@ services:
     image: ${DEPLOY_IMAGE:?DEPLOY_IMAGE is required}
     container_name: deploy-manager-${DEPLOY_COLOR:-blue}
     restart: unless-stopped
-    env_file:
-      - /srv/deploy-manager/control/.env
-      - .env
+    # No env-file directives: Deploy Manager wraps every compose command in
+    # `doppler run`, so runtime configuration comes from the injected process
+    # environment and is passed through by name. No env file exists on the VM.
     environment:
-      HTTP_ADDR: ":8080"
-      HOME: /home/deploy
-      STATIC_DIR: /app/web/dist
-      DATABASE_URL: ${DATABASE_URL:-postgres://deploy:${POSTGRES_PASSWORD}@postgres:5432/deploy_manager?sslmode=disable}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      SSH_KNOWN_HOSTS_PATH: /app/known_hosts
-      DOPPLER_CLI_PATH: ${DOPPLER_CLI_PATH:-doppler}
-      DOPPLER_CONFIG_DIR: /tmp/.doppler
+      # Fixed container wiring.
+      - HTTP_ADDR=:8080
+      - HOME=/home/deploy
+      - STATIC_DIR=/app/web/dist
+      - SSH_KNOWN_HOSTS_PATH=/app/known_hosts
+      - DATABASE_URL=${DATABASE_URL:-postgres://deploy:${POSTGRES_PASSWORD}@postgres:5432/deploy_manager?sslmode=disable}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DOPPLER_CLI_PATH=${DOPPLER_CLI_PATH:-doppler}
+      - DOPPLER_CONFIG_DIR=/tmp/.doppler
+      # Runtime configuration passed through from the Doppler-injected
+      # process environment. Names without values stay unset when Doppler
+      # does not define them.
+      - API_TOKEN
+      - AUTH_DISABLED
+      - SSH_SIGNER_MODE
+      - GITHUB_WEBHOOK_SECRET
+      - GITHUB_APP_ID
+      - GITHUB_APP_SLUG
+      - GITHUB_APP_PRIVATE_KEY_PATH
+      - SLACK_WEBHOOK_URL
+      - RESEND_API_KEY
+      - RESEND_FROM_EMAIL
+      - RESEND_TO_EMAIL
+      - DOPPLER_PROJECT
+      - DOPPLER_CONFIG
+      - DOPPLER_TOKEN
+      - SHUTDOWN_TIMEOUT_SECONDS
     ports:
       - "127.0.0.1:${DEPLOY_PORT:-3101}:8080"
     group_add:

@@ -14,20 +14,25 @@ container:
 
 ## One-time VM bootstrap
 
-Run this once on `internal`:
+Runtime env is Doppler-only: no `.env` file may exist anywhere on the VM.
+Bootstrap commands run under `doppler run` with a token that lives only in
+your shell session (read it with `read -rs` so it never lands in history or a
+file):
 
 ```bash
 sudo mkdir -p /srv/deploy-manager/control /srv/deploy-manager/control/secrets /srv/deploy-manager/apps/production/deploy-manager
 cd /srv/deploy-manager/control
-docker compose -f stateful-compose.yml up -d
+read -rs DOPPLER_TOKEN && export DOPPLER_TOKEN   # paste a read-only service token, then Enter
+doppler run --project deploy-manager --config prd --no-fallback -- \
+  docker compose -f stateful-compose.yml up -d
+unset DOPPLER_TOKEN
 ```
 
 Put private files such as the GitHub App private key under
-`/srv/deploy-manager/control/secrets`. The current `internal` VM uses
-`/srv/deploy-manager/control/.env` for the control-plane runtime. Keep that file
-host-local and locked down. When Doppler is enabled for the control plane, the
-same app compose can keep using the deployment `.env` that Deploy Manager writes
-from Doppler.
+`/srv/deploy-manager/control/secrets`. Do not create
+`/srv/deploy-manager/control/.env` — the app compose no longer reads it, and
+deployments delete stray `.env` files and reject compose files that use
+`env_file:`. See `docs/doppler-runtime-env.md` in the repository root.
 
 ## Deploy Manager application settings
 
@@ -87,9 +92,11 @@ Tag pushes do not auto-deploy; production auto-deploys from `main`.
 
 ## Runtime env
 
-The deployed app expects the usual Deploy Manager runtime variables, either from
-the current host-local `/srv/deploy-manager/control/.env` or from the future
-Doppler-backed deployment `.env`, including:
+All runtime variables live in the Doppler project/config mapped to the
+`deploy-manager` application (for example `deploy-manager/prd`). Deploy
+Manager wraps every compose command for this app in `doppler run`, so the
+variables are injected into process memory and passed through by name in
+`docker-compose.yml` — nothing is written to the VM. Define at least:
 
 ```text
 POSTGRES_PASSWORD
@@ -102,6 +109,10 @@ DOPPLER_PROJECT
 DOPPLER_CONFIG
 DOPPLER_TOKEN
 ```
+
+`DOPPLER_TOKEN` here is the control plane's own token: it must be able to
+create service tokens for the projects Deploy Manager deploys (Service
+Account token), not a plain read-only service token.
 
 `DATABASE_URL` and `REDIS_URL` can be omitted when using
 `stateful-compose.yml`; the app compose derives them from the local Postgres and

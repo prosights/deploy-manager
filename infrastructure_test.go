@@ -38,6 +38,27 @@ func TestContainerSSHKnownHostsPathIsMounted(t *testing.T) {
 	}
 }
 
+// Runtime env is injected exclusively through Doppler at deploy time. No
+// compose file in this repository may read env files or mount a host .env:
+// deployment targets never carry env files.
+func TestComposeFilesNeverUseEnvFiles(t *testing.T) {
+	for _, composeFile := range []string{
+		"docker-compose.yml",
+		"docker-compose.dev.yml",
+		"docker-compose.deploy.yml",
+		"ops/self-deploy/docker-compose.yml",
+		"ops/self-deploy/stateful-compose.yml",
+	} {
+		compose := mustReadText(t, composeFile)
+		if strings.Contains(compose, "env_file") {
+			t.Fatalf("%s must not use env_file; runtime env is injected through doppler run", composeFile)
+		}
+		if strings.Contains(compose, "control/.env") {
+			t.Fatalf("%s must not reference a host env file", composeFile)
+		}
+	}
+}
+
 func TestConnectorUpsertClearsStaleSyncStateOnConfigChange(t *testing.T) {
 	query := mustReadText(t, "db/queries/core.sql")
 	for _, expected := range []string{

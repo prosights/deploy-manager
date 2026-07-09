@@ -54,7 +54,3 @@ func (c Connector) SyncCredentials(_ context.Context, scope connectors.SyncScope
 	}
 	return inventory, nil
 }
-
-func (c Connector) RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
-	return nil, nil
-}

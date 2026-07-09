@@ -69,10 +69,6 @@ func (Connector) SyncCredentials(_ context.Context, scope connectors.SyncScope) 
 	return inventory, nil
 }
 
-func (Connector) RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
-	return nil, nil
-}
-
 func RepositoriesFromConfig(raw []byte) ([]Repository, error) {
 	cfg, err := ParseConfig(raw)
 	if err != nil {

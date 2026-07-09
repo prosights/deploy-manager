@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	"deploy-manager/internal/auditlog"
+	"deploy-manager/internal/connectors"
 	"deploy-manager/internal/db"
+	"deploy-manager/internal/sshutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -219,6 +221,64 @@ func TestRunnerAuditsSuccessfulCompletion(t *testing.T) {
 	}
 }
 
+func TestRunnerRequiresDopplerRuntimeInjectionSource(t *testing.T) {
+	queries := &fakeRunnerQueries{}
+	runner := NewRunner(queries, NewLogBus(nil), nil, nil)
+
+	err := runner.deploy(context.Background(), db.Deployment{
+		ID: pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+	}, db.GetDeploymentTargetRow{
+		ApplicationName: "api",
+		ServerName:      "internal",
+		ConnectionMode:  sshutil.ConnectionModeTailscaleSSH,
+		Hostname:        "internal.tail1234.ts.net",
+		SshUser:         "deploy",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/api",
+	})
+	if err == nil || !strings.Contains(err.Error(), "doppler runtime injection source is required") {
+		t.Fatalf("expected missing doppler injection source to fail deployment, got %v", err)
+	}
+}
+
+func TestRunnerFailsDeploymentWhenDopplerTokenCannotBeIssued(t *testing.T) {
+	queries := &fakeRunnerQueries{}
+	runtime := &fakeRuntimeInjector{err: errors.New("doppler unavailable")}
+	runner := NewRunner(queries, NewLogBus(nil), nil, runtime)
+
+	err := runner.deploy(context.Background(), db.Deployment{
+		ID: pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+	}, db.GetDeploymentTargetRow{
+		ApplicationName: "api",
+		ServerName:      "internal",
+		ConnectionMode:  sshutil.ConnectionModeTailscaleSSH,
+		Hostname:        "internal.tail1234.ts.net",
+		SshUser:         "deploy",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/api",
+		DopplerProject:  pgtype.Text{String: "billing", Valid: true},
+		DopplerConfig:   pgtype.Text{String: "prd", Valid: true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "issue doppler deployment token") {
+		t.Fatalf("expected token issue failure to fail deployment, got %v", err)
+	}
+	if len(runtime.scopes) != 1 || runtime.scopes[0].Project != "billing" || runtime.scopes[0].Config != "prd" {
+		t.Fatalf("expected application doppler scope, got %+v", runtime.scopes)
+	}
+}
+
+func TestDeploymentTokenNameIsSafeAndTraceable(t *testing.T) {
+	deploymentID := pgtype.UUID{Bytes: [16]byte{0xab, 0xcd}, Valid: true}
+	name := deploymentTokenName(db.Deployment{ID: deploymentID})
+
+	if !strings.HasPrefix(name, "deploy-manager-abcd") {
+		t.Fatalf("expected token name to reference the deployment, got %q", name)
+	}
+	if len(name) > 64 || strings.ContainsAny(name, " \t\n$'\"") {
+		t.Fatalf("expected safe token name, got %q", name)
+	}
+}
+
 func TestDeploymentActorDefaultsToSystem(t *testing.T) {
 	if actor := deploymentActor(db.Deployment{}); actor != "system" {
 		t.Fatalf("expected system actor, got %q", actor)
@@ -425,6 +485,22 @@ func (q *fakeRunnerQueries) UpdateProxyRouteUpstream(_ context.Context, params d
 
 func (q *fakeRunnerQueries) UpsertDeploymentSlot(context.Context, db.UpsertDeploymentSlotParams) (db.ApplicationDeploymentSlot, error) {
 	return db.ApplicationDeploymentSlot{}, nil
+}
+
+type fakeRuntimeInjector struct {
+	injection connectors.RuntimeInjection
+	err       error
+	scopes    []connectors.RuntimeVariableScope
+	names     []string
+}
+
+func (f *fakeRuntimeInjector) IssueRuntimeInjection(_ context.Context, scope connectors.RuntimeVariableScope, name string) (connectors.RuntimeInjection, error) {
+	f.scopes = append(f.scopes, scope)
+	f.names = append(f.names, name)
+	if f.err != nil {
+		return connectors.RuntimeInjection{}, f.err
+	}
+	return f.injection, nil
 }
 
 type fakeRemoteRunner struct {

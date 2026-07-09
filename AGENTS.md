@@ -16,6 +16,7 @@ Deploy Manager is a Go and React internal deployment control plane. The Laravel/
 - Do not reintroduce PHP, Laravel, Composer, Livewire, Horizon, Blade, or Pest.
 - Do not turn this into a secrets manager. Integrate with secret systems through connectors.
 - Secret values come from Doppler only. Runtime secret values are sourced exclusively from the Doppler connector (enforced at startup by `requireDopplerRuntimeSource`); the database stores references and metadata, never secret values. Connector `config` is for non-secret settings and is rejected server-side if it contains secret keys or material. The `npm run lint` script runs ESLint; `npm run typecheck` runs `tsc`.
+- Runtime env is injected at deploy time only: every remote docker compose command runs under `doppler run --no-fallback` with a short-lived read-only service token delivered over SSH stdin. Never write env files to deployment targets, never put secrets in command strings/argv, and never add an alternative env path. Compose files must not use `env_file:`. See `docs/doppler-runtime-env.md`.
 - Preserve the current dark UI palette and white-label branding behavior.
 - Keep connector boundaries explicit. Provider-specific behavior belongs behind connector packages or HTTP handlers.
 - Avoid complex nested logic. Split small functions when that improves clarity.

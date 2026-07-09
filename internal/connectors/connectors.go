@@ -30,9 +30,22 @@ type CredentialInventory struct {
 }
 
 type RuntimeVariable struct {
-	Key      string `json:"key"`
-	Value    string `json:"-"`
-	IsPublic bool   `json:"is_public"`
+	Key   string `json:"key"`
+	Value string `json:"-"`
+}
+
+// RuntimeInjection is how a deployment target receives its runtime
+// environment: docker compose commands run wrapped in `doppler run` on the
+// target, authenticated by a short-lived read-only service token minted for a
+// single deployment. Secret values never pass through Deploy Manager and are
+// never written to disk on the target.
+type RuntimeInjection struct {
+	Project string
+	Config  string
+	// Token is a short-lived, read-only Doppler service token scoped to
+	// Project/Config. It must only travel to the target over SSH stdin and
+	// must never be logged, persisted, or placed on a command line.
+	Token string `json:"-"`
 }
 
 var runtimeVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -66,8 +79,10 @@ type SyncScope struct {
 	Config []byte
 }
 
+// Connector deliberately has no method that returns secret values. Deploy
+// Manager stores references and metadata only; runtime secret values reach
+// deployment targets exclusively through Doppler runtime injection.
 type Connector interface {
 	Provider() string
 	SyncCredentials(context.Context, SyncScope) ([]CredentialInventory, error)
-	RuntimeVariables(context.Context, RuntimeVariableScope) ([]RuntimeVariable, error)
 }
