@@ -1,22 +1,46 @@
 services:
   app:
     image: "${DEPLOY_IMAGE:?DEPLOY_IMAGE is required}"
-    env_file:
-      - "${CONTROL_ENV_FILE:-/srv/deploy-manager/control/.env}"
+    # No env-file directives and no .env mount: Deploy Manager runs this
+    # compose file under `doppler run`, so runtime configuration is injected
+    # into the compose process and passed through by name below. Nothing is
+    # read from or written to disk on the host.
     environment:
-      HTTP_ADDR: ":8080"
-      STATIC_DIR: /app/web/dist
-      SSH_KNOWN_HOSTS_PATH: /app/known_hosts
-      DEPLOYMENT_WORKER_ENABLED: "false"
-      DEPLOY_COLOR: "${DEPLOY_COLOR:-blue}"
-      DEPLOY_PORT: "${DEPLOY_PORT:-3101}"
+      # Fixed container wiring.
+      - HTTP_ADDR=:8080
+      - STATIC_DIR=/app/web/dist
+      - SSH_KNOWN_HOSTS_PATH=/app/known_hosts
+      - DEPLOYMENT_WORKER_ENABLED=false
+      - DEPLOY_COLOR=${DEPLOY_COLOR:-blue}
+      - DEPLOY_PORT=${DEPLOY_PORT:-3101}
+      # Runtime configuration passed through from the Doppler-injected
+      # process environment. Names without values stay unset when Doppler
+      # does not define them.
+      - DATABASE_URL
+      - REDIS_URL
+      - API_TOKEN
+      - AUTH_DISABLED
+      - SSH_SIGNER_MODE
+      - GITHUB_WEBHOOK_SECRET
+      - GITHUB_APP_ID
+      - GITHUB_APP_SLUG
+      - GITHUB_APP_PRIVATE_KEY
+      - GITHUB_APP_PRIVATE_KEY_PATH
+      - SLACK_WEBHOOK_URL
+      - RESEND_API_KEY
+      - RESEND_FROM_EMAIL
+      - RESEND_TO_EMAIL
+      - DOPPLER_PROJECT
+      - DOPPLER_CONFIG
+      - DOPPLER_TOKEN
+      - DOPPLER_CLI_PATH
+      - SHUTDOWN_TIMEOUT_SECONDS
     ports:
       - "127.0.0.1:${DEPLOY_PORT:-3101}:8080"
     group_add:
       - "${DOCKER_GROUP_ID:-988}"
       - "${DEPLOY_APPS_GROUP_ID:-987}"
     volumes:
-      - /srv/deploy-manager/control/.env:/srv/deploy-manager/control/.env:ro
       - /srv/deploy-manager/control/secrets:/app/secrets:ro
       - /srv/deploy-manager/apps:/srv/deploy-manager/apps
       - /srv/deploy-manager/control/docker-config/config.json:/home/deploy/.docker/config.json:ro

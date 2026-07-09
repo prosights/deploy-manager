@@ -55,7 +55,7 @@ flowchart TB
     subgraph connectors["Connector boundary"]
         connector_registry["Built-in connector registry"]
         github_connector["GitHub connector\ncredential inventory"]
-        doppler["Doppler connector\nruntime variables"]
+        doppler["Doppler connector\nshort-lived deploy tokens"]
         slack_connector["Slack connector\ncredential inventory"]
         resend_connector["Resend connector\ncredential inventory"]
         storage_connectors["Object storage connectors\nS3 + GCS inventory"]
@@ -70,7 +70,7 @@ flowchart TB
     subgraph worker["Deployment worker"]
         queue["Redis-backed deployment queue\nrecovery on startup"]
         runner["Deployment runner"]
-        remote_plan["Remote step planner\nvalidate target, render env, compose commands"]
+        remote_plan["Remote step planner\nvalidate target, doppler run wrapped compose commands"]
         ssh["SSH client\nknown_hosts enforced"]
         proxy_manager["Proxy manager\nCaddy or Traefik commands"]
         notifier["Notifier\nSlack + Resend"]
@@ -85,14 +85,14 @@ flowchart TB
     subgraph target["Remote deployment target"]
         vm["SSH-accessible VM"]
         repo["Application repository\nclone, fetch, checkout"]
-        envfile["Runtime .env\nwritten with restricted permissions"]
+        dopplerrun["doppler run\nsecrets injected in memory,\nno env file on disk"]
         compose["Docker Compose\nconfig, pull, up"]
         proxy["Caddy or Traefik\nroute application traffic"]
         healthcheck["Optional health check\nblue-green promotion gate"]
 
         vm --> repo
-        vm --> envfile
-        vm --> compose
+        vm --> dopplerrun
+        dopplerrun --> compose
         vm --> proxy
         vm --> healthcheck
     end
@@ -133,9 +133,21 @@ Primary request flow:
 
 1. The React SPA calls `/api/*` endpoints on the Go server.
 2. API handlers validate input, persist state through sqlc/PostgreSQL, and enqueue deployment work in Redis when needed.
-3. The deployment worker recovers queued/interrupted work on startup, pops Redis jobs, loads the target from PostgreSQL, syncs Doppler runtime variables, and executes a validated remote Docker Compose plan over SSH.
+3. The deployment worker recovers queued/interrupted work on startup, pops Redis jobs, loads the target from PostgreSQL, mints a short-lived read-only Doppler service token for the application's project/config, and executes a validated remote Docker Compose plan over SSH with every compose command wrapped in `doppler run`.
 4. Deployment output is stored in PostgreSQL, published through Redis-backed `LogBus`, and streamed to the UI over Server-Sent Events.
 5. Connectors keep credential, permission, usage, runtime variable, and object-storage inventory behind explicit provider boundaries; Deploy Manager stores references and metadata, not private secret values.
+
+## Runtime Environment (Doppler-only)
+
+Runtime env is injected exclusively through Doppler at deploy time. No env
+file ever exists on a deployment target and there is no alternative env path:
+
+- Every application must be mapped to a Doppler project/config; deployments fail without it.
+- The control plane never downloads secret values. Per deployment it mints a short-lived (30m), read-only service token scoped to that one config.
+- The token reaches the target over SSH stdin only — never argv, never a file — and `doppler run --no-fallback` injects secrets straight into the compose process memory.
+- A guard step removes legacy `.env` files and rejects compose files that use `env_file:`.
+
+See `docs/doppler-runtime-env.md` for the full flow and threat model.
 
 ## GitHub and Builds
 

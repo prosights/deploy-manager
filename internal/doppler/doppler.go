@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"sort"
+	"regexp"
 	"strings"
 
 	"deploy-manager/internal/connectors"
@@ -27,6 +27,13 @@ type syncConfig struct {
 	Config       string   `json:"config"`
 	Applications []string `json:"applications"`
 }
+
+// deploymentTokenMaxAge bounds how long a per-deployment service token stays
+// valid. It only needs to outlive the deployment's compose steps (including a
+// source build on the target); Doppler revokes it automatically afterwards.
+const deploymentTokenMaxAge = "30m"
+
+var serviceTokenNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 func New(project string, config string, token string) Connector {
 	return NewWithCommand(project, config, token, "doppler")
@@ -52,7 +59,7 @@ func (c Connector) SyncCredentials(_ context.Context, scope connectors.SyncScope
 		usages = append(usages, connectors.CredentialUsage{
 			UsedByType:   "application",
 			UsedByName:   application,
-			UsageContext: "sync runtime variables from Doppler " + resourceName,
+			UsageContext: "inject runtime variables at deploy time from Doppler " + resourceName,
 		})
 	}
 	if len(usages) == 0 {
@@ -72,56 +79,44 @@ func (c Connector) SyncCredentials(_ context.Context, scope connectors.SyncScope
 		Permissions: []connectors.CredentialPermission{{
 			ResourceType: "doppler_config",
 			ResourceName: resourceName,
-			Permission:   "secrets:download",
+			Permission:   "service_tokens:create",
 			Source:       "doppler",
 		}},
 		Usages: usages,
 	}}, nil
 }
 
-func (c Connector) RuntimeVariables(ctx context.Context, scope connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
-	project := strings.TrimSpace(scope.Project)
-	if project == "" {
-		project = c.project
-	}
-	config := strings.TrimSpace(scope.Config)
-	if config == "" {
-		config = c.config
-	}
-	if project == "" && config == "" {
-		return nil, nil
-	}
+// IssueRuntimeInjection mints a short-lived, read-only Doppler service token
+// scoped to the application's project/config so the deployment target can run
+// `doppler run -- docker compose ...`. Secret values are never downloaded by
+// Deploy Manager; the target fetches them directly from Doppler in memory.
+func (c Connector) IssueRuntimeInjection(ctx context.Context, scope connectors.RuntimeVariableScope, name string) (connectors.RuntimeInjection, error) {
+	project := stringutil.FirstNonBlank(scope.Project, c.project)
+	config := stringutil.FirstNonBlank(scope.Config, c.config)
 	if project == "" || config == "" {
-		return nil, fmt.Errorf("doppler project and config are required")
+		return connectors.RuntimeInjection{}, fmt.Errorf("doppler project and config are required: runtime env is injected exclusively through Doppler")
+	}
+	name = strings.TrimSpace(name)
+	if !serviceTokenNamePattern.MatchString(name) {
+		return connectors.RuntimeInjection{}, fmt.Errorf("doppler service token name is invalid")
 	}
 
-	args := []string{c.commandPath(), "secrets", "download", "--no-file", "--format", "json", "--project", project, "--config", config}
+	args := []string{
+		c.commandPath(), "configs", "tokens", "create", name,
+		"--project", project,
+		"--config", config,
+		"--max-age", deploymentTokenMaxAge,
+		"--plain",
+	}
 	output, err := c.commandRunner()(ctx, c.token, args)
 	if err != nil {
-		return nil, fmt.Errorf("doppler secrets download failed: %w", err)
+		return connectors.RuntimeInjection{}, fmt.Errorf("doppler service token create failed for %s/%s: %w", project, config, err)
 	}
-
-	values := map[string]any{}
-	if err := json.Unmarshal(output, &values); err != nil {
-		return nil, err
+	token := strings.TrimSpace(string(output))
+	if token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return connectors.RuntimeInjection{}, fmt.Errorf("doppler returned an invalid service token for %s/%s", project, config)
 	}
-
-	var variables []connectors.RuntimeVariable
-	for key, raw := range values {
-		value, ok := scalarString(raw)
-		if !ok || isMetadataKey(key) || !connectors.ValidRuntimeVariableKey(key) {
-			continue
-		}
-		variables = append(variables, connectors.RuntimeVariable{
-			Key:      key,
-			Value:    value,
-			IsPublic: hasPublicPrefix(key),
-		})
-	}
-	sort.Slice(variables, func(left int, right int) bool {
-		return variables[left].Key < variables[right].Key
-	})
-	return variables, nil
+	return connectors.RuntimeInjection{Project: project, Config: config, Token: token}, nil
 }
 
 func (c Connector) commandRunner() commandRunner {
@@ -174,33 +169,4 @@ func runDopplerCLI(ctx context.Context, token string, args []string) ([]byte, er
 		cmd.Env = append(cmd.Environ(), "DOPPLER_TOKEN="+token)
 	}
 	return cmd.Output()
-}
-
-func scalarString(value any) (string, bool) {
-	switch typed := value.(type) {
-	case string:
-		return typed, true
-	case float64, bool:
-		return fmt.Sprint(typed), true
-	default:
-		return "", false
-	}
-}
-
-func hasPublicPrefix(key string) bool {
-	for _, prefix := range []string{"NEXT_PUBLIC_", "PUBLIC_", "VITE_PUBLIC_"} {
-		if strings.HasPrefix(key, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func isMetadataKey(key string) bool {
-	switch key {
-	case "DOPPLER_PROJECT", "DOPPLER_CONFIG", "DOPPLER_ENVIRONMENT":
-		return true
-	default:
-		return false
-	}
 }

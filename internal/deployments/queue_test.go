@@ -3,7 +3,9 @@ package deployments
 import (
 	"context"
 	"errors"
-	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -158,6 +160,16 @@ func TestRecoverInterruptedReturnsLogFailure(t *testing.T) {
 	}
 }
 
+func testRuntimeInjection() remoteStepOptions {
+	return remoteStepOptions{injection: connectors.RuntimeInjection{
+		Project: "billing",
+		Config:  "prd",
+		Token:   "dp.st.prd.test-secret",
+	}}
+}
+
+const testDopplerRunPrefix = "doppler run --project 'billing' --config 'prd' --no-fallback --"
+
 func TestRemoteStepsUseRepositoryWhenConfigured(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ApplicationName: "API Service",
@@ -165,7 +177,7 @@ func TestRemoteStepsUseRepositoryWhenConfigured(t *testing.T) {
 		Branch:          "main",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +208,7 @@ func TestRemoteStepsUseStableComposeProjectForRollingDeployments(t *testing.T) {
 		ApplicationName: "Billing API",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/billing-api",
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +222,181 @@ func TestRemoteStepsUseStableComposeProjectForRollingDeployments(t *testing.T) {
 	}
 }
 
+func TestRemoteStepsRequireDopplerRuntimeInjection(t *testing.T) {
+	target := db.GetDeploymentTargetRow{
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+	}
+
+	if _, err := remoteSteps(target); err == nil || !strings.Contains(err.Error(), "doppler runtime injection is required") {
+		t.Fatalf("expected missing injection to fail, got %v", err)
+	}
+	for name, injection := range map[string]connectors.RuntimeInjection{
+		"missing config":  {Project: "billing"},
+		"missing project": {Config: "prd"},
+		"control chars":   {Project: "bil\nling", Config: "prd"},
+	} {
+		if _, err := remoteSteps(target, remoteStepOptions{injection: injection}); err == nil {
+			t.Fatalf("expected %s injection to fail", name)
+		}
+	}
+}
+
+func TestRemoteStepsNeverWriteEnvFilesOnTarget(t *testing.T) {
+	for _, target := range []db.GetDeploymentTargetRow{
+		{
+			ApplicationName: "API Service",
+			ComposePath:     "docker-compose.yml",
+			RemoteDirectory: "/srv/app",
+			ImageRef:        pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
+		},
+		{
+			ApplicationName: "API Service",
+			Strategy:        "blue_green",
+			ComposePath:     "docker-compose.yml",
+			RemoteDirectory: "/srv/app",
+			HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
+		},
+	} {
+		steps, err := remoteSteps(target, testRuntimeInjection())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		joined := strings.Join(commands(steps), "\n")
+		if strings.Contains(joined, "> .env") || strings.Contains(joined, ">.env") {
+			t.Fatalf("no step may write an env file on the target, got %s", joined)
+		}
+		if !strings.Contains(joined, "rm -f './.env'") {
+			t.Fatalf("expected legacy env files to be removed, got %s", joined)
+		}
+		if !strings.Contains(joined, "env_file") || !strings.Contains(joined, "env_file is not allowed") {
+			t.Fatalf("expected env_file usage to be rejected, got %s", joined)
+		}
+		if !strings.Contains(joined, "command -v doppler") {
+			t.Fatalf("expected doppler CLI presence check, got %s", joined)
+		}
+	}
+}
+
+func TestRemoteStepsWrapAllComposeCommandsInDopplerRun(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+		ImageRef:        pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
+	}, testRuntimeInjection())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	composeSteps := 0
+	for _, step := range steps {
+		if !strings.Contains(step.command, "docker compose") {
+			if step.needsDopplerToken {
+				t.Fatalf("step %q must not request a doppler token", step.label)
+			}
+			continue
+		}
+		composeSteps++
+		if !strings.Contains(step.command, testDopplerRunPrefix) {
+			t.Fatalf("compose step %q must run under doppler run, got %s", step.label, step.command)
+		}
+		if !step.needsDopplerToken {
+			t.Fatalf("compose step %q must read the doppler token from stdin", step.label)
+		}
+		if !strings.Contains(step.command, "IFS= read -r DOPPLER_TOKEN") {
+			t.Fatalf("compose step %q must consume the token from stdin, got %s", step.label, step.command)
+		}
+	}
+	if composeSteps < 3 {
+		t.Fatalf("expected config, pull, and up compose steps, got %d", composeSteps)
+	}
+}
+
+func TestRemoteStepsKeepServiceTokenOffCommandLines(t *testing.T) {
+	options := testRuntimeInjection()
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		Strategy:        "blue_green",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/api",
+		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
+	}, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if strings.Contains(joined, options.injection.Token) {
+		t.Fatal("the doppler service token must never appear in a remote command line")
+	}
+}
+
+func TestRemoteStepsPassArtifactVariablesInlineAfterInjection(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "FinOps",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/finops",
+		ImageRef:        pgtype.Text{String: "ghcr.io/acme/finops:sha-abc123", Valid: true},
+	}, testRuntimeInjection())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	for _, expected := range []string{
+		"DEPLOY_IMAGE='ghcr.io/acme/finops:sha-abc123'",
+		"DEPLOY_IMAGE_TAG='sha-abc123'",
+		"FINOPS_IMAGE_TAG='sha-abc123'",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("expected inline artifact assignment %q, got %s", expected, joined)
+		}
+	}
+	if !strings.Contains(joined, "-- env DEPLOY_IMAGE=") {
+		t.Fatalf("expected artifact variables to be applied after doppler injection, got %s", joined)
+	}
+}
+
+func TestRemoteStepsEnforceGuardBeforeComposeSteps(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+	}, testRuntimeInjection())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	labels := make([]string, 0, len(steps))
+	for _, step := range steps {
+		labels = append(labels, step.label)
+	}
+	joinedLabels := strings.Join(labels, "\n")
+	guardIndex := strings.Index(joinedLabels, "Enforcing Doppler-only runtime environment")
+	if guardIndex < 0 {
+		t.Fatalf("expected enforcement step, got %+v", labels)
+	}
+	if guardIndex > strings.Index(joinedLabels, "Validating compose config") {
+		t.Fatalf("expected enforcement before compose validation, got %+v", labels)
+	}
+}
+
+func TestRemoteStepsRemoveEnvFileNextToNestedComposePath(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ComposePath:     "deploy/docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+	}, testRuntimeInjection())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "rm -f './.env' './deploy/.env'") {
+		t.Fatalf("expected env file removal next to compose file, got %s", joined)
+	}
+}
+
 func TestRemoteStepsCheckoutDeploymentCommitWhenConfigured(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		RepositoryUrl:   pgtype.Text{String: "git@github.com:acme/app.git", Valid: true},
@@ -217,7 +404,7 @@ func TestRemoteStepsCheckoutDeploymentCommitWhenConfigured(t *testing.T) {
 		CommitSha:       pgtype.Text{String: "abc1234", Valid: true},
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +422,7 @@ func TestRemoteStepsRejectInvalidDeploymentCommit(t *testing.T) {
 		CommitSha:       pgtype.Text{String: "not-a-sha", Valid: true},
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, nil)
+	}, testRuntimeInjection())
 	if err == nil {
 		t.Fatal("expected invalid deployment commit to fail")
 	}
@@ -249,7 +436,7 @@ func TestRemoteStepsRejectUnsafeRepositoryBranch(t *testing.T) {
 				Branch:          branch,
 				ComposePath:     "docker-compose.yml",
 				RemoteDirectory: "/srv/app",
-			}, nil)
+			}, testRuntimeInjection())
 			if err == nil {
 				t.Fatal("expected unsafe branch to fail")
 			}
@@ -272,7 +459,7 @@ func TestRemoteStepsRejectUnsafeRemoteDirectory(t *testing.T) {
 		_, err := remoteSteps(db.GetDeploymentTargetRow{
 			ComposePath:     "docker-compose.yml",
 			RemoteDirectory: remoteDir,
-		}, nil)
+		}, testRuntimeInjection())
 		if err == nil {
 			t.Fatalf("expected remote directory %q to fail", remoteDir)
 		}
@@ -282,7 +469,7 @@ func TestRemoteStepsRejectUnsafeRemoteDirectory(t *testing.T) {
 func TestRemoteStepsRejectBlankComposePath(t *testing.T) {
 	_, err := remoteSteps(db.GetDeploymentTargetRow{
 		RemoteDirectory: "/srv/app",
-	}, nil)
+	}, testRuntimeInjection())
 	if err == nil {
 		t.Fatal("expected blank compose path to fail")
 	}
@@ -293,7 +480,7 @@ func TestRemoteStepsRejectUnsafeComposePath(t *testing.T) {
 		_, err := remoteSteps(db.GetDeploymentTargetRow{
 			ComposePath:     composePath,
 			RemoteDirectory: "/srv/app",
-		}, nil)
+		}, testRuntimeInjection())
 		if err == nil {
 			t.Fatalf("expected compose path %q to fail", composePath)
 		}
@@ -304,7 +491,7 @@ func TestRemoteStepsSkipRepositoryWhenNotConfigured(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +509,7 @@ func TestRemoteStepsBuildOnTargetForSourceRollingDeploy(t *testing.T) {
 		Branch:          "main",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +531,7 @@ func TestRemoteStepsPullForArtifactRollingDeploy(t *testing.T) {
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
 		ImageRef:        pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +554,7 @@ func TestRemoteStepsBuildOnTargetForSourceBlueGreenDeploy(t *testing.T) {
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
 		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +572,7 @@ func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
 		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +581,7 @@ func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 	if !strings.Contains(joined, ".deploy-manager-next-color") {
 		t.Fatal("expected blue-green color selection")
 	}
-	if !strings.Contains(joined, "COMPOSE_PROJECT_NAME='api-service'-$color DEPLOY_COLOR=$color") {
+	if !strings.Contains(joined, "COMPOSE_PROJECT_NAME='api-service'-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port") {
 		t.Fatal("expected next color compose project")
 	}
 	if !strings.Contains(joined, "docker compose -f 'docker-compose.yml' config --quiet") {
@@ -431,7 +618,7 @@ func TestRemoteStepsValidateComposeConfigBeforeRollingStart(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +638,7 @@ func TestRemoteStepsRejectUnsupportedStrategy(t *testing.T) {
 		Strategy:        "canary",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
-	}, nil)
+	}, testRuntimeInjection())
 	if err == nil {
 		t.Fatal("expected unsupported strategy to fail")
 	}
@@ -468,7 +655,7 @@ func TestRemoteStepsRequireColorHealthCheckForBlueGreen(t *testing.T) {
 			ComposePath:     "docker-compose.yml",
 			RemoteDirectory: "/srv/api",
 			HealthCheckUrl:  healthCheckURL,
-		}, nil)
+		}, testRuntimeInjection())
 		if err == nil {
 			t.Fatalf("expected blue-green health check %q to fail", healthCheckURL.String)
 		}
@@ -482,7 +669,7 @@ func TestRemoteStepsGateBlueGreenPromotionOnHealthCheck(t *testing.T) {
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
 		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
-	}, nil)
+	}, testRuntimeInjection())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,36 +695,11 @@ func TestRemoteStepsGateBlueGreenPromotionOnHealthCheck(t *testing.T) {
 	}
 }
 
-func TestRemoteStepsWriteRuntimeEnvironment(t *testing.T) {
-	steps, err := remoteSteps(db.GetDeploymentTargetRow{
-		ComposePath:     "docker-compose.yml",
-		RemoteDirectory: "/srv/app",
-	}, []connectors.RuntimeVariable{
-		{Key: "DATABASE_URL", Value: "postgres://user:pass@db/app"},
-		{Key: "IGNORED-KEY", Value: "bad"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	joined := strings.Join(commands(steps), "\n")
-	if !strings.Contains(joined, "umask 077") || !strings.Contains(joined, "> .env") {
-		t.Fatal("expected locked-down runtime env write")
-	}
-	if !strings.Contains(joined, "DATABASE_URL=") {
-		t.Fatal("expected valid runtime key")
-	}
-	if strings.Contains(joined, "IGNORED-KEY") {
-		t.Fatal("did not expect invalid env key")
-	}
-}
-
-func TestAppendArtifactVariablesAddsApplicationImageTag(t *testing.T) {
-	variables := appendArtifactVariables(nil, db.GetDeploymentTargetRow{
+func TestArtifactVariablesAddApplicationImageTag(t *testing.T) {
+	variables := artifactVariables(db.GetDeploymentTargetRow{
 		ApplicationName: "FinOps",
 	}, remoteStepOptions{
-		imageRef:    "us-east4-docker.pkg.dev/prosights-platform/internal/finops-api:sha-abc123",
-		targetColor: "green",
+		imageRef: "us-east4-docker.pkg.dev/prosights-platform/internal/finops-api:sha-abc123",
 	})
 
 	values := map[string]string{}
@@ -550,54 +712,158 @@ func TestAppendArtifactVariablesAddsApplicationImageTag(t *testing.T) {
 	if values["DEPLOY_IMAGE_TAG"] != "sha-abc123" || values["FINOPS_IMAGE_TAG"] != "sha-abc123" {
 		t.Fatalf("expected generic and application image tag vars, got %+v", values)
 	}
-	if values["DEPLOY_COLOR"] != "green" {
-		t.Fatalf("expected blue/green color var, got %+v", values)
-	}
 }
 
-func TestRemoteStepsRejectRuntimeVariableNullBytes(t *testing.T) {
+func TestRemoteStepsRejectArtifactVariableNullBytes(t *testing.T) {
 	_, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, []connectors.RuntimeVariable{
-		{Key: "DATABASE_URL", Value: "postgres://db\x00/app"},
+	}, remoteStepOptions{
+		imageRef:  "ghcr.io/acme/app\x001.0.0",
+		injection: testRuntimeInjection().injection,
 	})
 	if err == nil {
-		t.Fatal("expected runtime variable null byte to fail")
+		t.Fatal("expected artifact variable null byte to fail")
 	}
-	if !strings.Contains(err.Error(), "DATABASE_URL") {
+	if !strings.Contains(err.Error(), "DEPLOY_IMAGE") {
 		t.Fatalf("expected variable name in error, got %v", err)
 	}
 }
 
-func TestRemoteStepsRejectOversizedRuntimeVariableValues(t *testing.T) {
+func TestRemoteStepsRejectOversizedArtifactVariableValues(t *testing.T) {
 	_, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, []connectors.RuntimeVariable{
-		{Key: "DATABASE_URL", Value: strings.Repeat("x", maxRuntimeVariableValueLength+1)},
+	}, remoteStepOptions{
+		imageRef:  "ghcr.io/acme/" + strings.Repeat("x", maxRuntimeVariableValueLength+1),
+		injection: testRuntimeInjection().injection,
 	})
 	if err == nil {
-		t.Fatal("expected oversized runtime variable value to fail")
+		t.Fatal("expected oversized artifact variable value to fail")
 	}
-	if !strings.Contains(err.Error(), "DATABASE_URL") {
+	if !strings.Contains(err.Error(), "DEPLOY_IMAGE") {
 		t.Fatalf("expected variable name in error, got %v", err)
 	}
 }
 
-func TestRenderRuntimeEnvFileRejectsOversizedEnvFiles(t *testing.T) {
-	variables := make([]connectors.RuntimeVariable, 0, 10)
-	for index := 0; index < 10; index++ {
-		variables = append(variables, connectors.RuntimeVariable{
-			Key:   fmt.Sprintf("VALUE_%d", index),
-			Value: strings.Repeat("x", maxRuntimeVariableValueLength),
+func TestRenderEnvAssignmentsSortsAndSkipsInvalidKeys(t *testing.T) {
+	got, err := renderEnvAssignments([]connectors.RuntimeVariable{
+		{Key: "Z_LAST", Value: "z"},
+		{Key: "IGNORED-KEY", Value: "bad"},
+		{Key: "A_FIRST", Value: "a b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != " A_FIRST='a b' Z_LAST='z'" {
+		t.Fatalf("unexpected env assignments: %q", got)
+	}
+}
+
+func TestRemoteStepCommandsAreValidShell(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	for name, target := range map[string]db.GetDeploymentTargetRow{
+		"rolling artifact": {
+			ApplicationName: "API Service",
+			ComposePath:     "docker-compose.yml",
+			RemoteDirectory: "/srv/app",
+			ImageRef:        pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
+		},
+		"rolling source": {
+			ApplicationName: "API Service",
+			RepositoryUrl:   pgtype.Text{String: "git@github.com:acme/app.git", Valid: true},
+			Branch:          "main",
+			ComposePath:     "docker-compose.yml",
+			RemoteDirectory: "/srv/app",
+		},
+		"blue green": {
+			ApplicationName: "API Service",
+			Strategy:        "blue_green",
+			ComposePath:     "deploy/docker-compose.yml",
+			RemoteDirectory: "/srv/api",
+			ImageRef:        pgtype.Text{String: "ghcr.io/acme/app:1.0.0", Valid: true},
+			HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			steps, err := remoteSteps(target, testRuntimeInjection())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, step := range steps {
+				output, err := exec.Command("sh", "-n", "-c", step.command).CombinedOutput()
+				if err != nil {
+					t.Fatalf("step %q is not valid shell: %v: %s\ncommand: %s", step.label, err, output, step.command)
+				}
+			}
 		})
 	}
+}
 
-	_, err := renderRuntimeEnvFile(variables)
-	if err == nil {
-		t.Fatal("expected oversized runtime env file to fail")
+func TestEnforceDopplerOnlyStepRemovesEnvFilesAndRejectsEnvFileDirectives(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
 	}
+
+	binDir := t.TempDir()
+	fakeDoppler := filepath.Join(binDir, "doppler")
+	if err := os.WriteFile(fakeDoppler, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(remoteDir string) (string, error) {
+		step := enforceDopplerOnlyStep(db.GetDeploymentTargetRow{
+			RemoteDirectory: remoteDir,
+			ComposePath:     "docker-compose.yml",
+		})
+		cmd := exec.Command("sh", "-c", step.command)
+		cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+		output, err := cmd.CombinedOutput()
+		return string(output), err
+	}
+
+	t.Run("removes stray env files", func(t *testing.T) {
+		remoteDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(remoteDir, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(remoteDir, ".env"), []byte("SECRET=leak\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if output, err := run(remoteDir); err != nil {
+			t.Fatalf("expected guard to pass, got %v: %s", err, output)
+		}
+		if _, err := os.Stat(filepath.Join(remoteDir, ".env")); !os.IsNotExist(err) {
+			t.Fatal("expected stray .env to be removed from the target")
+		}
+	})
+
+	t.Run("rejects env_file directives", func(t *testing.T) {
+		remoteDir := t.TempDir()
+		compose := "services:\n  app:\n    image: x\n    env_file:\n      - .env\n"
+		if err := os.WriteFile(filepath.Join(remoteDir, "docker-compose.yml"), []byte(compose), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		output, err := run(remoteDir)
+		if err == nil {
+			t.Fatalf("expected guard to reject env_file, got success: %s", output)
+		}
+		if !strings.Contains(output, "env_file is not allowed") {
+			t.Fatalf("expected env_file rejection message, got %s", output)
+		}
+	})
+
+	t.Run("fails without compose file", func(t *testing.T) {
+		output, err := run(t.TempDir())
+		if err == nil {
+			t.Fatalf("expected guard to fail without compose file, got success: %s", output)
+		}
+	})
 }
 
 func TestRuntimeScopeUsesApplicationDopplerScope(t *testing.T) {
@@ -609,41 +875,6 @@ func TestRuntimeScopeUsesApplicationDopplerScope(t *testing.T) {
 
 	if scope.ApplicationName != "API" || scope.Project != "billing" || scope.Config != "prd" {
 		t.Fatalf("unexpected runtime scope: %+v", scope)
-	}
-}
-
-func TestRenderEnvFileQuotesValues(t *testing.T) {
-	got := renderEnvFile([]connectors.RuntimeVariable{{Key: "SECRET", Value: "hello \"world\"\nnext"}})
-	want := "SECRET=\"hello \\\"world\\\"\\nnext\"\n"
-	if got != want {
-		t.Fatalf("expected %q, got %q", want, got)
-	}
-}
-
-func TestRenderEnvFileSortsValidKeys(t *testing.T) {
-	got := renderEnvFile([]connectors.RuntimeVariable{
-		{Key: "Z_LAST", Value: "z"},
-		{Key: "IGNORED-KEY", Value: "bad"},
-		{Key: "A_FIRST", Value: "a"},
-	})
-	want := "A_FIRST=\"a\"\nZ_LAST=\"z\"\n"
-	if got != want {
-		t.Fatalf("expected %q, got %q", want, got)
-	}
-}
-
-func TestValidRuntimeVariableCountMatchesRenderedEnvKeys(t *testing.T) {
-	variables := []connectors.RuntimeVariable{
-		{Key: "DATABASE_URL", Value: "postgres://db"},
-		{Key: "BAD-KEY", Value: "ignored"},
-		{Key: "PUBLIC_URL", Value: "https://example.com"},
-	}
-
-	if got := validRuntimeVariableCount(variables); got != 2 {
-		t.Fatalf("expected two valid runtime variables, got %d", got)
-	}
-	if rendered := renderEnvFile(variables); strings.Contains(rendered, "BAD-KEY") {
-		t.Fatalf("rendered invalid key: %s", rendered)
 	}
 }
 

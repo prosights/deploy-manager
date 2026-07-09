@@ -92,14 +92,22 @@ func NewLocalDockerHostClient(user string) Client {
 const maxSSHOutputBytes = 1 << 20
 
 func (c Client) Run(ctx context.Context, command string) (string, error) {
+	return c.RunWithInput(ctx, command, "")
+}
+
+// RunWithInput runs a remote command with input piped to its stdin. This is
+// the only sanctioned channel for delivering short-lived secrets (such as
+// per-deployment Doppler service tokens) to a target: stdin is not visible in
+// process listings, shell history, or on disk, unlike argv or env files.
+func (c Client) RunWithInput(ctx context.Context, command string, input string) (string, error) {
 	if c.localShell {
-		return runLocalShell(ctx, command)
+		return runLocalShell(ctx, command, input)
 	}
 	if c.localDockerHost {
-		return runLocalDockerHostShell(ctx, c.user, command)
+		return runLocalDockerHostShell(ctx, c.user, command, input)
 	}
 	if c.tailscaleCLI {
-		return c.runTailscaleSSH(ctx, command)
+		return c.runTailscaleSSH(ctx, command, input)
 	}
 
 	sshClient, err := c.connect(ctx)
@@ -115,6 +123,9 @@ func (c Client) Run(ctx context.Context, command string) (string, error) {
 	defer session.Close()
 
 	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
+	if input != "" {
+		session.Stdin = strings.NewReader(input)
+	}
 	session.Stdout = buffer
 	session.Stderr = buffer
 
@@ -132,12 +143,15 @@ func (c Client) Run(ctx context.Context, command string) (string, error) {
 	}
 }
 
-func runLocalShell(ctx context.Context, command string) (string, error) {
+func runLocalShell(ctx context.Context, command string, input string) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("shell command is required")
 	}
 	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
 	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	cmd.Stdout = buffer
 	cmd.Stderr = buffer
 	if err := cmd.Run(); err != nil {
@@ -146,7 +160,7 @@ func runLocalShell(ctx context.Context, command string) (string, error) {
 	return buffer.String(), nil
 }
 
-func runLocalDockerHostShell(ctx context.Context, user string, command string) (string, error) {
+func runLocalDockerHostShell(ctx context.Context, user string, command string, input string) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("shell command is required")
 	}
@@ -154,23 +168,31 @@ func runLocalDockerHostShell(ctx context.Context, user string, command string) (
 		return "", fmt.Errorf("local docker host user is required")
 	}
 
+	// -i is required so piped stdin (for example a Doppler service token)
+	// reaches the command container; the lookup containers never read stdin.
+	interactive := ""
+	if input != "" {
+		interactive = " -i"
+	}
+
 	hostCommand := fmt.Sprintf(
-		"docker image inspect deploy-manager-host-runner:proxy >/dev/null 2>&1 || docker build -t deploy-manager-host-runner:proxy - <<'EOF'\nFROM alpine:3.23\nRUN apk add --no-cache bash python3 git curl docker-cli docker-cli-compose\nEOF\n"+
+		"docker image inspect deploy-manager-host-runner:doppler >/dev/null 2>&1 || docker build -t deploy-manager-host-runner:doppler - <<'EOF'\nFROM alpine:3.23\nRUN apk add --no-cache bash python3 git curl docker-cli docker-cli-compose && \\\n    wget -q -t3 'https://packages.doppler.com/public/cli/rsa.8004D9FF50437357.key' -O /etc/apk/keys/cli@doppler-8004D9FF50437357.rsa.pub && \\\n    echo 'https://packages.doppler.com/public/cli/alpine/any-version/main' >> /etc/apk/repositories && \\\n    apk add --no-cache doppler\nEOF\n"+
 			"target_user=%s\n"+
-			"user_id=$(docker run --rm -e TARGET_USER=\"$target_user\" -v /etc/passwd:/host/passwd:ro deploy-manager-host-runner:proxy sh -lc 'awk -F: -v user=\"$TARGET_USER\" '\\''$1 == user { print $3 \":\" $4 }'\\'' /host/passwd')\n"+
-			"deployers_group=$(docker run --rm -v /etc/group:/host/group:ro deploy-manager-host-runner:proxy sh -lc 'awk -F: '\\''$1 == \"deployers\" { print $3 }'\\'' /host/group')\n"+
-			"docker_group=$(docker run --rm -v /etc/group:/host/group:ro deploy-manager-host-runner:proxy sh -lc 'awk -F: '\\''$1 == \"docker\" { print $3 }'\\'' /host/group')\n"+
+			"user_id=$(docker run --rm -e TARGET_USER=\"$target_user\" -v /etc/passwd:/host/passwd:ro deploy-manager-host-runner:doppler sh -lc 'awk -F: -v user=\"$TARGET_USER\" '\\''$1 == user { print $3 \":\" $4 }'\\'' /host/passwd')\n"+
+			"deployers_group=$(docker run --rm -v /etc/group:/host/group:ro deploy-manager-host-runner:doppler sh -lc 'awk -F: '\\''$1 == \"deployers\" { print $3 }'\\'' /host/group')\n"+
+			"docker_group=$(docker run --rm -v /etc/group:/host/group:ro deploy-manager-host-runner:doppler sh -lc 'awk -F: '\\''$1 == \"docker\" { print $3 }'\\'' /host/group')\n"+
 			"[ -n \"$user_id\" ] || { echo \"host user not found: $target_user\" >&2; exit 1; }\n"+
 			"[ -n \"$deployers_group\" ] || { echo \"host group not found: deployers\" >&2; exit 1; }\n"+
 			"[ -n \"$docker_group\" ] || { echo \"host group not found: docker\" >&2; exit 1; }\n"+
-			"docker run --rm --network host --user \"$user_id\" --group-add \"$deployers_group\" --group-add \"$docker_group\" -e HOME=/tmp -e DOCKER_CONFIG=/docker-config -v /srv/deploy-manager:/srv/deploy-manager -v /opt/infrastructure:/opt/infrastructure -v /var/run/docker.sock:/var/run/docker.sock -v /srv/deploy-manager/control/docker-config:/docker-config:ro deploy-manager-host-runner:proxy sh -lc %s",
+			"docker run --rm%s --network host --user \"$user_id\" --group-add \"$deployers_group\" --group-add \"$docker_group\" -e HOME=/tmp -e DOPPLER_CONFIG_DIR=/tmp/.doppler -e DOCKER_CONFIG=/docker-config -v /srv/deploy-manager:/srv/deploy-manager -v /opt/infrastructure:/opt/infrastructure -v /var/run/docker.sock:/var/run/docker.sock -v /srv/deploy-manager/control/docker-config:/docker-config:ro deploy-manager-host-runner:doppler sh -lc %s",
 		stringutil.ShellQuote(user),
+		interactive,
 		stringutil.ShellQuote(command),
 	)
-	return runLocalShell(ctx, hostCommand)
+	return runLocalShell(ctx, hostCommand, input)
 }
 
-func (c Client) runTailscaleSSH(ctx context.Context, command string) (string, error) {
+func (c Client) runTailscaleSSH(ctx context.Context, command string, input string) (string, error) {
 	if err := c.validateTailscaleDestination(); err != nil {
 		return "", err
 	}
@@ -180,6 +202,9 @@ func (c Client) runTailscaleSSH(ctx context.Context, command string) (string, er
 
 	cmd := exec.CommandContext(ctx, "tailscale", "ssh", c.destination(), command)
 	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	cmd.Stdout = buffer
 	cmd.Stderr = buffer
 	if err := cmd.Run(); err != nil {

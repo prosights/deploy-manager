@@ -52,10 +52,6 @@ func (c Connector) SyncCredentials(_ context.Context, scope connectors.SyncScope
 	}
 }
 
-func (c Connector) RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
-	return nil, nil
-}
-
 func syncSlack(scope connectors.SyncScope) ([]connectors.CredentialInventory, error) {
 	var cfg slackConfig
 	if err := json.Unmarshal(scope.Config, &cfg); err != nil {

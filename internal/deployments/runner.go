@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"deploy-manager/internal/auditlog"
@@ -23,7 +24,7 @@ import (
 type Runner struct {
 	queries runnerQueries
 	logs    *LogBus
-	runtime RuntimeVariableSource
+	runtime RuntimeInjectionSource
 	signer  sshutil.SignerSource
 
 	notifier notifications.Notifier
@@ -51,11 +52,15 @@ type runnerQueries interface {
 	UpsertDeploymentSlot(context.Context, db.UpsertDeploymentSlotParams) (db.ApplicationDeploymentSlot, error)
 }
 
-type RuntimeVariableSource interface {
-	RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error)
+// RuntimeInjectionSource issues short-lived, read-only Doppler service tokens
+// so deployment targets can inject their runtime env with `doppler run`. It
+// is the only supported way to provide runtime env: Deploy Manager never
+// downloads secret values and never writes env files to servers.
+type RuntimeInjectionSource interface {
+	IssueRuntimeInjection(ctx context.Context, scope connectors.RuntimeVariableScope, tokenName string) (connectors.RuntimeInjection, error)
 }
 
-func NewRunner(queries runnerQueries, logs *LogBus, notifier notifications.Notifier, runtime RuntimeVariableSource) Runner {
+func NewRunner(queries runnerQueries, logs *LogBus, notifier notifications.Notifier, runtime RuntimeInjectionSource) Runner {
 	if notifier == nil {
 		notifier = notifications.Noop{}
 	}
@@ -183,15 +188,14 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 		return r.rollback(ctx, deployment, target, client)
 	}
 
-	var variables []connectors.RuntimeVariable
-	if r.runtime != nil {
-		var runtimeErr error
-		variables, runtimeErr = r.runtime.RuntimeVariables(ctx, runtimeScope(target))
-		if runtimeErr != nil {
-			return fmt.Errorf("sync runtime variables: %w", runtimeErr)
-		}
-		r.append(ctx, deployment, "system", fmt.Sprintf("Runtime variables synced: %d", validRuntimeVariableCount(variables)))
+	if r.runtime == nil {
+		return fmt.Errorf("doppler runtime injection source is required: deployments must inject runtime env through Doppler")
 	}
+	injection, err := r.runtime.IssueRuntimeInjection(ctx, runtimeScope(target), deploymentTokenName(deployment))
+	if err != nil {
+		return fmt.Errorf("issue doppler deployment token: %w", err)
+	}
+	r.append(ctx, deployment, "system", fmt.Sprintf("Doppler runtime injection ready: %s/%s (short-lived read-only service token)", injection.Project, injection.Config))
 
 	targetColor, err := r.nextDeploymentColor(ctx, target)
 	if err != nil {
@@ -201,13 +205,20 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 	if err != nil {
 		return err
 	}
-	steps, err := remoteSteps(target, variables, remoteStepOptions{targetColor: targetColor, bluePort: ports.blue, greenPort: ports.green})
+	steps, err := remoteSteps(target, remoteStepOptions{targetColor: targetColor, bluePort: ports.blue, greenPort: ports.green, injection: injection})
 	if err != nil {
 		return err
 	}
 	for _, step := range steps {
 		r.append(ctx, deployment, "system", step.label)
-		output, err := client.Run(ctx, step.command)
+		var output string
+		if step.needsDopplerToken {
+			// The service token travels over SSH stdin only: it never appears
+			// in the command string, remote argv, shell history, or any file.
+			output, err = client.RunWithInput(ctx, step.command, injection.Token+"\n")
+		} else {
+			output, err = client.Run(ctx, step.command)
+		}
 		if strings.TrimSpace(output) != "" {
 			r.append(ctx, deployment, "stdout", output)
 		}
@@ -550,6 +561,20 @@ func (r Runner) audit(ctx context.Context, deployment db.Deployment, target db.G
 		TargetName: target.ApplicationName,
 		Metadata:   auditlog.Metadata(metadata),
 	})
+}
+
+// deploymentTokenName names the per-deployment Doppler service token so its
+// audit trail in Doppler links back to a deployment. The timestamp suffix
+// keeps re-runs of a recovered deployment unique.
+func deploymentTokenName(deployment db.Deployment) string {
+	id := strings.ReplaceAll(uuidString(deployment.ID), "-", "")
+	if len(id) > 12 {
+		id = id[:12]
+	}
+	if id == "" {
+		id = "unknown"
+	}
+	return fmt.Sprintf("deploy-manager-%s-%d", id, time.Now().Unix())
 }
 
 func deploymentActor(deployment db.Deployment) string {
