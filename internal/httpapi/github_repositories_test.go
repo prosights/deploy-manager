@@ -165,6 +165,25 @@ func TestFillGitHubBuildDefaultsUsesRepositoryBuildMetadata(t *testing.T) {
 	}
 }
 
+func TestFillGitHubBuildDefaultsOmitsSingleImageInputsForBuildMatrix(t *testing.T) {
+	request := fillGitHubBuildDefaults(githubBuildDispatchRequest{}, githubconnector.Repository{
+		BuildContext: ".",
+		Dockerfile:   "Dockerfile",
+		BuildMatrix:  `[{"name":"api"}]`,
+		ImageRef:     "us-docker.pkg.dev/prosights/internal/api:main",
+	})
+
+	if request.Inputs["build_matrix"] == "" {
+		t.Fatalf("expected build matrix input, got %+v", request.Inputs)
+	}
+	if _, ok := request.Inputs["build_context"]; ok {
+		t.Fatalf("did not expect build_context for matrix build, got %+v", request.Inputs)
+	}
+	if _, ok := request.Inputs["dockerfile"]; ok {
+		t.Fatalf("did not expect dockerfile for matrix build, got %+v", request.Inputs)
+	}
+}
+
 func TestValidateGitHubBuildDispatchRequestRequiresImageRef(t *testing.T) {
 	err := validateGitHubBuildDispatchRequest(githubBuildDispatchRequest{
 		Repository: "prosights/recreate",
