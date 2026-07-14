@@ -828,8 +828,10 @@ func fillGitHubBuildDefaults(request githubBuildDispatchRequest, repository gith
 	}
 	addGitHubBuildInput(request.Inputs, "image_ref", repository.ImageRef)
 	addGitHubBuildInput(request.Inputs, "build_matrix", repository.BuildMatrix)
-	addGitHubBuildInput(request.Inputs, "build_context", repository.BuildContext)
-	addGitHubBuildInput(request.Inputs, "dockerfile", repository.Dockerfile)
+	if repository.BuildMatrix == "" {
+		addGitHubBuildInput(request.Inputs, "build_context", repository.BuildContext)
+		addGitHubBuildInput(request.Inputs, "dockerfile", repository.Dockerfile)
+	}
 	addGitHubBuildInput(request.Inputs, "runner", repository.Runner)
 	return request
 }
