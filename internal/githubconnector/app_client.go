@@ -240,13 +240,11 @@ func (c *AppClient) postJSONBody(ctx context.Context, path string, bearer string
 		}
 		reader = bytes.NewReader(encoded)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, reader)
 	if err != nil {
 		return err
 	}
 	if reader != nil {
-		request.Body = io.NopCloser(reader)
-		request.ContentLength = -1
 		request.Header.Set("Content-Type", "application/json")
 	}
 	request.Header.Set("Authorization", "Bearer "+bearer)

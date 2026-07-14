@@ -73,6 +73,9 @@ func TestAppClientDispatchesWorkflow(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer installation-token" {
 				t.Fatalf("expected installation token, got %q", r.Header.Get("Authorization"))
 			}
+			if r.ContentLength <= 0 || len(r.TransferEncoding) != 0 {
+				t.Fatalf("expected fixed-length request body, got length %d and transfer encoding %v", r.ContentLength, r.TransferEncoding)
+			}
 			var body struct {
 				Ref    string            `json:"ref"`
 				Inputs map[string]string `json:"inputs"`
