@@ -5,7 +5,7 @@ import { Button } from '../../components/ui/button'
 import { Panel } from '../../components/ui/panel'
 import { TextInput } from '../../components/ui/text-input'
 import { SelectInput } from '../../components/ui/select-input'
-import type { BuildRun, ContainerRegistry, DopplerIntegrationStatus, GitHubIntegrationStatus, GitHubRepository, UpsertContainerRegistryInput } from '../../lib/api'
+import type { BuildRun, ConnectorAccount, ContainerRegistry, DopplerIntegrationStatus, GitHubIntegrationStatus, GitHubRepository, UpsertConnectorInput, UpsertContainerRegistryInput } from '../../lib/api'
 import { matchesSearch } from '../../lib/search'
 import { statusTone } from '../status'
 
@@ -25,8 +25,9 @@ type IntegrationCard = {
   missing?: string[]
 }
 
-function buildCards(github: GitHubIntegrationStatus, doppler: DopplerIntegrationStatus, registries: ContainerRegistry[]): IntegrationCard[] {
+function buildCards(github: GitHubIntegrationStatus, doppler: DopplerIntegrationStatus, registries: ContainerRegistry[], githubConnected: boolean): IntegrationCard[] {
   const hasRegistry = registries.some((r) => r.enabled)
+  const githubReady = github.app_configured && githubConnected
   return [
     {
       id: 'github',
@@ -34,10 +35,10 @@ function buildCards(github: GitHubIntegrationStatus, doppler: DopplerIntegration
       name: 'GitHub',
       description: 'Push-to-deploy with GitHub Actions builds',
       logo: '/branding/connectors/github.svg',
-      connected: github.app_configured && github.build_dispatch_enabled,
-      statusLabel: github.app_configured ? 'Connected' : 'Not connected',
-      actionLabel: github.app_configured ? undefined : 'Connect',
-      actionHref: github.install_url || undefined,
+      connected: githubReady,
+      statusLabel: githubReady ? 'Connected' : github.app_configured ? 'Install required' : 'Server setup required',
+      actionLabel: github.app_configured && !githubConnected ? 'Install' : undefined,
+      actionHref: github.app_configured && !githubConnected ? github.install_url || undefined : undefined,
       configurable: true,
       missing: github.missing,
     },
@@ -82,18 +83,30 @@ const categoryLabels: Record<string, string> = {
   notifications: 'Notifications',
 }
 
+type ConnectorFormProvider = 'github' | 'doppler'
+
+type ConnectorFormState = {
+  provider: ConnectorFormProvider
+  name: string
+  enabled: boolean
+  installationID: string
+  project: string
+  config: string
+}
+
 // --- Main integration grid ---
 
 type IntegrationGridProps = {
   githubStatus: GitHubIntegrationStatus
+  githubConnected: boolean
   dopplerStatus: DopplerIntegrationStatus
   registries: ContainerRegistry[]
   onSaveRegistry: (input: UpsertContainerRegistryInput) => void
   isSavingRegistry: boolean
 }
 
-export function IntegrationGrid({ githubStatus, dopplerStatus, registries, onSaveRegistry, isSavingRegistry }: IntegrationGridProps) {
-  const cards = buildCards(githubStatus, dopplerStatus, registries)
+export function IntegrationGrid({ githubStatus, githubConnected, dopplerStatus, registries, onSaveRegistry, isSavingRegistry }: IntegrationGridProps) {
+  const cards = buildCards(githubStatus, dopplerStatus, registries, githubConnected)
   const [expanded, setExpanded] = useState<string | null>(null)
   const categories = ['source', 'secrets', 'registry', 'notifications'] as const
 
@@ -119,6 +132,7 @@ export function IntegrationGrid({ githubStatus, dopplerStatus, registries, onSav
               <IntegrationDetail
                 card={items.find((item) => item.id === expanded)!}
                 githubStatus={githubStatus}
+                githubConnected={githubConnected}
                 dopplerStatus={dopplerStatus}
                 registries={registries}
                 onSaveRegistry={onSaveRegistry}
@@ -134,47 +148,51 @@ export function IntegrationGrid({ githubStatus, dopplerStatus, registries, onSav
 }
 
 function IntegrationCardView({ card, isExpanded, onToggle }: { card: IntegrationCard; isExpanded: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={card.actionHref ? undefined : onToggle}
-      className={`group relative flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-all ${
-        isExpanded ? 'border-accent bg-accent/5 shadow-sm' : 'bg-surface hover:border-accent/30 hover:shadow-sm'
-      } ${card.actionHref ? '' : 'cursor-pointer'}`}
-    >
+  const className = `group relative flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors ${
+    isExpanded ? 'border-accent bg-accent/5' : 'bg-surface hover:border-accent/30'
+  }`
+  const content = (
+    <>
       <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-white p-1.5">
         <img className="h-full w-full object-contain" src={card.logo} alt="" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="font-medium text-ink">{card.name}</span>
-          {card.connected && <Check className="size-3.5 text-success" />}
+          <Badge tone={card.connected ? 'success' : 'neutral'}>{card.statusLabel}</Badge>
         </div>
         <p className="truncate text-xs text-muted">{card.description}</p>
       </div>
       {card.actionHref ? (
-        <a
-          href={card.actionHref}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          className="shrink-0 inline-flex items-center gap-1 rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-surface hover:bg-ink/80"
-        >
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent">
           {card.actionLabel}
           <ExternalLink className="size-3" />
-        </a>
+        </span>
       ) : (
         <ChevronRight className={`size-4 shrink-0 text-muted transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
       )}
+    </>
+  )
+  if (card.actionHref) {
+    return (
+      <a href={card.actionHref} target="_blank" rel="noopener noreferrer" className={className}>
+        {content}
+      </a>
+    )
+  }
+  return (
+    <button type="button" onClick={onToggle} className={className}>
+      {content}
     </button>
   )
 }
 
 // --- Expanded detail panels ---
 
-function IntegrationDetail({ card, githubStatus, dopplerStatus, registries, onSaveRegistry, isSavingRegistry, onClose }: {
+function IntegrationDetail({ card, githubStatus, githubConnected, dopplerStatus, registries, onSaveRegistry, isSavingRegistry, onClose }: {
   card: IntegrationCard
   githubStatus: GitHubIntegrationStatus
+  githubConnected: boolean
   dopplerStatus: DopplerIntegrationStatus
   registries: ContainerRegistry[]
   onSaveRegistry: (input: UpsertContainerRegistryInput) => void
@@ -189,7 +207,7 @@ function IntegrationDetail({ card, githubStatus, dopplerStatus, registries, onSa
           <X className="size-4" />
         </button>
       </div>
-      {card.id === 'github' && <GitHubDetail status={githubStatus} />}
+      {card.id === 'github' && <GitHubDetail status={githubStatus} connected={githubConnected} />}
       {card.id === 'doppler' && <DopplerDetail status={dopplerStatus} />}
       {card.id === 'docker-registry' && <RegistryDetail registries={registries} onSave={onSaveRegistry} isSaving={isSavingRegistry} />}
       {card.id === 'slack' && <SlackDetail />}
@@ -197,11 +215,205 @@ function IntegrationDetail({ card, githubStatus, dopplerStatus, registries, onSa
   )
 }
 
-function GitHubDetail({ status }: { status: GitHubIntegrationStatus }) {
+type ConnectorAccountsPanelProps = {
+  connectors: ConnectorAccount[]
+  githubStatus: GitHubIntegrationStatus
+  isSaving: boolean
+  isSyncing: boolean
+  errorMessage?: string
+  onSave: (input: UpsertConnectorInput) => void
+  onSync: (connectorID: string) => void
+}
+
+export function ConnectorAccountsPanel({ connectors, githubStatus, isSaving, isSyncing, errorMessage, onSave, onSync }: ConnectorAccountsPanelProps) {
+  const accounts = connectors.filter((connector) => connector.provider === 'github' || connector.provider === 'doppler')
+  const hasGitHubAccount = accounts.some((connector) => connector.provider === 'github')
+  const [form, setForm] = useState<ConnectorFormState>(() => defaultConnectorForm('github'))
+  const [formError, setFormError] = useState<string>()
+
+  function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setFormError(undefined)
+    try {
+      onSave(connectorInput(form))
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : 'Connector metadata is invalid.')
+    }
+  }
+
+  return (
+    <Panel title="Connector metadata">
+      <div className="grid gap-5 p-4 xl:grid-cols-[1fr_360px]">
+        <div className="space-y-2">
+          {!hasGitHubAccount && githubStatus.install_url && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-ink">Connect GitHub App</p>
+                <p className="mt-0.5 text-xs text-muted">Install the app to grant repository access, then Deploy Manager will save the connector from the callback.</p>
+              </div>
+              <a
+                href={githubStatus.install_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md bg-ink px-3 py-2 text-sm font-medium text-surface hover:bg-ink/80"
+              >
+                Install GitHub App
+                <ExternalLink className="size-3.5" />
+              </a>
+            </div>
+          )}
+          {accounts.map((connector) => (
+            <div key={connector.id} className="grid gap-3 rounded-md border bg-background p-3 md:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-ink">{connector.name}</span>
+                  <Badge tone={connector.enabled ? 'success' : 'neutral'}>{connector.enabled ? 'enabled' : 'disabled'}</Badge>
+                  <Badge tone="neutral">{providerTitle(connector.provider)}</Badge>
+                  {connector.last_sync_status && <Badge tone={connector.last_sync_status === 'ok' ? 'success' : 'danger'}>{connector.last_sync_status}</Badge>}
+                </div>
+                <p className="mt-1 truncate font-mono text-xs text-muted">{connectorSummary(connector)}</p>
+                {connector.last_sync_message && <p className="mt-1 truncate text-xs text-muted">{connector.last_sync_message}</p>}
+              </div>
+              {connector.provider === 'github' && (
+                <div className="flex items-start justify-end">
+                  <Button variant="ghost" disabled={isSyncing || !connector.enabled} onClick={() => onSync(connector.id)}>
+                    <RefreshCw className={`size-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    Sync repos
+                  </Button>
+                </div>
+              )}
+            </div>
+          ))}
+          {accounts.length === 0 && (
+            <div className="rounded-md border bg-background px-4 py-6 text-sm text-muted">
+              Add connector metadata so the rest of the app can connect repositories and reference runtime secret scopes.
+            </div>
+          )}
+        </div>
+        <form className="space-y-3 rounded-md border bg-background p-4" onSubmit={submit}>
+          <div className="grid grid-cols-2 gap-2">
+            {(['github', 'doppler'] as const).map((provider) => (
+              <button
+                key={provider}
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left text-sm transition-colors hover:bg-panel ${form.provider === provider ? 'border-accent bg-accent/10 text-ink' : 'text-muted'}`}
+                onClick={() => {
+                  setForm(defaultConnectorForm(provider))
+                  setFormError(undefined)
+                }}
+              >
+                {providerTitle(provider)}
+              </button>
+            ))}
+          </div>
+          <TextInput label="Name" value={form.name} onChange={(name) => setForm((state) => ({ ...state, name }))} required />
+          {form.provider === 'github' ? (
+            <TextInput label="Installation ID" value={form.installationID} onChange={(installationID) => setForm((state) => ({ ...state, installationID }))} placeholder="12345678" required />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <TextInput label="Doppler project" value={form.project} onChange={(project) => setForm((state) => ({ ...state, project }))} placeholder="internal" required />
+              <TextInput label="Doppler config" value={form.config} onChange={(config) => setForm((state) => ({ ...state, config }))} placeholder="prd" required />
+            </div>
+          )}
+          <label className="flex items-center gap-2 text-sm text-ink">
+            <input
+              className="size-4 rounded border bg-background accent-[var(--color-accent)]"
+              type="checkbox"
+              checked={form.enabled}
+              onChange={(event) => setForm((state) => ({ ...state, enabled: event.target.checked }))}
+            />
+            Enabled
+          </label>
+          <Button variant="primary" disabled={isSaving || !form.name.trim()}>
+            {isSaving ? 'Saving...' : 'Save connector'}
+          </Button>
+          {(formError || errorMessage) && <p className="text-sm text-danger">{formError ?? errorMessage}</p>}
+        </form>
+      </div>
+    </Panel>
+  )
+}
+
+function defaultConnectorForm(provider: ConnectorFormProvider): ConnectorFormState {
+  return {
+    provider,
+    name: providerTitle(provider),
+    enabled: true,
+    installationID: '',
+    project: '',
+    config: '',
+  }
+}
+
+function connectorInput(form: ConnectorFormState): UpsertConnectorInput {
+  const name = form.name.trim()
+  if (!name) {
+    throw new Error('Connector name is required.')
+  }
+  if (hasControlCharacters(name)) {
+    throw new Error('Connector name cannot contain control characters.')
+  }
+  if (form.provider === 'github') {
+    const installationID = form.installationID.trim()
+    if (!/^[0-9]+$/.test(installationID)) {
+      throw new Error('GitHub installation ID must be numeric.')
+    }
+    return {
+      provider: 'github',
+      name,
+      enabled: form.enabled,
+      config: { installation_id: installationID },
+    }
+  }
+  const project = form.project.trim()
+  const config = form.config.trim()
+  if (!project || !config) {
+    throw new Error('Doppler project and config are required.')
+  }
+  if (hasControlCharacters(project) || hasControlCharacters(config)) {
+    throw new Error('Doppler project and config cannot contain control characters.')
+  }
+  return {
+    provider: 'doppler',
+    name,
+    enabled: form.enabled,
+    config: { project, config },
+  }
+}
+
+function connectorSummary(connector: ConnectorAccount): string {
+  if (connector.provider === 'github') {
+    const installationID = stringValue(connector.config.installation_id)
+    const repositories = Array.isArray(connector.config.repositories) ? connector.config.repositories.length : 0
+    return installationID ? `installation ${installationID}${repositories ? ` · ${repositories} repositories` : ''}` : `${repositories} repositories`
+  }
+  if (connector.provider === 'doppler') {
+    const project = stringValue(connector.config.project)
+    const config = stringValue(connector.config.config)
+    return project && config ? `${project}/${config}` : 'runtime scope metadata'
+  }
+  return connector.has_config ? 'metadata configured' : 'no metadata'
+}
+
+function providerTitle(provider: string): string {
+  if (provider === 'github') return 'GitHub'
+  if (provider === 'doppler') return 'Doppler'
+  return provider
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function hasControlCharacters(value: string): boolean {
+  return value.includes('\n') || value.includes('\r') || value.includes('\t')
+}
+
+function GitHubDetail({ status, connected }: { status: GitHubIntegrationStatus; connected: boolean }) {
   const items = [
-    { label: 'GitHub App', ok: status.app_configured },
-    { label: 'Repository sync', ok: status.repository_sync_enabled },
-    { label: 'Build dispatch', ok: status.build_dispatch_enabled },
+    { label: 'App credentials', ok: status.app_configured },
+    { label: 'Installation', ok: connected },
+    { label: 'Build dispatch', ok: status.build_dispatch_enabled && connected },
     { label: 'Webhook', ok: status.webhook_configured },
   ]
   return (
@@ -232,7 +444,7 @@ function GitHubDetail({ status }: { status: GitHubIntegrationStatus }) {
           </p>
         </div>
       )}
-      {!status.app_configured && status.install_url && (
+      {status.app_configured && !connected && status.install_url && (
         <a
           href={status.install_url}
           target="_blank"
@@ -243,8 +455,8 @@ function GitHubDetail({ status }: { status: GitHubIntegrationStatus }) {
           <ExternalLink className="size-3.5" />
         </a>
       )}
-      {status.app_configured && (
-        <p className="text-sm text-muted">GitHub App is connected. Push events will trigger builds automatically for connected repositories.</p>
+      {connected && (
+        <p className="text-sm text-muted">GitHub installation is connected. Push events will trigger builds for repositories mapped to applications.</p>
       )}
     </div>
   )
@@ -384,8 +596,6 @@ export function ConnectedRepos({ repositories, searchQuery, isSyncing, isDispatc
     repo.connector_name,
   ]))
 
-  if (visible.length === 0 && !searchQuery) return null
-
   const firstConnectorID = visible[0]?.connector_id
 
   return (
@@ -405,38 +615,43 @@ export function ConnectedRepos({ repositories, searchQuery, isSyncing, isDispatc
         </div>
         <span className="shrink-0 text-xs text-muted">{visible.length} {visible.length === 1 ? 'repository' : 'repositories'}</span>
       </div>
-      <div className="grid grid-cols-[minmax(0,1fr)_150px] border-b px-4 py-2 text-xs font-medium text-muted">
-        <span>Repository</span>
-        <span className="text-right">Action</span>
-      </div>
-      <div className="divide-y">
-        {visible.map((repo) => (
-          <div key={`${repo.connector_id}-${repo.repository}-${repo.branch}`} className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-4 px-4 py-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium text-ink">{repo.repository}</span>
-                <Badge tone="neutral">
-                  <GitBranch className="mr-0.5 size-3" />
-                  {repo.branch}
-                </Badge>
-              </div>
-              {repo.image_ref ? (
-                <p className="mt-0.5 truncate font-mono text-xs text-muted">{repo.image_ref}</p>
-              ) : (
-                <p className="mt-0.5 text-xs text-muted">No image recorded yet</p>
-              )}
-            </div>
-            <div className="flex justify-end">
-              <Button variant="ghost" disabled={isDispatching} onClick={() => onBuild(repo)}>
-                <Rocket className="size-3.5" />
-                Dispatch build
-              </Button>
-            </div>
+      {visible.length > 0 ? (
+        <>
+          <div className="grid grid-cols-[minmax(0,1fr)_150px] border-b px-4 py-2 text-xs font-medium text-muted">
+            <span>Repository</span>
+            <span className="text-right">Action</span>
           </div>
-        ))}
-      </div>
-      {visible.length === 0 && searchQuery && (
-        <p className="px-4 py-6 text-sm text-muted">No repositories match your search.</p>
+          <div className="divide-y">
+            {visible.map((repo) => (
+              <div key={`${repo.connector_id}-${repo.repository}-${repo.branch}`} className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-4 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium text-ink">{repo.repository}</span>
+                    <Badge tone="neutral">
+                      <GitBranch className="mr-0.5 size-3" />
+                      {repo.branch}
+                    </Badge>
+                  </div>
+                  {repo.image_ref ? (
+                    <p className="mt-0.5 truncate font-mono text-xs text-muted">{repo.image_ref}</p>
+                  ) : (
+                    <p className="mt-0.5 text-xs text-muted">No image recorded yet</p>
+                  )}
+                </div>
+                <div className="flex justify-end">
+                  <Button variant="ghost" disabled={isDispatching} onClick={() => onBuild(repo)}>
+                    <Rocket className="size-3.5" />
+                    Dispatch build
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="px-4 py-6 text-sm text-muted">
+          {searchQuery ? 'No repositories match your search.' : 'No repositories are synced yet. Install the GitHub App, then sync repository access.'}
+        </p>
       )}
     </Panel>
   )

@@ -52,8 +52,19 @@ func (s Server) completeBuildRun(w http.ResponseWriter, r *http.Request) {
 	build, err := s.queries.CompleteBuildRun(r.Context(), input)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, notFoundError("build not found"))
-			return
+			build, err = s.queries.GetBuildRun(r.Context(), buildID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, notFoundError("build not found"))
+				return
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			if build.Status == "succeeded" {
+				writeJSON(w, http.StatusOK, map[string]any{"build": build, "deployments": []db.Deployment{}})
+				return
+			}
 		}
 		writeError(w, err)
 		return

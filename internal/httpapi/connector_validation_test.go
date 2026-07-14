@@ -235,3 +235,34 @@ func TestNormalizeConnectorAccountRejectsNonObjectConfig(t *testing.T) {
 		t.Fatal("expected non-object connector config to fail")
 	}
 }
+
+func TestPublicConnectorConfigKeepsMetadataAndDropsSecretMaterial(t *testing.T) {
+	config := publicConnectorConfig([]byte(`{
+		"region":"us-east-1",
+		"api_key":"secret",
+		"repositories":[{"repository":"prosights/api","token":"secret","branch":"main"}],
+		"webhook":{"url":"https://example.com","value":"xoxb-1234567890"}
+	}`))
+
+	if config["region"] != "us-east-1" {
+		t.Fatalf("expected public metadata, got %+v", config)
+	}
+	if _, ok := config["api_key"]; ok {
+		t.Fatalf("expected secret key to be removed, got %+v", config)
+	}
+	repositories := config["repositories"].([]any)
+	repository := repositories[0].(map[string]any)
+	if repository["repository"] != "prosights/api" || repository["branch"] != "main" {
+		t.Fatalf("expected repository metadata, got %+v", repository)
+	}
+	if _, ok := repository["token"]; ok {
+		t.Fatalf("expected nested secret key to be removed, got %+v", repository)
+	}
+	webhook := config["webhook"].(map[string]any)
+	if webhook["url"] != "https://example.com" {
+		t.Fatalf("expected safe nested metadata, got %+v", webhook)
+	}
+	if _, ok := webhook["value"]; ok {
+		t.Fatalf("expected secret-looking value to be removed, got %+v", webhook)
+	}
+}

@@ -61,6 +61,7 @@ type connectorAccountResponse struct {
 	Name            string             `json:"name"`
 	Enabled         bool               `json:"enabled"`
 	HasConfig       bool               `json:"has_config"`
+	Config          map[string]any     `json:"config"`
 	LastSyncStatus  pgtype.Text        `json:"last_sync_status"`
 	LastSyncMessage pgtype.Text        `json:"last_sync_message"`
 	LastSyncedAt    pgtype.Timestamptz `json:"last_synced_at"`
@@ -69,12 +70,14 @@ type connectorAccountResponse struct {
 }
 
 func connectorResponse(account db.ConnectorAccount) connectorAccountResponse {
+	config := publicConnectorConfig(account.Config)
 	return connectorAccountResponse{
 		ID:              account.ID,
 		Provider:        account.Provider,
 		Name:            account.Name,
 		Enabled:         account.Enabled,
-		HasConfig:       len(account.Config) > 0 && string(account.Config) != "{}" && string(account.Config) != "null",
+		HasConfig:       len(config) > 0,
+		Config:          config,
 		LastSyncStatus:  account.LastSyncStatus,
 		LastSyncMessage: account.LastSyncMessage,
 		LastSyncedAt:    account.LastSyncedAt,
@@ -89,4 +92,52 @@ func connectorResponses(accounts []db.ConnectorAccount) []connectorAccountRespon
 		responses = append(responses, connectorResponse(account))
 	}
 	return responses
+}
+
+func publicConnectorConfig(raw []byte) map[string]any {
+	var config map[string]any
+	if err := json.Unmarshal(raw, &config); err != nil || config == nil {
+		return map[string]any{}
+	}
+	return publicConnectorConfigMap(config)
+}
+
+func publicConnectorConfigMap(config map[string]any) map[string]any {
+	public := make(map[string]any, len(config))
+	for key, value := range config {
+		if isSecretConfigKey(key) {
+			continue
+		}
+		value, ok := publicConnectorConfigValue(value)
+		if ok {
+			public[key] = value
+		}
+	}
+	return public
+}
+
+func publicConnectorConfigValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		public := publicConnectorConfigMap(typed)
+		return public, len(public) > 0
+	case []any:
+		public := make([]any, 0, len(typed))
+		for _, item := range typed {
+			item, ok := publicConnectorConfigValue(item)
+			if ok {
+				public = append(public, item)
+			}
+		}
+		return public, len(public) > 0
+	case string:
+		if looksLikeSecretMaterial(typed) {
+			return nil, false
+		}
+		return typed, true
+	case nil:
+		return nil, false
+	default:
+		return value, true
+	}
 }

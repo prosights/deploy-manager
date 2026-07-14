@@ -378,7 +378,8 @@ export type ConnectorAccount = {
   provider: string
   name: string
   enabled: boolean
-  config?: Record<string, unknown>
+  has_config: boolean
+  config: Record<string, unknown>
   last_sync_status: string | null
   last_sync_message: string | null
   last_synced_at: string | null
