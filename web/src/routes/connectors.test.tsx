@@ -4,6 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { syncGitHubConnectorRepositories, upsertConnector } from '../lib/api'
 import { ConnectorsRoute } from './connectors'
 
+let mockConnectors = [
+  {
+    id: 'connector_github',
+    provider: 'github',
+    name: 'GitHub',
+    enabled: true,
+    has_config: true,
+    config: { installation_id: '123456', repositories: [{ repository: 'prosights/recreate' }] },
+    last_sync_status: null,
+    last_sync_message: null,
+    last_synced_at: null,
+  },
+]
+
 vi.mock('../lib/api', () => ({
   dispatchGitHubBuild: vi.fn(async () => ({
     build: { id: 'build_1', provider: 'github_actions', status: 'dispatched', repository: 'acme/app', branch: 'main' },
@@ -78,19 +92,7 @@ vi.mock('../lib/queries', () => ({
   },
   connectorsQuery: {
     queryKey: ['connectors'],
-    queryFn: async () => [
-      {
-        id: 'connector_github',
-        provider: 'github',
-        name: 'GitHub',
-        enabled: true,
-        has_config: true,
-        config: { installation_id: '123456', repositories: [{ repository: 'prosights/recreate' }] },
-        last_sync_status: null,
-        last_sync_message: null,
-        last_synced_at: null,
-      },
-    ],
+    queryFn: async () => mockConnectors,
   },
 }))
 
@@ -105,6 +107,17 @@ vi.mock('../store/ui', () => ({
 describe('ConnectorsRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockConnectors = [{
+      id: 'connector_github',
+      provider: 'github',
+      name: 'GitHub',
+      enabled: true,
+      has_config: true,
+      config: { installation_id: '123456', repositories: [{ repository: 'prosights/recreate' }] },
+      last_sync_status: null,
+      last_sync_message: null,
+      last_synced_at: null,
+    }]
   })
 
   afterEach(() => {
@@ -126,6 +139,14 @@ describe('ConnectorsRoute', () => {
     expect(screen.getAllByText('Doppler').length).toBeGreaterThan(0)
     expect(screen.getByText('Docker Registry')).toBeTruthy()
     expect(screen.queryByRole('link', { name: /connect/i })).not.toBeInTheDocument()
+  })
+
+  it('shows install action when app credentials exist without an installation', async () => {
+    mockConnectors = []
+    renderRoute()
+
+    const install = await screen.findByRole('link', { name: /install required/i })
+    expect(install).toHaveAttribute('href', 'https://github.com/apps/deploy-manager/installations/new')
   })
 
   it('shows connected repositories', async () => {

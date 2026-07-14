@@ -72,6 +72,7 @@ export function ConnectorsRoute() {
       />
       <IntegrationGrid
         githubStatus={githubStatus}
+        githubConnected={connectors.some((connector) => connector.provider === 'github' && connector.enabled)}
         dopplerStatus={dopplerStatus}
         registries={registries}
         onSaveRegistry={(input) => saveRegistry.mutate(input)}

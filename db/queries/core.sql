@@ -711,6 +711,7 @@ SET status = $2,
     completed_at = now(),
     updated_at = now()
 WHERE id = $1
+  AND status <> 'succeeded'
 RETURNING id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at;
 
 -- name: ListContainerRegistries :many
