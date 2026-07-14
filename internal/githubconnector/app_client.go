@@ -283,6 +283,10 @@ func decodeGitHubResponse(response *http.Response, out any) error {
 		return err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message := strings.TrimSpace(string(body))
+		if message != "" {
+			return fmt.Errorf("github api returned %s: %s", response.Status, message)
+		}
 		return fmt.Errorf("github api returned %s", response.Status)
 	}
 	if len(bytes.TrimSpace(body)) == 0 {

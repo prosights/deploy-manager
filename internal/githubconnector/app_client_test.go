@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,6 +60,19 @@ func TestAppClientRejectsInvalidInstallationID(t *testing.T) {
 	}
 	if _, err := client.ListInstallationRepositories(context.Background(), "abc"); err == nil {
 		t.Fatal("expected invalid installation id to fail")
+	}
+}
+
+func TestAppClientIncludesGitHubErrorResponse(t *testing.T) {
+	response := &http.Response{
+		Status:     "422 Unprocessable Entity",
+		StatusCode: http.StatusUnprocessableEntity,
+		Body:       io.NopCloser(strings.NewReader(`{"message":"Unexpected inputs provided"}`)),
+	}
+
+	err := decodeGitHubResponse(response, nil)
+	if err == nil || !strings.Contains(err.Error(), "Unexpected inputs provided") {
+		t.Fatalf("expected GitHub error response, got %v", err)
 	}
 }
 
