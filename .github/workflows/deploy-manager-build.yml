@@ -242,6 +242,14 @@ jobs:
             --zone "$GCE_ZONE" \
             --tunnel-through-iap \
             --ssh-flag="-p 2345" \
+            --command "set -euo pipefail; image_ref='$IMAGE_REF'; compose=/srv/deploy-manager/control/docker-compose.yml; sudo sed -i \"s|^    image: .*|    image: \${image_ref}|\" \$compose; sudo docker compose -f \$compose pull app; sudo docker compose -f \$compose up -d --no-deps app" \
+            --quiet
+
+          gcloud compute ssh "$GCE_INSTANCE" \
+            --project "$GCE_PROJECT" \
+            --zone "$GCE_ZONE" \
+            --tunnel-through-iap \
+            --ssh-flag="-p 2345" \
             --ssh-flag="-N" \
             --ssh-flag="-L 127.0.0.1:18088:127.0.0.1:8088" \
             --quiet >iap-tunnel.log 2>&1 &
