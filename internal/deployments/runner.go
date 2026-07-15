@@ -201,7 +201,12 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 	if err != nil {
 		return err
 	}
-	steps, err := remoteSteps(target, variables, remoteStepOptions{targetColor: targetColor, bluePort: ports.blue, greenPort: ports.green})
+	steps, err := remoteSteps(target, variables, remoteStepOptions{
+		targetColor: targetColor,
+		imageRef:    deployment.ImageRef.String,
+		bluePort:    ports.blue,
+		greenPort:   ports.green,
+	})
 	if err != nil {
 		return err
 	}

@@ -361,6 +361,29 @@ func TestRemoteStepsPullForArtifactRollingDeploy(t *testing.T) {
 	}
 }
 
+func TestRemoteStepsPullForArtifactFromDeploymentOptions(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		Strategy:        "blue_green",
+		RepositoryUrl:   pgtype.Text{String: "git@github.com:acme/app.git", Valid: true},
+		Branch:          "main",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1/{color}/health", Valid: true},
+	}, nil, remoteStepOptions{imageRef: "ghcr.io/acme/app:1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "Pulling next color images") && !strings.Contains(joined, "docker compose -f 'docker-compose.yml' pull") {
+		t.Fatalf("expected artifact deploy to pull the pinned image, got %s", joined)
+	}
+	if strings.Contains(joined, "git clone") || strings.Contains(joined, "build --pull") {
+		t.Fatalf("did not expect artifact deploy to sync or build source, got %s", joined)
+	}
+}
+
 func TestRemoteStepsBuildOnTargetForSourceBlueGreenDeploy(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ApplicationName: "API Service",

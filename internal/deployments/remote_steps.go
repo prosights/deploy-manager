@@ -49,7 +49,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 		},
 	}
 
-	if isSourceDeploy(target) {
+	if isSourceDeployWithOptions(target, stepOptions) {
 		repository := stringutil.ShellQuote(target.RepositoryUrl.String)
 		branch := stringutil.ShellQuote(target.Branch)
 		git := "git -c safe.directory=" + remoteDir
@@ -86,7 +86,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	} else {
 		project := stringutil.ShellQuote(projectSlug(target.ApplicationName))
 		steps = append(steps, composeConfigStep(remoteDir, composePath))
-		if isSourceDeploy(target) {
+		if isSourceDeployWithOptions(target, stepOptions) {
 			steps = append(steps, remoteStep{
 				label:   "Building compose images",
 				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s build --pull", remoteDir, project, composePath),
@@ -115,6 +115,10 @@ func isSourceDeploy(target db.GetDeploymentTargetRow) bool {
 		return false
 	}
 	return target.RepositoryUrl.Valid && strings.TrimSpace(target.RepositoryUrl.String) != ""
+}
+
+func isSourceDeployWithOptions(target db.GetDeploymentTargetRow, options remoteStepOptions) bool {
+	return strings.TrimSpace(options.imageRef) == "" && isSourceDeploy(target)
 }
 
 func resolveRemoteStepOptions(target db.GetDeploymentTargetRow, options []remoteStepOptions) remoteStepOptions {
@@ -298,7 +302,7 @@ func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions)
 		},
 		composeConfigStep(remoteDir, composePath),
 	}
-	if isSourceDeploy(target) {
+	if isSourceDeployWithOptions(target, options) {
 		steps = append(steps, remoteStep{
 			label:   "Building next color images",
 			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s build --pull", remoteDir, colorPortCommand(options), project, composePath),
