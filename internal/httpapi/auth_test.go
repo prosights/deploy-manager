@@ -50,17 +50,19 @@ func TestAuthAllowsHealthChecksWithoutToken(t *testing.T) {
 func TestAuthAllowsGithubWebhookWithoutToken(t *testing.T) {
 	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{Token: "supersecrettoken123"})
 
-	response := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", nil)
-	handler.ServeHTTP(response, request)
+	for _, path := range []string{"/api/webhooks/github", "/api/github/webhook"} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		handler.ServeHTTP(response, request)
 
-	// The webhook authenticates via HMAC, not the bearer token, so it must not
-	// return 401 from the auth middleware (it returns 401 for invalid signature
-	// instead, which is handled inside the handler, but never reaches the
-	// bearer-token middleware). Either way the WWW-Authenticate Bearer header
-	// must be absent.
-	if got := response.Header().Get("WWW-Authenticate"); got == "Bearer" {
-		t.Fatal("github webhook must not be gated by the bearer-token middleware")
+		// The webhook authenticates via HMAC, not the bearer token, so it must not
+		// return 401 from the auth middleware (it returns 401 for invalid signature
+		// instead, which is handled inside the handler, but never reaches the
+		// bearer-token middleware). Either way the WWW-Authenticate Bearer header
+		// must be absent.
+		if got := response.Header().Get("WWW-Authenticate"); got == "Bearer" {
+			t.Fatalf("github webhook %s must not be gated by the bearer-token middleware", path)
+		}
 	}
 }
 

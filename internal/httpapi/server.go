@@ -87,6 +87,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 		r.Get("/readyz", server.readyz)
 		r.Get("/version", server.version)
 		r.Post("/webhooks/github", server.githubWebhook)
+		r.Post("/github/webhook", server.githubWebhook)
 		r.Get("/github/install/callback", server.githubInstallCallback)
 
 		r.Group(func(r chi.Router) {
