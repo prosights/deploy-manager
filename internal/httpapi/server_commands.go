@@ -83,6 +83,9 @@ func (s Server) remoteCommandRunner() remoteCommandRunner {
 
 func (r sshRemoteCommandRunner) Run(ctx context.Context, server db.Server, command string) (string, error) {
 	if server.ConnectionMode == sshutil.ConnectionModeTailscaleSSH {
+		if sshutil.IsLocalTailscaleHost(ctx, server.Hostname) {
+			return sshutil.NewLocalDockerHostClient(server.SshUser).Run(ctx, command)
+		}
 		return sshutil.NewTailscaleSSHClient(server.Hostname, server.SshPort, server.SshUser).Run(ctx, command)
 	}
 	signerSource := r.signer
