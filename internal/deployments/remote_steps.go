@@ -49,7 +49,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 		},
 	}
 
-	if target.RepositoryUrl.Valid && strings.TrimSpace(target.RepositoryUrl.String) != "" {
+	if isSourceDeploy(target) {
 		repository := stringutil.ShellQuote(target.RepositoryUrl.String)
 		branch := stringutil.ShellQuote(target.Branch)
 		git := "git -c safe.directory=" + remoteDir

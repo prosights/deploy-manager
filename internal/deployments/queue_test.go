@@ -356,6 +356,9 @@ func TestRemoteStepsPullForArtifactRollingDeploy(t *testing.T) {
 	if strings.Contains(joined, "build --pull") {
 		t.Fatalf("did not expect a build step for an artifact deploy, got %s", joined)
 	}
+	if strings.Contains(joined, "git clone") {
+		t.Fatalf("did not expect an artifact deploy to sync source, got %s", joined)
+	}
 }
 
 func TestRemoteStepsBuildOnTargetForSourceBlueGreenDeploy(t *testing.T) {
