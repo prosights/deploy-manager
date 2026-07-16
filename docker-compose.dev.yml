@@ -59,6 +59,8 @@ services:
       # The container runs as the unprivileged "deploy" user whose home is
       # /home/deploy, so SSH keys must be mounted there (not /root/.ssh).
       - ~/.ssh:/home/deploy/.ssh:ro
+      - ./data/playground/ssh:/home/deploy/playground/.ssh:ro
+      - ./data/playground/known_hosts:/app/known_hosts:ro
       - ./data/apps:/srv/deploy-manager/apps
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
@@ -69,6 +71,22 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/readyz >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  playground:
+    build:
+      context: ops/local-playground
+    ports:
+      - "${PLAYGROUND_SSH_PORT:-2222}:22"
+    volumes:
+      - ./data/playground/ssh:/playground-key:ro
+      - ./data/playground/apps:/srv/deploy-manager/apps
+      - ./data/playground/sources:/srv/deploy-manager/source:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "pgrep", "sshd"]
       interval: 5s
       timeout: 5s
       retries: 10

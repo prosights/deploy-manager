@@ -8,7 +8,6 @@ const routerState = vi.hoisted(() => ({
 }))
 
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({ data: { version: 'local', commit_sha: null } }),
   useSuspenseQueries: () => [
     {
       data: {
@@ -30,24 +29,10 @@ vi.mock('@tanstack/react-query', () => ({
         },
       ],
     },
-    {
-      data: [
-        {
-          id: 'env_1',
-          project_id: 'project_1',
-        },
-        {
-          id: 'env_2',
-          project_id: 'project_1',
-        },
-      ],
-    },
   ],
 }))
 
 vi.mock('../lib/queries', () => ({
-  appVersionQuery: {},
-  environmentsQuery: {},
   projectsQuery: {},
   settingsQuery: {},
 }))
@@ -64,15 +49,11 @@ vi.mock('../store/ui', () => ({
   nextTheme: () => 'dark',
   useUiStore: (selector: (state: {
     sidebarCollapsed: boolean
-    searchQuery: string
-    setSearchQuery: () => void
     toggleSidebar: () => void
     theme: 'light'
     setTheme: () => void
   }) => unknown) => selector({
     sidebarCollapsed: false,
-    searchQuery: '',
-    setSearchQuery: vi.fn(),
     toggleSidebar: vi.fn(),
     theme: 'light',
     setTheme: vi.fn(),
@@ -89,6 +70,9 @@ describe('AppShell', () => {
     render(<AppShell />)
 
     expect(screen.getAllByText('Deployments')).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'Recreate' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Back to projects' })).toHaveAttribute('href', '/projects')
+    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
   })
 
   it('keeps the global deployments item outside project context', () => {
@@ -97,5 +81,7 @@ describe('AppShell', () => {
     render(<AppShell />)
 
     expect(screen.getByRole('link', { name: 'Deployments' })).toHaveAttribute('href', '/deployments')
+    expect(screen.getByRole('heading', { name: 'Deployments' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Back to projects' })).not.toBeInTheDocument()
   })
 })

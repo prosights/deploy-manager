@@ -1,6 +1,7 @@
 import { Activity, ArrowUpRight } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
 import { Badge } from '../../components/ui/badge'
+import { Button } from '../../components/ui/button'
 import { Panel } from '../../components/ui/panel'
 import type { ConnectorAccount, Deployment, Server } from '../../lib/api'
 import { percent, statusTone } from '../status'
@@ -27,13 +28,12 @@ export function OverviewDashboard({
           <h1 className="text-xl font-semibold">Operations</h1>
           <p className="mt-1 text-sm text-muted">Remote servers, compose deployments, proxy routes, and credential visibility.</p>
         </div>
-        <Link
-          to="/deployments"
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-accent px-3 text-sm font-medium text-white transition-colors hover:bg-accent/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-        >
-          <Activity className="size-4" />
-          New deployment
-        </Link>
+        <Button asChild variant="primary">
+          <Link to="/deployments">
+            <Activity className="size-4" />
+            New deployment
+          </Link>
+        </Button>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">

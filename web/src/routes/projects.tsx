@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ArrowRight, FolderKanban, GitBranch, Layers3, Package, Plus, Rocket } from 'lucide-react'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { ArrowRight, FolderKanban, GitBranch, Layers3, Package, Plus, Rocket, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { PageHeader } from '../components/page-header'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { InlineError } from '../components/ui/error-message'
 import { Panel } from '../components/ui/panel'
+import { SelectInput } from '../components/ui/select-input'
 import { TextInput } from '../components/ui/text-input'
 import { statusTone } from '../features/status'
 import {
@@ -25,6 +26,10 @@ type ProjectForm = {
   description: string
 }
 
+type ProjectStatus = 'empty' | 'failed' | 'deploying' | 'healthy' | 'idle'
+type ProjectStatusFilter = 'all' | ProjectStatus
+type RepositoryFilter = 'all' | 'connected' | 'unconnected'
+
 const defaultProjectForm: ProjectForm = { name: '', slug: '', description: '' }
 
 export function ProjectsRoute() {
@@ -40,6 +45,10 @@ export function ProjectsRoute() {
   })
   const [form, setForm] = useState<ProjectForm>(defaultProjectForm)
   const [formError, setFormError] = useState<string>()
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<ProjectStatusFilter>('all')
+  const [repositoryFilter, setRepositoryFilter] = useState<RepositoryFilter>('all')
+  const [creating, setCreating] = useState(false)
 
   // Legacy URLs looked like /projects?project=<id>#section. Forward them to
   // the project page so old links and bookmarks keep working.
@@ -60,6 +69,7 @@ export function ProjectsRoute() {
     onSuccess: async (project) => {
       setForm(defaultProjectForm)
       setFormError(undefined)
+      setCreating(false)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: projectsQuery.queryKey }),
         queryClient.invalidateQueries({ queryKey: environmentsQuery.queryKey }),
@@ -68,14 +78,115 @@ export function ProjectsRoute() {
     },
   })
 
+  const closeCreateProject = () => {
+    setCreating(false)
+    setForm(defaultProjectForm)
+    setFormError(undefined)
+    create.reset()
+  }
+
+  const visibleProjects = projects.filter((project) => {
+    const status = projectStatus(applications.filter((application) => application.project_id === project.id))
+    const hasRepository = Boolean(project.repository_full_name)
+    return matchesProjectSearch(project, query)
+      && (statusFilter === 'all' || status === statusFilter)
+      && (repositoryFilter === 'all' || hasRepository === (repositoryFilter === 'connected'))
+  })
+
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Projects"
-        description="A project is one product boundary: a GitHub repository, its environments, and every service deployed from it."
-      />
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex h-9 min-w-56 flex-1 items-center gap-2 rounded-prosights-md border border-prosights-border bg-prosights-surface px-3 text-prosights-muted focus-within:ring-2 focus-within:ring-prosights-ring sm:max-w-sm">
+          <Search className="size-4 shrink-0" aria-hidden="true" />
+          <input
+            aria-label="Search projects"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-prosights-text outline-none placeholder:text-prosights-subtle"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search projects"
+          />
+        </label>
+        <SelectInput
+          label="Filter projects by status"
+          labelHidden
+          className="w-40"
+          value={statusFilter}
+          onChange={(value) => setStatusFilter(value as ProjectStatusFilter)}
+        >
+          <option value="all">All statuses</option>
+          <option value="healthy">Healthy</option>
+          <option value="deploying">Deploying</option>
+          <option value="failed">Failed</option>
+          <option value="idle">Idle</option>
+          <option value="empty">Empty</option>
+        </SelectInput>
+        <SelectInput
+          label="Filter projects by repository"
+          labelHidden
+          className="w-44"
+          value={repositoryFilter}
+          onChange={(value) => setRepositoryFilter(value as RepositoryFilter)}
+        >
+          <option value="all">All repositories</option>
+          <option value="connected">Connected</option>
+          <option value="unconnected">Not connected</option>
+        </SelectInput>
+        <DialogPrimitive.Root
+          open={creating}
+          onOpenChange={(open) => {
+            if (open) setCreating(true)
+            else closeCreateProject()
+          }}
+        >
+          <DialogPrimitive.Trigger asChild>
+            <Button type="button" variant="primary" className="ml-auto">
+              <Plus className="size-4" aria-hidden="true" />
+              Create project
+            </Button>
+          </DialogPrimitive.Trigger>
+          <DialogPrimitive.Portal>
+            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
+            <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-prosights-lg border border-prosights-border bg-prosights-surface shadow-prosights-float outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95">
+              <div className="border-b border-prosights-border px-5 py-4 pr-12">
+                <DialogPrimitive.Title className="text-base font-semibold text-prosights-text">
+                  Create project
+                </DialogPrimitive.Title>
+                <DialogPrimitive.Description className="mt-1 text-[13px] leading-5 text-prosights-muted">
+                  Create the project first, then connect its repository and services.
+                </DialogPrimitive.Description>
+              </div>
+              <DialogPrimitive.Close asChild>
+                <button
+                  type="button"
+                  aria-label="Close create project"
+                  className="absolute right-4 top-4 inline-flex size-7 items-center justify-center rounded-prosights-md text-prosights-muted transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-prosights-ring"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </button>
+              </DialogPrimitive.Close>
+              <NewProjectForm
+                form={form}
+                isSaving={create.isPending}
+                errorMessage={formError ?? create.error?.message}
+                onChange={(updates) => setForm((state) => ({ ...state, ...updates }))}
+                onCancel={closeCreateProject}
+                onSubmit={() => {
+                  setFormError(undefined)
+                  try {
+                    validateProjectForm(form)
+                  } catch (error) {
+                    setFormError(error instanceof Error ? error.message : 'Project is invalid.')
+                    return
+                  }
+                  create.mutate()
+                }}
+              />
+            </DialogPrimitive.Content>
+          </DialogPrimitive.Portal>
+        </DialogPrimitive.Root>
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {projects.map((project) => (
+        {visibleProjects.map((project) => (
           <ProjectTile
             key={project.id}
             project={project}
@@ -84,22 +195,11 @@ export function ProjectsRoute() {
             deployments={deployments.filter((deployment) => deployment.project_id === project.id)}
           />
         ))}
-        <NewProjectTile
-          form={form}
-          isSaving={create.isPending}
-          errorMessage={formError ?? create.error?.message}
-          onChange={(updates) => setForm((state) => ({ ...state, ...updates }))}
-          onSubmit={() => {
-            setFormError(undefined)
-            try {
-              validateProjectForm(form)
-            } catch (error) {
-              setFormError(error instanceof Error ? error.message : 'Project is invalid.')
-              return
-            }
-            create.mutate()
-          }}
-        />
+        {projects.length > 0 && visibleProjects.length === 0 && (
+          <div className="rounded-lg border border-dashed bg-surface px-4 py-10 text-center text-sm text-muted sm:col-span-2 xl:col-span-3">
+            No projects match these filters.
+          </div>
+        )}
       </div>
       {projects.length === 0 && (
         <Panel>
@@ -134,7 +234,7 @@ function ProjectTile({
       to="/projects/$projectId"
       params={{ projectId: project.id }}
       aria-label={`Open project ${project.name}`}
-      className="group flex min-h-44 flex-col rounded-lg border bg-surface p-4 text-left transition-colors hover:border-accent/60 hover:bg-panel focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="group flex min-h-44 flex-col rounded-lg border bg-surface p-4 text-left transition-colors hover:border-prosights-subtle hover:bg-prosights-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -177,59 +277,60 @@ function ProjectTile({
   )
 }
 
-function NewProjectTile({
+function NewProjectForm({
   form,
   isSaving,
   errorMessage,
   onChange,
+  onCancel,
   onSubmit,
 }: {
   form: ProjectForm
   isSaving: boolean
   errorMessage?: string
   onChange: (updates: Partial<ProjectForm>) => void
+  onCancel: () => void
   onSubmit: () => void
 }) {
   return (
     <form
-      className="flex min-h-44 flex-col justify-between rounded-lg border border-dashed bg-background p-4"
+      className="space-y-4 p-5"
       onSubmit={(event) => {
         event.preventDefault()
         onSubmit()
       }}
     >
-      <div>
-        <div className="flex items-center gap-2 text-sm font-medium text-ink">
-          <Plus className="size-4" aria-hidden="true" />
-          New project
-        </div>
-        <p className="mt-1 text-xs leading-5 text-muted">
-          One project per product. Connect its repository and deploy services inside it.
-        </p>
-      </div>
-      <div className="space-y-3 pt-3">
-        <TextInput
-          label="Project name"
-          value={form.name}
-          onChange={(name) => onChange({ name, slug: slugify(name) })}
-          required
-          placeholder="recreate"
-        />
+      <TextInput
+        label="Project name"
+        value={form.name}
+        onChange={(name) => onChange({ name, slug: slugify(name) })}
+        required
+        placeholder="recreate"
+      />
+      {errorMessage && <InlineError message={errorMessage} />}
+      <div className="flex justify-end gap-2">
+        <Button type="button" onClick={onCancel}>Cancel</Button>
         <Button variant="primary" disabled={isSaving || !form.name || !form.slug}>
-          {isSaving ? 'Creating...' : 'Create project'}
+          {isSaving ? 'Creating...' : 'Create'}
         </Button>
-        {errorMessage && <InlineError message={errorMessage} />}
       </div>
     </form>
   )
 }
 
-function projectStatus(applications: Application[]): string {
+function projectStatus(applications: Application[]): ProjectStatus {
   if (applications.length === 0) return 'empty'
   if (applications.some((application) => application.status === 'failed')) return 'failed'
   if (applications.some((application) => application.status === 'deploying')) return 'deploying'
   if (applications.every((application) => application.status === 'healthy')) return 'healthy'
   return 'idle'
+}
+
+function matchesProjectSearch(project: Project, query: string): boolean {
+  const value = query.trim().toLowerCase()
+  if (!value) return true
+  return [project.name, project.slug, project.description, project.repository_full_name]
+    .some((field) => field?.toLowerCase().includes(value))
 }
 
 function deploymentAge(deployment: Deployment): string {

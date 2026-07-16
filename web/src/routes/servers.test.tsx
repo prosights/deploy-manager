@@ -200,7 +200,8 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.change(await screen.findByLabelText('Tailscale machine'), { target: { value: '100.107.110.108' } })
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Tailscale machine' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'internal · 100.107.110.108' }))
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => {
@@ -224,7 +225,8 @@ describe('ServersRoute', () => {
 
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'vpc-production' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '100.79.100.28' } })
-    fireEvent.change(screen.getByLabelText('Connection'), { target: { value: 'tailscale_ssh' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Connection' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Tailscale SSH' }))
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => {

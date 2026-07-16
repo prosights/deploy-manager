@@ -132,8 +132,11 @@ describe('ProjectsRoute', () => {
   it('creates projects with normalized slugs', async () => {
     renderRoute()
 
+    expect(screen.queryByRole('dialog', { name: 'Create project' })).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }))
+    expect(await screen.findByRole('dialog', { name: 'Create project' })).toBeInTheDocument()
     fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'API Platform' } })
-    fireEvent.click(screen.getByRole('button', { name: /create project/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
 
     await waitFor(() => {
       expect(createProject).toHaveBeenCalledWith(expect.objectContaining({
@@ -141,5 +144,23 @@ describe('ProjectsRoute', () => {
         slug: 'api-platform',
       }))
     })
+  })
+
+  it('searches and filters projects', async () => {
+    renderRoute()
+
+    fireEvent.change(await screen.findByLabelText('Search projects'), { target: { value: 'recreate' } })
+    expect(screen.queryByText('Billing')).not.toBeInTheDocument()
+    expect(screen.getByText('Recreate')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Search projects'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by status' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Healthy' }))
+    expect(screen.getByText('Billing')).toBeInTheDocument()
+    expect(screen.queryByText('Recreate')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by repository' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Not connected' }))
+    expect(screen.getByText('No projects match these filters.')).toBeInTheDocument()
   })
 })

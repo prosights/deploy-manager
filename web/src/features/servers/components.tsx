@@ -268,8 +268,8 @@ export function ServerDevUsersPanel({
     <Panel
       title="Dev sudo users"
       action={
-        <Button variant="ghost" disabled={pending || !selectedServerID} onClick={onApply}>
-          <RefreshCw className="size-4" />
+        <Button variant="ghost" className="h-7 gap-1.5 px-2.5 text-xs" disabled={pending || !selectedServerID} onClick={onApply}>
+          <RefreshCw className="size-3.5" />
           Apply
         </Button>
       }
