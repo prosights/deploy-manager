@@ -1,17 +1,15 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { ArrowLeft, Bell, Cable, Ellipsis, FileClock, FolderKanban, Gauge, KeyRound, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Server, Settings, Sun } from 'lucide-react'
-import { useSuspenseQueries } from '@tanstack/react-query'
+import { ArrowLeft, Bell, Cable, Ellipsis, FileClock, FolderKanban, Gauge, KeyRound, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Search, Server, Settings, Sun, X } from 'lucide-react'
+import { useQuery, useSuspenseQueries } from '@tanstack/react-query'
 import type { CSSProperties } from 'react'
 import { Suspense, useEffect, useState } from 'react'
 import type { InstanceSettings } from '../lib/api'
-import { projectsQuery, settingsQuery } from '../lib/queries'
+import { appVersionQuery, projectsQuery, settingsQuery } from '../lib/queries'
 import { nextTheme, useUiStore } from '../store/ui'
 import { Button } from './ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
 import {
@@ -56,16 +54,18 @@ const defaultSettings: InstanceSettings = {
 
 const userName = import.meta.env.VITE_USER_NAME || 'Operator'
 const userEmail = import.meta.env.VITE_USER_EMAIL || 'user@prosights.co'
-const logoutURL = import.meta.env.VITE_LOGOUT_URL
 
 export function AppShell() {
   const [settingsResult, projectsResult] = useSuspenseQueries({
     queries: [settingsQuery, projectsQuery],
   })
+  const { data: appVersion } = useQuery(appVersionQuery)
   const settings: InstanceSettings = settingsResult.data ?? defaultSettings
   const projects = projectsResult.data
   const location = useLocation()
   const collapsed = useUiStore((state) => state.sidebarCollapsed)
+  const searchQuery = useUiStore((state) => state.searchQuery)
+  const setSearchQuery = useUiStore((state) => state.setSearchQuery)
   const toggleSidebar = useUiStore((state) => state.toggleSidebar)
   const theme = useUiStore((state) => state.theme)
   const setTheme = useUiStore((state) => state.setTheme)
@@ -146,6 +146,13 @@ export function AppShell() {
         </SidebarContent>
 
         <SidebarFooter className="border-t border-prosights-border p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-2">
+          <div
+            className="flex min-w-0 items-center justify-between gap-2 px-1.5 text-[11px] text-prosights-muted group-data-[collapsible=icon]:hidden"
+            title={`${versionLabel(appVersion?.version)} · ${appVersion?.commit_sha || 'development build'}`}
+          >
+            <span className="font-medium uppercase tracking-[0.08em] text-prosights-subtle">Build</span>
+            <span className="truncate font-mono">{versionLabel(appVersion?.version)} · {appVersion?.commit_sha?.slice(0, 7) || 'development'}</span>
+          </div>
           <SidebarMenu>
             <SidebarMenuItem>
               <DropdownMenu>
@@ -158,6 +165,9 @@ export function AppShell() {
                   </div>
                   <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                     <span className="truncate font-semibold text-prosights-text">{userName}</span>
+                    <span className="mt-0.5 w-fit rounded-full border border-prosights-border bg-prosights-surface px-1.5 py-0.5 text-[10px] font-medium leading-none text-prosights-muted">
+                      User
+                    </span>
                   </div>
                   <Ellipsis className="ml-auto size-4 text-prosights-muted group-data-[collapsible=icon]:hidden" />
                 </DropdownMenuTrigger>
@@ -170,16 +180,6 @@ export function AppShell() {
                   <div className="flex flex-col gap-0.5 px-3.5 py-3">
                     <span className="truncate text-[13px] font-semibold leading-5">{userName}</span>
                     <span className="truncate text-[12px] leading-4 text-prosights-muted">{userEmail}</span>
-                  </div>
-                  <DropdownMenuSeparator className="my-0 bg-prosights-border" />
-                  <div className="p-1">
-                    <DropdownMenuItem
-                      onClick={handleLogout}
-                      className="cursor-pointer justify-between rounded-prosights-md px-2.5 py-2 text-[13px] text-prosights-muted transition-colors focus:bg-prosights-surface-muted focus:text-prosights-text"
-                    >
-                      <span>Log Out</span>
-                      <LogOut className="size-4 text-prosights-muted" />
-                    </DropdownMenuItem>
                   </div>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -208,6 +208,26 @@ export function AppShell() {
               <h1 className="truncate text-[18px] font-semibold leading-5 text-prosights-text">{title}</h1>
             </div>
           </div>
+          <label className="hidden h-8 w-full max-w-sm items-center gap-2 rounded-prosights-md border border-prosights-border bg-prosights-canvas px-2.5 text-prosights-muted focus-within:border-prosights-subtle md:flex">
+            <Search className="size-3.5 shrink-0" aria-hidden="true" />
+            <input
+              aria-label="Search"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-prosights-text outline-none placeholder:text-prosights-subtle"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search this view"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                className="inline-flex size-5 shrink-0 items-center justify-center rounded-prosights-sm text-prosights-muted hover:bg-prosights-surface-muted hover:text-prosights-text"
+                onClick={() => setSearchQuery('')}
+              >
+                <X className="size-3.5" aria-hidden="true" />
+              </button>
+            )}
+          </label>
           <div className="flex min-w-0 items-center gap-2">
             <Button
               variant="ghost"
@@ -237,12 +257,9 @@ export function AppShell() {
   )
 }
 
-function handleLogout() {
-  if (logoutURL) {
-    window.location.replace(logoutURL)
-    return
-  }
-  window.location.reload()
+function versionLabel(version?: string): string {
+  if (!version || version === 'dev') return 'Local'
+  return version.startsWith('v') ? version : `v${version}`
 }
 
 function SidebarCollapseToggle() {

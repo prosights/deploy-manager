@@ -122,6 +122,26 @@ select {
   font: inherit;
 }
 
+:where(
+  button,
+  [role="button"],
+  [data-slot="button"],
+  [data-slot="dropdown-menu-trigger"],
+  [data-slot="sidebar-menu-button"]
+):focus,
+:where(
+  button,
+  [role="button"],
+  [data-slot="button"],
+  [data-slot="dropdown-menu-trigger"],
+  [data-slot="sidebar-menu-button"]
+):focus-visible {
+  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
