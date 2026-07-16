@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { ArrowLeft, Bell, Cable, Ellipsis, FileClock, FolderKanban, Gauge, KeyRound, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Server, Settings, Sun } from 'lucide-react'
+import { ArrowLeft, Bell, Cable, Ellipsis, FileClock, FolderKanban, Gauge, KeyRound, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Server, Settings, Sun } from 'lucide-react'
 import { useSuspenseQueries } from '@tanstack/react-query'
 import type { CSSProperties } from 'react'
 import { Suspense, useEffect, useState } from 'react'
@@ -7,6 +7,13 @@ import type { InstanceSettings } from '../lib/api'
 import { projectsQuery, settingsQuery } from '../lib/queries'
 import { nextTheme, useUiStore } from '../store/ui'
 import { Button } from './ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu'
 import {
   Sidebar,
   SidebarContent,
@@ -48,6 +55,8 @@ const defaultSettings: InstanceSettings = {
 }
 
 const userName = import.meta.env.VITE_USER_NAME || 'Operator'
+const userEmail = import.meta.env.VITE_USER_EMAIL || 'user@prosights.co'
+const logoutURL = import.meta.env.VITE_LOGOUT_URL
 
 export function AppShell() {
   const [settingsResult, projectsResult] = useSuspenseQueries({
@@ -137,18 +146,45 @@ export function AppShell() {
         </SidebarContent>
 
         <SidebarFooter className="border-t border-prosights-border p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-2">
-          <div
-            className="flex h-12 w-full min-w-0 items-center gap-2 overflow-hidden rounded-prosights-md px-1.5 text-left transition-colors hover:bg-prosights-surface-muted group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
-            title={userName}
-          >
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-prosights-surface-muted text-sm font-semibold text-prosights-text">
-              {userName.charAt(0).toUpperCase()}
-            </div>
-            <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
-              <span className="truncate font-semibold text-prosights-text">{userName}</span>
-            </div>
-            <Ellipsis className="ml-auto size-4 text-prosights-muted group-data-[collapsible=icon]:hidden" />
-          </div>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label={`${userName} account`}
+                  className="flex h-12 w-full min-w-0 items-center gap-2 overflow-hidden rounded-prosights-md px-1.5 text-left transition-colors hover:bg-prosights-surface-muted data-[state=open]:bg-prosights-surface-muted data-[state=open]:text-prosights-text group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
+                >
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-prosights-surface-muted text-sm font-semibold text-prosights-text">
+                    {(userName || userEmail || 'User').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+                    <span className="truncate font-semibold text-prosights-text">{userName}</span>
+                  </div>
+                  <Ellipsis className="ml-auto size-4 text-prosights-muted group-data-[collapsible=icon]:hidden" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  className="w-[--radix-dropdown-menu-trigger-width] min-w-64 overflow-hidden rounded-prosights-xl border-prosights-border bg-prosights-surface p-0 text-prosights-text shadow-prosights-float"
+                  side="top"
+                  align="start"
+                  sideOffset={4}
+                >
+                  <div className="flex flex-col gap-0.5 px-3.5 py-3">
+                    <span className="truncate text-[13px] font-semibold leading-5">{userName}</span>
+                    <span className="truncate text-[12px] leading-4 text-prosights-muted">{userEmail}</span>
+                  </div>
+                  <DropdownMenuSeparator className="my-0 bg-prosights-border" />
+                  <div className="p-1">
+                    <DropdownMenuItem
+                      onClick={handleLogout}
+                      className="cursor-pointer justify-between rounded-prosights-md px-2.5 py-2 text-[13px] text-prosights-muted transition-colors focus:bg-prosights-surface-muted focus:text-prosights-text"
+                    >
+                      <span>Log Out</span>
+                      <LogOut className="size-4 text-prosights-muted" />
+                    </DropdownMenuItem>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
@@ -199,6 +235,14 @@ export function AppShell() {
       </SidebarInset>
     </SidebarProvider>
   )
+}
+
+function handleLogout() {
+  if (logoutURL) {
+    window.location.replace(logoutURL)
+    return
+  }
+  window.location.reload()
 }
 
 function SidebarCollapseToggle() {

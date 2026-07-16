@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppShell } from './app-shell'
@@ -83,5 +83,14 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: 'Deployments' })).toHaveAttribute('href', '/deployments')
     expect(screen.getByRole('heading', { name: 'Deployments' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Back to projects' })).not.toBeInTheDocument()
+  })
+
+  it('opens the account menu with identity and logout', () => {
+    render(<AppShell />)
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: / account$/ }), { button: 0, ctrlKey: false })
+
+    expect(screen.getByText(/\S+@\S+\.\S+/)).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Log Out' })).toBeInTheDocument()
   })
 })
