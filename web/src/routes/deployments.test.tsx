@@ -476,7 +476,8 @@ describe('DeploymentsRoute', () => {
     expect(screen.getAllByText('api / prod-1')).not.toHaveLength(0)
     expect(screen.queryByText('worker')).not.toBeInTheDocument()
 
-    fireEvent.change(screen.getByLabelText('Project'), { target: { value: 'project_2' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Project' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Internal' }))
 
     expect(await screen.findByText('worker deployments')).toBeInTheDocument()
     expect(screen.getAllByText('worker')).not.toHaveLength(0)

@@ -1,13 +1,34 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { Bell, Cable, ChevronLeft, Container, FileClock, FolderKanban, Gauge, GitBranch, KeyRound, Layers3, Monitor, Moon, Package, Rocket, Route, Search, Server, Settings, Sun } from 'lucide-react'
+import { ArrowLeft, Bell, Cable, Ellipsis, FileClock, FolderKanban, Gauge, KeyRound, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Search, Server, Settings, Sun, X } from 'lucide-react'
 import { useQuery, useSuspenseQueries } from '@tanstack/react-query'
 import type { CSSProperties } from 'react'
 import { Suspense, useEffect, useState } from 'react'
 import type { InstanceSettings } from '../lib/api'
-import { appVersionQuery, environmentsQuery, projectsQuery, settingsQuery } from '../lib/queries'
+import { appVersionQuery, projectsQuery, settingsQuery } from '../lib/queries'
 import { nextTheme, useUiStore } from '../store/ui'
 import { Button } from './ui/button'
-import { cn } from '../lib/cn'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from './ui/sidebar'
 
 const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
   { to: '/', label: 'Overview', icon: Gauge },
@@ -21,16 +42,6 @@ const nav: Array<{ to: string, label: string, icon: typeof Gauge }> = [
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
-const projectNav: Array<{ hash: string, label: string, icon: typeof Gauge }> = [
-  { hash: 'overview', label: 'Overview', icon: Layers3 },
-  { hash: 'applications', label: 'Applications', icon: Package },
-  { hash: 'environments', label: 'Environments', icon: GitBranch },
-  { hash: 'deployments', label: 'Deployments', icon: Rocket },
-  { hash: 'registry', label: 'Registry', icon: Container },
-  { hash: 'routes', label: 'Proxy Routes', icon: Route },
-  { hash: 'settings', label: 'Settings', icon: Settings },
-]
-
 const defaultSettings: InstanceSettings = {
   name: 'Deploy Manager',
   short_name: 'Deploy',
@@ -41,14 +52,16 @@ const defaultSettings: InstanceSettings = {
   docs_url: '#',
 }
 
+const userName = import.meta.env.VITE_USER_NAME || 'Operator'
+const userEmail = import.meta.env.VITE_USER_EMAIL || 'user@prosights.co'
+
 export function AppShell() {
-  const [settingsResult, projectsResult, environmentsResult] = useSuspenseQueries({
-    queries: [settingsQuery, projectsQuery, environmentsQuery],
+  const [settingsResult, projectsResult] = useSuspenseQueries({
+    queries: [settingsQuery, projectsQuery],
   })
   const { data: appVersion } = useQuery(appVersionQuery)
   const settings: InstanceSettings = settingsResult.data ?? defaultSettings
   const projects = projectsResult.data
-  const environments = environmentsResult.data
   const location = useLocation()
   const collapsed = useUiStore((state) => state.sidebarCollapsed)
   const searchQuery = useUiStore((state) => state.searchQuery)
@@ -62,14 +75,10 @@ export function AppShell() {
     '--color-accent-fg': accentForeground(safeAccent),
     '--color-accent-text': accentTextColor(safeAccent, theme),
   } as CSSProperties
-  const projectID = projectIDFromPath(location.pathname) || projectIDFromSearch(window.location.search)
+  const projectID = projectIDFromPath(location.pathname)
+  const isProjectPage = location.pathname.startsWith('/projects/')
   const activeProject = projects.find((project) => project.id === projectID)
-  const activeEnvironments = activeProject ? environments.filter((environment) => environment.project_id === activeProject.id) : []
-  const projectSection = activeProject ? projectSectionFromHash(location.hash) : ''
-  const visibleNav = activeProject ? nav.filter((item) => item.to !== '/deployments') : nav
-  const contextLabel = activeProject
-    ? `${activeProject.slug} / ${activeEnvironments.length} env${activeEnvironments.length === 1 ? '' : 's'}`
-    : 'all projects'
+  const title = pageTitle(location.pathname, activeProject?.name)
 
   useEffect(() => {
     document.title = settings.name
@@ -78,110 +87,152 @@ export function AppShell() {
   }, [settings.favicon_url, settings.meta_description, settings.name])
 
   return (
-    <div className="grid min-h-screen bg-background text-ink" style={{ ...brandStyle, gridTemplateColumns: collapsed ? '72px minmax(0,1fr)' : '272px minmax(0,1fr)' }}>
-      <aside className="sticky top-0 flex h-screen min-h-0 border-r bg-surface">
-        <div className="flex w-full flex-col">
-          <div className="flex h-14 items-center gap-3 border-b px-4">
-            <div className="flex size-8 items-center justify-center">
-              {settings.logo_url ? (
-                <img className="logo-mark max-h-7 max-w-7 object-contain" src={settings.logo_url} alt="" />
-              ) : (
-                <span className="text-sm font-semibold text-ink">{settings.short_name.slice(0, 1).toUpperCase()}</span>
-              )}
-            </div>
-            {!collapsed && (
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold">{settings.short_name}</div>
-                <div className="truncate text-xs text-muted">Internal deployments</div>
-              </div>
-            )}
-          </div>
-          <nav className="flex flex-1 flex-col gap-1 px-3 py-3">
-            {visibleNav.map((item) => {
-              const active = item.to === '/projects'
-                ? location.pathname.startsWith('/projects') || (location.pathname === '/deployments' && Boolean(activeProject))
-                : location.pathname === item.to && !(item.to === '/deployments' && activeProject)
-              const Icon = item.icon
-              const to = item.to === '/deployments' && activeProject ? scopedHref('/deployments', activeProject.id) : item.to
-              return (
-                <div key={item.to}>
-                  <Link
-                    to={to}
-                    className={cn(
-                      'flex h-9 items-center gap-3 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
-                      active && 'bg-accent/15 text-accent-text',
-                    )}
-                  >
-                    <Icon className="size-4 shrink-0" aria-hidden="true" />
-                    {!collapsed && <span className="truncate">{item.label}</span>}
-                  </Link>
-                {item.to === '/projects' && !collapsed && active && activeProject && (
-                  <div className="ml-6 mt-1 space-y-1 border-l pl-2">
-                    <div className="px-2 py-1 text-xs text-muted">
-                      <div className="truncate font-medium text-ink">{activeProject.name}</div>
-                      <div className="truncate">{activeEnvironments.length} env{activeEnvironments.length === 1 ? '' : 's'}</div>
-                    </div>
-                    {projectNav.map((projectItem) => {
-                      const ProjectIcon = projectItem.icon
-                      const href = projectSectionHref(activeProject.id, projectItem.hash)
-                      const projectItemActive = projectSection === projectItem.hash && location.pathname.startsWith('/projects/')
-                      return (
-                        <a
-                          key={projectItem.hash}
-                          href={href}
-                          className={cn(
-                            'flex h-8 items-center gap-2 rounded-md px-2 text-sm text-muted transition-colors hover:bg-panel hover:text-ink',
-                            projectItemActive && 'bg-accent/15 text-accent-text',
-                          )}
-                        >
-                          <ProjectIcon className="size-3.5 shrink-0" aria-hidden="true" />
-                          <span className="truncate">{projectItem.label}</span>
-                        </a>
-                      )
-                    })}
-                  </div>
+    <SidebarProvider
+      open={!collapsed}
+      onOpenChange={(open) => {
+        if (open === collapsed) toggleSidebar()
+      }}
+      className="text-prosights-text"
+      style={brandStyle}
+    >
+      <Sidebar collapsible="icon" className="border-prosights-border bg-prosights-surface">
+        <SidebarHeader className="h-[60px] justify-center border-b border-prosights-border px-3 py-0">
+          <div className="flex h-9 items-center gap-2 rounded-prosights-md px-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+            <Link to="/" className="flex min-w-0 flex-1 items-center gap-2 text-left group-data-[collapsible=icon]:hidden">
+              <div className="flex size-7 shrink-0 items-center justify-center">
+                {settings.logo_url ? (
+                  <img className="logo-mark max-h-7 max-w-7 object-contain" src={settings.logo_url} alt="" />
+                ) : (
+                  <span className="text-sm font-semibold text-prosights-text">{settings.short_name.slice(0, 1).toUpperCase()}</span>
                 )}
-                </div>
+              </div>
+              <span className="truncate text-[16px] font-semibold text-prosights-text">{settings.short_name}</span>
+            </Link>
+            <SidebarCollapseToggle />
+          </div>
+        </SidebarHeader>
+
+        <SidebarContent>
+          <SidebarGroup className="px-2 py-1.5 group-data-[collapsible=icon]:pt-3.5">
+            <SidebarGroupLabel className="h-6 px-2 text-[10px] font-medium uppercase tracking-[0.12em] text-prosights-subtle">
+              Workspace
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu className="gap-0.5">
+            {nav.map((item) => {
+              const active = item.to === '/projects'
+                ? location.pathname.startsWith('/projects')
+                : location.pathname === item.to
+              const Icon = item.icon
+              return (
+                <SidebarMenuItem key={item.to}>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={active}
+                    tooltip={item.label}
+                    className="group/sidebar-item h-8 rounded-prosights-md px-2 text-[13px] font-medium text-prosights-muted transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text data-[active=true]:bg-prosights-surface-muted data-[active=true]:text-prosights-text [&>svg]:size-4"
+                  >
+                    <Link to={item.to}>
+                      <Icon className={active ? 'text-prosights-text' : 'text-prosights-muted group-hover/sidebar-item:text-prosights-text'} aria-hidden="true" />
+                      <span>{item.label}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
               )
             })}
-          </nav>
-          <div className="mt-auto space-y-2 border-t p-3">
-            <div className={cn('rounded-md border bg-background/70 px-2 py-2 text-xs text-muted shadow-sm', collapsed && 'px-1 text-center')} title={versionTitle(appVersion?.version, appVersion?.commit_sha)}>
-              {!collapsed && <div className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Version</div>}
-              <div className="truncate font-mono text-sm font-semibold text-ink">{collapsed ? shortVersionLabel(appVersion?.version) : versionLabel(appVersion?.version)}</div>
-              {!collapsed && (
-                <div className="mt-0.5 truncate font-mono">
-                  {versionDetail(appVersion?.version, appVersion?.commit_sha)}
-                </div>
-              )}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+
+        <SidebarFooter className="border-t border-prosights-border p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-2">
+          <div
+            className="flex min-w-0 items-center justify-between gap-2 px-1.5 text-[11px] text-prosights-muted group-data-[collapsible=icon]:hidden"
+            title={`${versionLabel(appVersion?.version)} · ${appVersion?.commit_sha || 'development build'}`}
+          >
+            <span className="font-medium uppercase tracking-[0.08em] text-prosights-subtle">Build</span>
+            <span className="truncate font-mono">{versionLabel(appVersion?.version)} · {appVersion?.commit_sha?.slice(0, 7) || 'development'}</span>
+          </div>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  aria-label={`${userName} account`}
+                  className="flex h-12 w-full min-w-0 items-center gap-2 overflow-hidden rounded-prosights-md px-1.5 text-left transition-colors hover:bg-prosights-surface-muted data-[state=open]:bg-prosights-surface-muted data-[state=open]:text-prosights-text group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
+                >
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-prosights-surface-muted text-sm font-semibold text-prosights-text">
+                    {(userName || userEmail || 'User').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="grid min-w-0 flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
+                    <span className="truncate font-semibold text-prosights-text">{userName}</span>
+                    <span className="mt-0.5 w-fit rounded-full border border-prosights-border bg-prosights-surface px-1.5 py-0.5 text-[10px] font-medium leading-none text-prosights-muted">
+                      User
+                    </span>
+                  </div>
+                  <Ellipsis className="ml-auto size-4 text-prosights-muted group-data-[collapsible=icon]:hidden" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  className="w-[--radix-dropdown-menu-trigger-width] min-w-64 overflow-hidden rounded-prosights-xl border-prosights-border bg-prosights-surface p-0 text-prosights-text shadow-prosights-float"
+                  side="top"
+                  align="start"
+                  sideOffset={4}
+                >
+                  <div className="flex flex-col gap-0.5 px-3.5 py-3">
+                    <span className="truncate text-[13px] font-semibold leading-5">{userName}</span>
+                    <span className="truncate text-[12px] leading-4 text-prosights-muted">{userEmail}</span>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+
+      <SidebarInset className="flex h-svh min-w-0 flex-col overflow-hidden bg-prosights-canvas">
+        <header className="sticky top-0 z-40 flex h-[60px] shrink-0 items-center justify-between gap-3 border-b border-prosights-border bg-prosights-surface px-4 sm:px-6">
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+            <SidebarTrigger className="md:hidden [&>svg]:size-4" />
+            {isProjectPage && (
+              <Link
+                to="/projects"
+                aria-label="Back to projects"
+                title="Back to projects"
+                className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-prosights-md text-prosights-muted hover:bg-prosights-surface-muted hover:text-prosights-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-prosights-ring"
+              >
+                <ArrowLeft className="size-4" aria-hidden="true" />
+                <span className="sr-only">Back to projects</span>
+              </Link>
+            )}
+            <div className="min-w-0">
+              <h1 className="truncate text-[18px] font-semibold leading-5 text-prosights-text">{title}</h1>
             </div>
-            <Button variant="ghost" className="w-full justify-start" onClick={toggleSidebar} aria-label="Toggle sidebar">
-              <ChevronLeft className={cn('size-4 transition-transform', collapsed && 'rotate-180')} />
-              {!collapsed && 'Collapse'}
-            </Button>
           </div>
-        </div>
-      </aside>
-      <main className="min-w-0">
-        <header className="flex h-14 items-center justify-between gap-4 border-b bg-background/95 px-5">
-          <div className="flex min-w-0 items-center gap-3">
-            <GitBranch className="size-4 text-muted" aria-hidden="true" />
-            <div className="truncate text-sm text-muted">{contextLabel}</div>
-          </div>
-          <label className="hidden h-9 w-full max-w-md items-center gap-2 rounded-md border bg-surface px-3 text-muted focus-within:ring-2 focus-within:ring-accent md:flex">
-            <Search className="size-4" aria-hidden="true" />
+          <label className="hidden h-8 w-full max-w-sm items-center gap-2 rounded-prosights-md border border-prosights-border bg-prosights-canvas px-2.5 text-prosights-muted focus-within:border-prosights-subtle md:flex">
+            <Search className="size-3.5 shrink-0" aria-hidden="true" />
             <input
               aria-label="Search"
-              className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-muted/70"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-prosights-text outline-none placeholder:text-prosights-subtle"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search servers, deployments, credentials"
+              placeholder="Search this view"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                className="inline-flex size-5 shrink-0 items-center justify-center rounded-prosights-sm text-prosights-muted hover:bg-prosights-surface-muted hover:text-prosights-text"
+                onClick={() => setSearchQuery('')}
+              >
+                <X className="size-3.5" aria-hidden="true" />
+              </button>
+            )}
           </label>
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2">
             <Button
               variant="ghost"
-              className="size-9 p-0"
+              size="icon"
+              className="size-8 bg-transparent text-prosights-muted hover:bg-prosights-surface-muted hover:text-prosights-text"
               onClick={() => setTheme(nextTheme(theme))}
               aria-label={`Theme: ${theme}. Click to switch.`}
             >
@@ -192,81 +243,51 @@ export function AppShell() {
                   : <Monitor className="size-4" />
               }
             </Button>
-            <span className="text-sm text-muted">All systems auditable</span>
           </div>
         </header>
-        <div className="mx-auto w-full max-w-[1760px] p-5">
-          <Suspense fallback={<DeferredFallback />}>
-            <Outlet />
-          </Suspense>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-[1760px] p-5">
+            <Suspense fallback={<DeferredFallback />}>
+              <Outlet />
+            </Suspense>
+          </div>
         </div>
-      </main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }
 
-function projectSectionFromHash(hash: string): string {
-  const value = hash.replace(/^#/, '')
-  if (value === 'targets' || value === 'services') return 'applications'
-  return projectNav.some((item) => item.hash === value) ? value : 'overview'
+function versionLabel(version?: string): string {
+  if (!version || version === 'dev') return 'Local'
+  return version.startsWith('v') ? version : `v${version}`
+}
+
+function SidebarCollapseToggle() {
+  const { state, toggleSidebar } = useSidebar()
+  const isCollapsed = state === 'collapsed'
+  const Icon = isCollapsed ? PanelLeftOpen : PanelLeftClose
+
+  return (
+    <button
+      type="button"
+      aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      onClick={toggleSidebar}
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-prosights-md text-prosights-muted transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text focus:outline-none focus-visible:ring-2 focus-visible:ring-prosights-ring"
+    >
+      <Icon className="size-4" />
+    </button>
+  )
+}
+
+function pageTitle(pathname: string, projectName?: string): string {
+  if (pathname.startsWith('/projects/')) return projectName || 'Project'
+  return nav.find((item) => item.to === pathname)?.label || 'Deploy Manager'
 }
 
 function projectIDFromPath(pathname: string): string {
   const match = pathname.match(/^\/projects\/([^/]+)/)
   return match ? decodeURIComponent(match[1]) : ''
-}
-
-function projectIDFromSearch(search: string): string {
-  return new URLSearchParams(search).get('project') ?? ''
-}
-
-function projectSectionHref(projectID: string, section: string): string {
-  return `/projects/${encodeURIComponent(projectID)}#${section}`
-}
-
-function scopedHref(path: string, projectID: string): string {
-  return `${path}?project=${encodeURIComponent(projectID)}`
-}
-
-function versionLabel(version?: string): string {
-  const clean = normalizedVersion(version)
-  if (!clean) {
-    return 'Local'
-  }
-  if (clean.startsWith('v')) {
-    return clean
-  }
-  return `v${clean}`
-}
-
-function shortVersionLabel(version?: string): string {
-  const clean = normalizedVersion(version)
-  if (!clean) {
-    return 'dev'
-  }
-  if (clean.startsWith('v')) {
-    return clean.replace(/^v/, '')
-  }
-  return clean.slice(0, 7)
-}
-
-function versionTitle(version?: string, commitSHA?: string): string {
-  const label = versionLabel(version)
-  return commitSHA ? `${label} ${commitSHA}` : label
-}
-
-function versionDetail(version?: string, commitSHA?: string): string {
-  if (!normalizedVersion(version)) {
-    return 'development build'
-  }
-  return commitSHA ? commitSHA.slice(0, 12) : 'commit unknown'
-}
-
-function normalizedVersion(version?: string): string {
-  if (!version || version === 'dev') {
-    return ''
-  }
-  return version.trim()
 }
 
 // Renders nothing for 150ms so fast suspense resolves invisibly.

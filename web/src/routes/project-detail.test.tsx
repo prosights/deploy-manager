@@ -222,7 +222,8 @@ describe('ProjectDetailRoute', () => {
   it('connects a github repository and branch to the project', async () => {
     renderRoute('project_1')
 
-    fireEvent.change(await screen.findByLabelText('GitHub repository'), { target: { value: 'connector_github:prosights/recreate' } })
+    fireEvent.click(await screen.findByRole('combobox', { name: 'GitHub repository' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'prosights/recreate' }))
     fireEvent.change(screen.getByLabelText('Branch to deploy'), { target: { value: 'release/2026-07' } })
     fireEvent.click(screen.getByRole('button', { name: /connect repository/i }))
 
@@ -269,7 +270,8 @@ describe('ProjectDetailRoute', () => {
     renderRoute('project_1')
 
     fireEvent.change(await screen.findByLabelText('Environment'), { target: { value: 'PR 42' } })
-    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'preview' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Type' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'PR preview' }))
     fireEvent.click(screen.getByRole('button', { name: /advanced/i }))
     fireEvent.change(screen.getByLabelText('PR'), { target: { value: '42' } })
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'feature/api' } })
@@ -298,7 +300,8 @@ describe('ProjectDetailRoute', () => {
     window.location.hash = '#applications'
     renderRoute('project_1')
 
-    fireEvent.change(await screen.findByLabelText('GitHub repo'), { target: { value: 'https://github.com/prosights/recreate.git' } })
+    fireEvent.click(await screen.findByRole('combobox', { name: 'GitHub repo' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'prosights/recreate#release/2026-07' }))
     fireEvent.change(screen.getByLabelText('Application'), { target: { value: 'recreate' } })
     fireEvent.click(screen.getByRole('button', { name: /^add$/i }))
 

@@ -145,7 +145,8 @@ describe('ProxyRoute', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.change(await screen.findByLabelText('Application'), { target: { value: 'app_1' } })
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Application' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'api' }))
     expect(await screen.findByText(/Server selection is derived/)).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Upstream'), { target: { value: 'http://127.0.0.1:8080' } })
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
@@ -215,7 +216,8 @@ describe('ProxyRoute', () => {
     )
 
     fireEvent.change(await screen.findByLabelText('Domain'), { target: { value: 'api.example.com' } })
-    fireEvent.change(screen.getByLabelText('Application'), { target: { value: 'app_2' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Application' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'worker' }))
     fireEvent.change(screen.getByLabelText('Upstream'), { target: { value: 'http://127.0.0.1:8080' } })
 
     expect(screen.getByLabelText('Domain')).toHaveValue('')

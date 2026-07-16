@@ -206,51 +206,41 @@ function ProjectHeader({
   proxyRoutes: ProxyRouteRecord[]
 }) {
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 text-sm text-muted">
-        <Link to="/projects" className="inline-flex items-center gap-1.5 hover:text-ink">
-          <ArrowLeft className="size-4" aria-hidden="true" />
-          Projects
-        </Link>
-        <span aria-hidden="true">/</span>
-        <span className="truncate font-medium text-ink">{project.name}</span>
-      </div>
-      <Panel>
-        <div className="grid gap-4 p-4 lg:grid-cols-[1fr_auto]">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="truncate text-xl font-semibold text-ink">{project.name}</h2>
-              <Badge tone={project.repository_full_name ? 'success' : 'neutral'}>
-                {project.repository_full_name ? `${project.repository_full_name}#${project.repository_branch ?? 'main'}` : 'no repository'}
-              </Badge>
-              <Badge tone={project.default_registry_id ? 'success' : 'neutral'}>{project.default_registry_name ?? 'registry not set'}</Badge>
-            </div>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
-              {project.description || `${project.name} groups the environments, applications, and routes for one product.`}
-            </p>
+    <Panel>
+      <div className="grid gap-4 p-4 lg:grid-cols-[1fr_auto]">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="truncate text-xl font-semibold text-ink">{project.name}</h2>
+            <Badge tone={project.repository_full_name ? 'success' : 'neutral'}>
+              {project.repository_full_name ? `${project.repository_full_name}#${project.repository_branch ?? 'main'}` : 'no repository'}
+            </Badge>
+            <Badge tone={project.default_registry_id ? 'success' : 'neutral'}>{project.default_registry_name ?? 'registry not set'}</Badge>
           </div>
-          <dl className="grid grid-cols-3 gap-3 text-sm">
-            <ProjectFact label="Envs" value={String(environments.length)} />
-            <ProjectFact label="Applications" value={String(applications.length)} />
-            <ProjectFact label="Routes" value={String(proxyRoutes.length)} />
-          </dl>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
+            {project.description || `${project.name} groups the environments, applications, and routes for one product.`}
+          </p>
         </div>
-        <nav className="flex gap-1 overflow-x-auto border-t px-2 py-2" aria-label="Project sections">
-          {projectSections.map((item) => (
-            <a
-              key={item}
-              href={`#${item}`}
-              aria-current={section === item ? 'page' : undefined}
-              className={`inline-flex h-8 shrink-0 items-center rounded-md px-3 text-sm transition-colors ${
-                section === item ? 'bg-accent/15 font-medium text-accent-text' : 'text-muted hover:bg-panel hover:text-ink'
-              }`}
-            >
-              {sectionLabels[item]}
-            </a>
-          ))}
-        </nav>
-      </Panel>
-    </div>
+        <dl className="grid grid-cols-3 gap-3 text-sm">
+          <ProjectFact label="Envs" value={String(environments.length)} />
+          <ProjectFact label="Applications" value={String(applications.length)} />
+          <ProjectFact label="Routes" value={String(proxyRoutes.length)} />
+        </dl>
+      </div>
+      <nav className="flex gap-1 overflow-x-auto border-t px-2 py-2" aria-label="Project sections">
+        {projectSections.map((item) => (
+          <a
+            key={item}
+            href={`#${item}`}
+            aria-current={section === item ? 'page' : undefined}
+            className={`inline-flex h-8 shrink-0 items-center rounded-md px-3 text-sm transition-colors ${
+              section === item ? 'bg-accent/15 font-medium text-accent-text' : 'text-muted hover:bg-panel hover:text-ink'
+            }`}
+          >
+            {sectionLabels[item]}
+          </a>
+        ))}
+      </nav>
+    </Panel>
   )
 }
 
