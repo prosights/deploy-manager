@@ -6,7 +6,6 @@ import { AppShell } from './app-shell'
 const routerState = vi.hoisted(() => ({
   location: { pathname: '/projects/project_1', hash: '#deployments' },
 }))
-const uiActions = vi.hoisted(() => ({ setSearchQuery: vi.fn() }))
 
 vi.mock('@tanstack/react-query', () => ({
   useQuery: () => ({
@@ -17,17 +16,6 @@ vi.mock('@tanstack/react-query', () => ({
     },
   }),
   useSuspenseQueries: () => [
-    {
-      data: {
-        name: 'Deploy Manager',
-        short_name: 'Deploy',
-        meta_description: 'Internal deployment control plane',
-        logo_url: '',
-        favicon_url: '/favicon.png',
-        primary_color: '#0980fd',
-        docs_url: '#',
-      },
-    },
     {
       data: [
         {
@@ -43,7 +31,6 @@ vi.mock('@tanstack/react-query', () => ({
 vi.mock('../lib/queries', () => ({
   appVersionQuery: {},
   projectsQuery: {},
-  settingsQuery: {},
 }))
 
 vi.mock('@tanstack/react-router', () => ({
@@ -58,15 +45,11 @@ vi.mock('../store/ui', () => ({
   nextTheme: () => 'dark',
   useUiStore: (selector: (state: {
     sidebarCollapsed: boolean
-    searchQuery: string
-    setSearchQuery: (value: string) => void
     toggleSidebar: () => void
     theme: 'light'
     setTheme: () => void
   }) => unknown) => selector({
     sidebarCollapsed: false,
-    searchQuery: 'queued',
-    setSearchQuery: uiActions.setSearchQuery,
     toggleSidebar: vi.fn(),
     theme: 'light',
     setTheme: vi.fn(),
@@ -80,12 +63,12 @@ describe('AppShell', () => {
     routerState.location = { pathname: '/projects/project_1', hash: '#deployments' }
   })
 
-  it('shows only the project deployments item in project context', () => {
+  it('gives project pages the full content surface', () => {
     render(<AppShell />)
 
     expect(screen.getAllByText('Deployments')).toHaveLength(1)
-    expect(screen.getByRole('heading', { name: 'Recreate' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Back to projects' })).toHaveAttribute('href', '/projects')
+    expect(screen.queryByRole('heading', { name: 'Recreate' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Back to projects' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
     expect(screen.getByText('v1.2.3 · abcdef1')).toBeInTheDocument()
   })
@@ -98,14 +81,6 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: 'Deployments' })).toHaveAttribute('href', '/deployments')
     expect(screen.getByRole('heading', { name: 'Deployments' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Back to projects' })).not.toBeInTheDocument()
-  })
-
-  it('restores global search with a clear action', () => {
-    render(<AppShell />)
-
-    expect(screen.getByRole('textbox', { name: 'Search' })).toHaveValue('queued')
-    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }))
-    expect(uiActions.setSearchQuery).toHaveBeenCalledWith('')
   })
 
   it('opens the account menu with identity only', () => {

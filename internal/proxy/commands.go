@@ -46,6 +46,24 @@ func BuildCommand(target Target) (string, error) {
 	}
 }
 
+func BuildRemoveCommand(domain string, proxyType string) (string, error) {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	slug, err := routeSlug(domain)
+	if err != nil {
+		return "", err
+	}
+
+	switch proxyType {
+	case "caddy":
+		return caddyRemoveCommand(domain, slug), nil
+	case "traefik":
+		path := "/etc/traefik/dynamic/deploy-manager-" + slug + ".yml"
+		return "sudo rm -f " + shellQuote(path), nil
+	default:
+		return "", fmt.Errorf("unsupported proxy type %q", proxyType)
+	}
+}
+
 func ValidateTarget(target Target) error {
 	if containsUnsafeProxyRune(target.Upstream) {
 		return fmt.Errorf("upstream_url contains unsupported characters")
@@ -204,6 +222,56 @@ else
   echo "no supported caddy runtime found" >&2
   exit 1
 fi`, shellQuote(config), shellQuote(hostPath), shellQuote(target.Domain), shellQuote(config))
+	return "bash -lc " + shellQuote(script)
+}
+
+func caddyRemoveCommand(domain string, slug string) string {
+	hostPath := "/etc/caddy/conf.d/deploy-manager-" + slug + ".caddy"
+	script := fmt.Sprintf(`set -e
+if command -v caddy >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+  sudo rm -f %s
+  sudo caddy validate --config /etc/caddy/Caddyfile
+  sudo systemctl reload caddy
+elif command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -Fxq caddy && test -f /opt/infrastructure/Caddyfile; then
+  DM_CADDY_ADDRESS=%s python3 - <<'PY'
+import os
+import pathlib
+import re
+
+path = pathlib.Path("/opt/infrastructure/Caddyfile")
+address = os.environ["DM_CADDY_ADDRESS"].strip()
+content = path.read_text()
+start = f"# deploy-manager route {address}\n"
+end = f"# deploy-manager route end {address}\n"
+
+content = re.sub(
+    r"(?ms)^" + re.escape(start) + r".*?^" + re.escape(end) + r"\n?",
+    "",
+    content,
+)
+
+lines = content.splitlines(keepends=True)
+cleaned = []
+i = 0
+while i < len(lines):
+    if lines[i].strip() == f"{address} {{":
+        depth = lines[i].count("{") - lines[i].count("}")
+        i += 1
+        while i < len(lines) and depth > 0:
+            depth += lines[i].count("{") - lines[i].count("}")
+            i += 1
+        continue
+    cleaned.append(lines[i])
+    i += 1
+
+path.write_text("".join(cleaned).rstrip() + "\n")
+PY
+  docker exec caddy caddy validate --config /etc/caddy/Caddyfile
+  docker exec caddy caddy reload --config /etc/caddy/Caddyfile
+else
+  echo "no supported caddy runtime found" >&2
+  exit 1
+fi`, shellQuote(hostPath), shellQuote(domain))
 	return "bash -lc " + shellQuote(script)
 }
 

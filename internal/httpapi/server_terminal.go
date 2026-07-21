@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +24,7 @@ import (
 )
 
 const terminalConnectTimeout = 10 * time.Second
+const defaultServerTerminalDirectory = "/srv/deploy-manager"
 
 type terminalClientMessage struct {
 	Type string `json:"type"`
@@ -111,12 +112,7 @@ func (s Server) serverTerminal(w http.ResponseWriter, r *http.Request) {
 		writeTerminalError(conn, err)
 		return
 	}
-	if initialDirectory != "" {
-		if err := session.Start(fmt.Sprintf("%s; cd %s && exec ${SHELL:-/bin/bash} -i", terminalColorEnv(), stringutil.ShellQuote(initialDirectory))); err != nil {
-			writeTerminalError(conn, err)
-			return
-		}
-	} else if err := session.Shell(); err != nil {
+	if err := session.Start(terminalShellCommand(initialDirectory, "/bin/bash", false)); err != nil {
 		writeTerminalError(conn, err)
 		return
 	}
@@ -152,10 +148,7 @@ func (s Server) serverTerminal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) runLocalTerminal(ctx context.Context, conn *websocket.Conn, r *http.Request, server db.Server, initialDirectory string) {
-	commandText := terminalColorEnv() + "; " + terminalPromptEnv() + "; exec ${SHELL:-/bin/sh} -i"
-	if initialDirectory != "" {
-		commandText = "cd " + stringutil.ShellQuote(initialDirectory) + " && { " + commandText + "; }"
-	}
+	commandText := terminalShellCommand(initialDirectory, "/bin/sh", true)
 	command := exec.CommandContext(ctx, "sh", "-lc", commandText)
 	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 32, Cols: 120})
 	if err != nil {
@@ -179,9 +172,7 @@ func (s Server) runTailscaleTerminal(ctx context.Context, conn *websocket.Conn, 
 	}
 
 	args := []string{"ssh", strings.TrimSpace(server.SshUser) + "@" + strings.TrimSpace(server.Hostname)}
-	if initialDirectory != "" {
-		args = append(args, terminalColorEnv()+"; cd "+stringutil.ShellQuote(initialDirectory)+" && exec ${SHELL:-/bin/bash} -i")
-	}
+	args = append(args, terminalShellCommand(initialDirectory, "/bin/bash", false))
 	command := exec.CommandContext(ctx, "tailscale", args...)
 	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 32, Cols: 120})
 	if err != nil {
@@ -200,6 +191,19 @@ func terminalColorEnv() string {
 
 func terminalPromptEnv() string {
 	return `ESC="$(printf '\033')"; export PS1="${ESC}[1;32m\\u@\\h${ESC}[0m:${ESC}[1;34m\\w${ESC}[0m $ "`
+}
+
+func terminalShellCommand(initialDirectory string, fallbackShell string, includePrompt bool) string {
+	parts := []string{terminalColorEnv()}
+	if includePrompt {
+		parts = append(parts, terminalPromptEnv())
+	}
+	if initialDirectory != "" {
+		quoted := stringutil.ShellQuote(initialDirectory)
+		parts = append(parts, "if [ -d "+quoted+" ]; then cd "+quoted+"; fi")
+	}
+	parts = append(parts, "exec ${SHELL:-"+fallbackShell+"} -i")
+	return strings.Join(parts, "; ")
 }
 
 func bridgeTerminal(conn *websocket.Conn, terminal *os.File, command *exec.Cmd) {
@@ -233,7 +237,7 @@ func bridgeTerminal(conn *websocket.Conn, terminal *os.File, command *exec.Cmd) 
 func (s Server) terminalInitialDirectory(r *http.Request, serverID pgtype.UUID) (string, error) {
 	value := strings.TrimSpace(r.URL.Query().Get("application_id"))
 	if value == "" {
-		return "", nil
+		return defaultServerTerminalDirectory, nil
 	}
 	applicationID, err := stringutil.PgUUID(value)
 	if err != nil {
@@ -246,7 +250,15 @@ func (s Server) terminalInitialDirectory(r *http.Request, serverID pgtype.UUID) 
 	if application.ServerID != serverID {
 		return "", validationError("application does not belong to this server")
 	}
-	return application.RemoteDirectory, nil
+	return applicationTerminalDirectory(application), nil
+}
+
+func applicationTerminalDirectory(application db.Application) string {
+	composeDirectory := path.Dir(application.ComposePath)
+	if composeDirectory == "." {
+		return application.RemoteDirectory
+	}
+	return path.Join(application.RemoteDirectory, composeDirectory)
 }
 
 func websocketUpgrader() websocket.Upgrader {

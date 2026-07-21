@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { syncGitHubConnectorRepositories, upsertConnector } from '../lib/api'
+import { syncGitHubConnectorRepositories } from '../lib/api'
 import { ConnectorsRoute } from './connectors'
 
 let mockConnectors = [
@@ -23,7 +23,6 @@ vi.mock('../lib/api', () => ({
     build: { id: 'build_1', provider: 'github_actions', status: 'dispatched', repository: 'acme/app', branch: 'main' },
   })),
   syncGitHubConnectorRepositories: vi.fn(async () => ({ connector: { id: 'c1' }, repositories: [] })),
-  upsertConnector: vi.fn(async (input) => ({ id: 'connector_new', ...input })),
   upsertContainerRegistry: vi.fn(async (input) => ({ id: 'reg_1', ...input, created_at: '', updated_at: '' })),
 }))
 
@@ -48,6 +47,10 @@ vi.mock('../lib/queries', () => ({
       missing: [],
       message: 'Doppler is ready',
     }),
+  },
+  dopplerProjectsQuery: {
+    queryKey: ['doppler-projects'],
+    queryFn: async () => ['alleyes', 'evals'],
   },
   githubRepositoriesQuery: {
     queryKey: ['github-repositories'],
@@ -145,53 +148,34 @@ describe('ConnectorsRoute', () => {
     mockConnectors = []
     renderRoute()
 
-    const install = await screen.findByRole('link', { name: /install required/i })
+    fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub integration' }))
+    const install = await screen.findByRole('link', { name: /install github app/i })
     expect(install).toHaveAttribute('href', 'https://github.com/apps/deploy-manager/installations/new')
   })
 
-  it('shows connected repositories', async () => {
+  it('opens Doppler status and explains service-level configuration', async () => {
     renderRoute()
-    expect((await screen.findAllByText('prosights/recreate')).length).toBeGreaterThan(0)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Doppler integration' }))
+
+    expect(await screen.findByRole('dialog', { name: 'Doppler' })).toBeTruthy()
+    expect(screen.getByText('Connected Doppler account')).toBeTruthy()
+    expect(screen.getByText(/Each Compose service chooses its own Doppler project and config/)).toBeTruthy()
+    expect(await screen.findByText('alleyes')).toBeTruthy()
   })
 
-  it('shows recent builds', async () => {
-    renderRoute()
-    expect(await screen.findByText('succeeded')).toBeTruthy()
-  })
-
-  it('registers Doppler connector metadata inside integrations', async () => {
+  it('syncs GitHub repositories from the connector dialog', async () => {
     renderRoute()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Doppler' }))
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Runtime Doppler' } })
-    fireEvent.change(screen.getByLabelText('Doppler project'), { target: { value: 'internal' } })
-    fireEvent.change(screen.getByLabelText('Doppler config'), { target: { value: 'prd' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub integration' }))
+    const dialog = await screen.findByRole('dialog', { name: 'GitHub' })
+    expect(within(dialog).getByText('Webhook')).toBeTruthy()
+    fireEvent.click(within(dialog).getByText('Available repositories'))
+    expect(await within(dialog).findByText('prosights/recreate')).toBeTruthy()
+    fireEvent.click(await screen.findByRole('button', { name: /refresh repository list/i }))
 
     await waitFor(() => {
-      expect(upsertConnector).toHaveBeenCalledWith({
-        provider: 'doppler',
-        name: 'Runtime Doppler',
-        enabled: true,
-        config: { project: 'internal', config: 'prd' },
-      })
-    })
-  })
-
-  it('syncs GitHub repositories after saving installation metadata', async () => {
-    renderRoute()
-
-    fireEvent.change(await screen.findByLabelText('Installation ID'), { target: { value: '987654' } })
-    fireEvent.click(screen.getByRole('button', { name: /save connector/i }))
-
-    await waitFor(() => {
-      expect(upsertConnector).toHaveBeenCalledWith({
-        provider: 'github',
-        name: 'GitHub',
-        enabled: true,
-        config: { installation_id: '987654' },
-      })
-      expect(syncGitHubConnectorRepositories).toHaveBeenCalledWith('connector_new')
+      expect(syncGitHubConnectorRepositories).toHaveBeenCalledWith('connector_github')
     })
   })
 })

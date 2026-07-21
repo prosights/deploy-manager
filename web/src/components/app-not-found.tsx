@@ -19,10 +19,10 @@ export function AppNotFound() {
           </div>
           <a
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md border bg-panel px-3 text-sm font-medium text-ink transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            href="/"
+            href="/projects"
           >
             <ArrowLeft className="size-4" />
-            Overview
+            Projects
           </a>
         </div>
       </Panel>

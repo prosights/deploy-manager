@@ -55,7 +55,9 @@ type GitHubWebhookConfig struct {
 type GitHubAppRepositorySource interface {
 	ListInstallationRepositories(context.Context, string) ([]githubconnector.AppRepository, error)
 	ListRepositoryContents(context.Context, string, string, string, string) ([]githubconnector.RepositoryContent, error)
+	GetRepositoryFile(context.Context, string, string, string, string) ([]byte, error)
 	ListRepositoryBranches(context.Context, string, string) ([]string, error)
+	GetRepositoryCommit(context.Context, string, string, string) (githubconnector.RepositoryCommit, error)
 	DispatchWorkflow(context.Context, string, string, string, string, map[string]string) error
 }
 
@@ -94,13 +96,14 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			if !auth.Disabled {
 				r.Use(requireAuth(auth.Token))
 			}
-			r.Get("/settings", server.settings)
-			r.Patch("/settings", server.updateSettings)
 			r.Get("/audit-events", server.listAuditEvents)
 			r.Get("/projects", server.listProjects)
 			r.Post("/projects", server.createProject)
 			r.Patch("/projects/{projectID}", server.updateProject)
 			r.Delete("/projects/{projectID}", server.deleteProject)
+			r.Get("/projects/{projectID}/variables", server.listProjectRuntimeVariables)
+			r.Put("/projects/{projectID}/variables", server.replaceProjectRuntimeVariables)
+			r.Post("/projects/{projectID}/redeploy-configuration", server.redeployProjectConfiguration)
 			r.Patch("/projects/{projectID}/registry", server.updateProjectRegistry)
 			r.Patch("/projects/{projectID}/repository", server.updateProjectRepository)
 			r.Get("/environments", server.listEnvironments)
@@ -121,8 +124,11 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Post("/applications", server.createApplication)
 			r.Patch("/applications/{applicationID}", server.updateApplication)
 			r.Delete("/applications/{applicationID}", server.deleteApplication)
+			r.Get("/applications/{applicationID}/service-variables", server.listApplicationServiceRuntimeConfigs)
+			r.Put("/applications/{applicationID}/service-variables/{composeService}", server.replaceApplicationServiceRuntimeConfig)
 			r.Get("/applications/{applicationID}/deployment-slots", server.listApplicationDeploymentSlots)
 			r.Post("/applications/{applicationID}/rollback", server.rollbackApplication)
+			r.Post("/applications/{applicationID}/redeploy-configuration", server.redeployApplicationConfiguration)
 			r.Get("/deployments", server.listDeployments)
 			r.Post("/deployments", server.createDeployment)
 			r.Post("/deployments/{deploymentID}/cancel", server.cancelDeployment)
@@ -144,8 +150,11 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Get("/github/repositories", server.listGitHubRepositories)
 			r.Get("/github/repositories/detect", server.detectGitHubRepositoryServices)
 			r.Get("/github/repositories/branches", server.listGitHubRepositoryBranches)
+			r.Get("/github/repositories/commit", server.getGitHubRepositoryCommit)
 			r.Post("/projects/{projectID}/github/import", server.importGitHubRepositoryServices)
 			r.Get("/doppler/status", server.dopplerStatus)
+			r.Get("/doppler/projects", server.dopplerProjects)
+			r.Get("/doppler/configs", server.dopplerConfigs)
 			r.Get("/container-registries", server.listContainerRegistries)
 			r.Post("/container-registries", server.upsertContainerRegistry)
 			r.Get("/proxy-routes", server.listProxyRoutes)

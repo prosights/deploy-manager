@@ -39,10 +39,10 @@ services:
       API_TOKEN: "${API_TOKEN:-}"
       AUTH_DISABLED: "${AUTH_DISABLED:-true}"
       GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET:-}"
-      GITHUB_APP_ID: ""
-      GITHUB_APP_SLUG: ""
-      GITHUB_APP_PRIVATE_KEY: ""
-      GITHUB_APP_PRIVATE_KEY_PATH: ""
+      GITHUB_APP_ID: "${GITHUB_APP_ID:-}"
+      GITHUB_APP_SLUG: "${GITHUB_APP_SLUG:-}"
+      GITHUB_APP_PRIVATE_KEY: "${GITHUB_APP_PRIVATE_KEY:-}"
+      GITHUB_APP_PRIVATE_KEY_PATH: "${GITHUB_APP_PRIVATE_KEY_PATH:-}"
       DOPPLER_PROJECT: "${DOPPLER_PROJECT:-}"
       DOPPLER_CONFIG: "${DOPPLER_CONFIG:-}"
       DOPPLER_TOKEN: "${DOPPLER_TOKEN:-}"
@@ -59,6 +59,9 @@ services:
       # The container runs as the unprivileged "deploy" user whose home is
       # /home/deploy, so SSH keys must be mounted there (not /root/.ssh).
       - ~/.ssh:/home/deploy/.ssh:ro
+      - ~/.config/deploy-manager:/app/secrets:ro
+      - ./data/playground/ssh:/home/deploy/playground/.ssh:ro
+      - ./data/playground/known_hosts:/app/known_hosts:ro
       - ./data/apps:/srv/deploy-manager/apps
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
@@ -73,6 +76,64 @@ services:
       timeout: 5s
       retries: 10
 
+  playground:
+    build:
+      context: ops/local-playground
+    ports:
+      - "${PLAYGROUND_SSH_PORT:-2222}:22"
+    volumes:
+      - ./data/playground/ssh:/playground-key:ro
+      - ./data/playground/apps:/srv/deploy-manager/apps
+      - ./data/playground/sources:/srv/deploy-manager/source:ro
+      - ./data/playground/caddy:/opt/infrastructure
+      - deploy_manager_dev_playground_ssh_host:/etc/ssh
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "pgrep", "sshd"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  playground-bootstrap:
+    image: postgres:18-alpine
+    depends_on:
+      app:
+        condition: service_healthy
+      playground:
+        condition: service_healthy
+    restart: "no"
+    command:
+      - sh
+      - -ec
+      - |
+        wget -qO- http://app:8080/api/servers | grep -q '"hostname":"playground"' && exit 0
+        wget -qO /dev/null \
+          --header='Content-Type: application/json' \
+          --post-data='{"name":"playground","hostname":"playground","ssh_user":"root","ssh_port":22,"ssh_key_path":"/home/deploy/playground/.ssh/id_ed25519","connection_mode":"direct_ssh","proxy_type":"caddy"}' \
+          http://app:8080/api/servers
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    ports:
+      - "${PLAYGROUND_HTTP_PORT:-80}:80"
+    volumes:
+      - ./data/playground/caddy:/etc/caddy
+      - deploy_manager_dev_caddy_data:/data
+      - deploy_manager_dev_caddy_config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      playground:
+        condition: service_healthy
+      playground-bootstrap:
+        condition: service_completed_successfully
+
 volumes:
   deploy_manager_dev_pg:
   deploy_manager_dev_redis:
+  deploy_manager_dev_caddy_data:
+  deploy_manager_dev_caddy_config:
+  deploy_manager_dev_playground_ssh_host:

@@ -124,6 +124,50 @@ func (c Connector) RuntimeVariables(ctx context.Context, scope connectors.Runtim
 	return variables, nil
 }
 
+func (c Connector) ListProjects(ctx context.Context) ([]string, error) {
+	output, err := c.commandRunner()(ctx, c.token, []string{c.commandPath(), "projects", "--json", "--no-check-version"})
+	if err != nil {
+		return nil, fmt.Errorf("list Doppler projects: %w", err)
+	}
+	var items []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(output, &items); err != nil {
+		return nil, fmt.Errorf("parse Doppler projects: %w", err)
+	}
+	projects := make([]string, 0, len(items))
+	for _, item := range items {
+		projects = append(projects, item.ID)
+	}
+	projects = stringutil.UniqueTrimmed(projects)
+	sort.Strings(projects)
+	return projects, nil
+}
+
+func (c Connector) ListConfigs(ctx context.Context, project string) ([]string, error) {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return nil, fmt.Errorf("Doppler project is required")
+	}
+	output, err := c.commandRunner()(ctx, c.token, []string{c.commandPath(), "configs", "--json", "--no-check-version", "--project", project})
+	if err != nil {
+		return nil, fmt.Errorf("list Doppler configs: %w", err)
+	}
+	var items []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(output, &items); err != nil {
+		return nil, fmt.Errorf("parse Doppler configs: %w", err)
+	}
+	configs := make([]string, 0, len(items))
+	for _, item := range items {
+		configs = append(configs, item.Name)
+	}
+	configs = stringutil.UniqueTrimmed(configs)
+	sort.Strings(configs)
+	return configs, nil
+}
+
 func (c Connector) commandRunner() commandRunner {
 	if c.run == nil {
 		return runDopplerCLI
@@ -135,6 +179,9 @@ func (c Connector) Check() error {
 	_, err := exec.LookPath(c.commandPath())
 	if err != nil {
 		return fmt.Errorf("find doppler CLI %q: %w", c.commandPath(), err)
+	}
+	if strings.TrimSpace(c.token) == "" {
+		return fmt.Errorf("DOPPLER_TOKEN is required")
 	}
 	return nil
 }

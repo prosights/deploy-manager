@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"net/http"
 	"testing"
 
 	"deploy-manager/internal/db"
@@ -194,4 +196,141 @@ func TestValidateGitHubBuildDispatchRequestRequiresImageRef(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing image_ref to fail")
 	}
+}
+
+func TestRepositoryServiceName(t *testing.T) {
+	if got := repositoryServiceName("prosights/recreate"); got != "recreate" {
+		t.Fatalf("expected repository name, got %q", got)
+	}
+	if got := repositoryServiceName("  "); got != "service" {
+		t.Fatalf("expected fallback service name, got %q", got)
+	}
+}
+
+func TestNormalizeRepositoryRoot(t *testing.T) {
+	root, err := normalizeRepositoryRoot(" ./alleyes-v2/ ")
+	if err != nil || root != "alleyes-v2" {
+		t.Fatalf("expected normalized root, got %q, %v", root, err)
+	}
+	for _, value := range []string{"/alleyes-v2", "../alleyes-v2", "alleyes-v2\\api"} {
+		if _, err := normalizeRepositoryRoot(value); err == nil {
+			t.Fatalf("expected root %q to fail", value)
+		}
+	}
+}
+
+func TestDetectRepositoryServicesFindsInternalStyleApplications(t *testing.T) {
+	source := fakeGitHubRepositorySource{contents: map[string][]githubconnector.RepositoryContent{
+		"": {
+			{Name: "alleyes-v2", Path: "alleyes-v2", Type: "dir"},
+			{Name: "evals", Path: "evals", Type: "dir"},
+		},
+		"alleyes-v2": {
+			{Name: "compose.coolify.yml", Path: "alleyes-v2/compose.coolify.yml", Type: "file"},
+			{Name: "apps", Path: "alleyes-v2/apps", Type: "dir"},
+		},
+		"evals": {
+			{Name: "docker-compose.yml", Path: "evals/docker-compose.yml", Type: "file"},
+			{Name: "apps", Path: "evals/apps", Type: "dir"},
+		},
+	}, files: map[string][]byte{
+		"alleyes-v2/compose.coolify.yml": []byte(`services:
+  api:
+    image: alleyes-api:latest
+    ports:
+      - target: 8000
+        published: 8200
+    depends_on:
+      postgres:
+        condition: service_healthy
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile.web
+    ports:
+      - "${DEPLOY_PORT:-3201}:3000"
+    depends_on: [api]
+  worker:
+    image: alleyes-worker:latest
+    expose:
+      - "9000"
+`),
+		"evals/docker-compose.yml": []byte(`services:
+  api:
+    ports:
+      - "8008:8008"
+  web:
+    ports:
+      - "3008:3008"
+    depends_on: [api]
+`),
+	}}
+	server := Server{github: GitHubWebhookConfig{App: source}}
+	request, err := http.NewRequest(http.MethodGet, "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	services, err := server.detectRepositoryServices(request, githubconnector.Repository{Repository: "prosights/internal", Branch: "main"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 2 {
+		t.Fatalf("expected alleyes-v2 and evals, got %+v", services)
+	}
+	if services[0].Name != "alleyes-v2" || services[0].ComposePath != "alleyes-v2/compose.coolify.yml" {
+		t.Fatalf("unexpected alleyes-v2 detection: %+v", services[0])
+	}
+	if services[1].Name != "evals" || services[1].ComposePath != "evals/docker-compose.yml" {
+		t.Fatalf("unexpected evals detection: %+v", services[1])
+	}
+	if len(services[0].ComposeServices) != 3 {
+		t.Fatalf("expected compose stack preview, got %+v", services[0].ComposeServices)
+	}
+	api, web, worker := services[0].ComposeServices[0], services[0].ComposeServices[1], services[0].ComposeServices[2]
+	if api.Name != "api" || api.Image != "alleyes-api:latest" || len(api.Ports) != 1 || api.Ports[0].ContainerPort != 8000 || api.Ports[0].PublishedPort != 8200 || len(api.DependsOn) != 1 || api.DependsOn[0] != "postgres" {
+		t.Fatalf("unexpected api compose metadata: %+v", api)
+	}
+	if web.Name != "web" || web.BuildContext != "./apps/web" || web.Dockerfile != "Dockerfile.web" || len(web.Ports) != 1 || web.Ports[0].ContainerPort != 3000 || web.Ports[0].PublishedPort != 3201 || web.Ports[0].Variable != "DEPLOY_PORT" || len(web.DependsOn) != 1 || web.DependsOn[0] != "api" {
+		t.Fatalf("unexpected web compose metadata: %+v", web)
+	}
+	if worker.Name != "worker" || len(worker.Ports) != 1 || worker.Ports[0].ContainerPort != 9000 {
+		t.Fatalf("unexpected worker expose metadata: %+v", worker)
+	}
+
+	services, err = server.detectRepositoryServices(request, githubconnector.Repository{Repository: "prosights/internal", Branch: "main"}, "alleyes-v2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 1 || services[0].Name != "alleyes-v2" || services[0].Root != "alleyes-v2" {
+		t.Fatalf("expected root-scoped detection, got %+v", services)
+	}
+}
+
+type fakeGitHubRepositorySource struct {
+	contents map[string][]githubconnector.RepositoryContent
+	files    map[string][]byte
+}
+
+func (f fakeGitHubRepositorySource) ListInstallationRepositories(context.Context, string) ([]githubconnector.AppRepository, error) {
+	return nil, nil
+}
+
+func (f fakeGitHubRepositorySource) ListRepositoryContents(_ context.Context, _ string, _ string, directory string, _ string) ([]githubconnector.RepositoryContent, error) {
+	return f.contents[directory], nil
+}
+
+func (f fakeGitHubRepositorySource) GetRepositoryFile(_ context.Context, _ string, _ string, filePath string, _ string) ([]byte, error) {
+	return f.files[filePath], nil
+}
+
+func (f fakeGitHubRepositorySource) ListRepositoryBranches(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+
+func (f fakeGitHubRepositorySource) GetRepositoryCommit(context.Context, string, string, string) (githubconnector.RepositoryCommit, error) {
+	return githubconnector.RepositoryCommit{}, nil
+}
+
+func (f fakeGitHubRepositorySource) DispatchWorkflow(context.Context, string, string, string, string, map[string]string) error {
+	return nil
 }

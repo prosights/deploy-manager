@@ -11,6 +11,7 @@ import (
 	"deploy-manager/internal/db"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -234,14 +235,135 @@ func TestRetryDeploymentInputRejectsActiveDeployment(t *testing.T) {
 	}
 }
 
-func TestValidateBlueGreenDeploymentTargetRequiresColorAwareHealthCheck(t *testing.T) {
+func TestConfigurationRedeployInputPinsActiveDeploymentSource(t *testing.T) {
+	applicationID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+	sourceDeploymentID := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
+	input, err := configurationRedeployInput(configurationRedeploySource{
+		ApplicationID:      applicationID,
+		SourceDeploymentID: sourceDeploymentID,
+		CommitSHA:          pgtype.Text{String: "abcdef1234567890abcdef1234567890abcdef12", Valid: true},
+		ImageRef:           pgtype.Text{String: "ghcr.io/acme/app:sha-abcdef1", Valid: true},
+		ImageDigest:        pgtype.Text{String: "sha256:" + strings.Repeat("a", 64), Valid: true},
+	}, " ali ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.ApplicationID != applicationID || input.Trigger != "manual" || input.Strategy != "blue_green" {
+		t.Fatalf("unexpected configuration redeploy input: %+v", input)
+	}
+	expectedImage := "ghcr.io/acme/app:sha-abcdef1@sha256:" + strings.Repeat("a", 64)
+	if input.CommitSha.String != "abcdef1234567890abcdef1234567890abcdef12" || input.ImageRef.String != expectedImage {
+		t.Fatalf("expected active deployment source to be pinned, got %+v", input)
+	}
+	if input.ImageDigest.String != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("expected active deployment digest to be preserved, got %+v", input.ImageDigest)
+	}
+	if input.Actor.String != "ali" {
+		t.Fatalf("expected normalized actor, got %+v", input.Actor)
+	}
+}
+
+func TestConfigurationRedeployInputPreservesImageWithoutDigest(t *testing.T) {
+	input, err := configurationRedeployInput(configurationRedeploySource{
+		ApplicationID:      pgtype.UUID{Valid: true},
+		SourceDeploymentID: pgtype.UUID{Valid: true},
+		ImageRef:           pgtype.Text{String: "ghcr.io/acme/app:sha-abcdef1", Valid: true},
+	}, "ali")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.ImageRef.String != "ghcr.io/acme/app:sha-abcdef1" || input.ImageDigest.Valid {
+		t.Fatalf("expected existing commit-SHA tag without a digest to remain deployable, got %+v", input)
+	}
+}
+
+func TestConfigurationRedeployInputUsesConfiguredSourceAfterRepositoryChange(t *testing.T) {
+	input, err := configurationRedeployInput(configurationRedeploySource{
+		ApplicationID:           pgtype.UUID{Valid: true},
+		SourceDeploymentID:      pgtype.UUID{Valid: true},
+		CommitSHA:               pgtype.Text{String: "abcdef1234567890abcdef1234567890abcdef12", Valid: true},
+		ImageRef:                pgtype.Text{String: "ghcr.io/acme/app:sha-abcdef1", Valid: true},
+		ImageDigest:             pgtype.Text{String: "sha256:" + strings.Repeat("a", 64), Valid: true},
+		SourceRepositoryURL:     pgtype.Text{String: "https://github.com/acme/old.git", Valid: true},
+		SourceBranch:            pgtype.Text{String: "main", Valid: true},
+		ConfiguredRepositoryURL: pgtype.Text{String: "https://github.com/acme/new.git", Valid: true},
+		ConfiguredBranch:        "release",
+	}, "ali")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.CommitSha.Valid || input.ImageRef.Valid || input.ImageDigest.Valid {
+		t.Fatalf("expected a changed repository to resolve its configured branch head, got %+v", input)
+	}
+}
+
+func TestConfigurationRedeployInputRejectsConflictingImageDigest(t *testing.T) {
+	_, err := configurationRedeployInput(configurationRedeploySource{
+		ApplicationID:      pgtype.UUID{Valid: true},
+		SourceDeploymentID: pgtype.UUID{Valid: true},
+		ImageRef:           pgtype.Text{String: "ghcr.io/acme/app@sha256:" + strings.Repeat("a", 64), Valid: true},
+		ImageDigest:        pgtype.Text{String: "sha256:" + strings.Repeat("b", 64), Valid: true},
+	}, "ali")
+	if err == nil {
+		t.Fatal("expected conflicting image digests to be rejected")
+	}
+}
+
+func TestConfigurationRedeployInputRejectsMissingActiveSource(t *testing.T) {
+	tests := []configurationRedeploySource{
+		{ApplicationID: pgtype.UUID{Valid: true}},
+		{
+			ApplicationID:      pgtype.UUID{Valid: true},
+			SourceDeploymentID: pgtype.UUID{Valid: true},
+			CommitSHA:          pgtype.Text{String: " ", Valid: true},
+			ImageRef:           pgtype.Text{String: " ", Valid: true},
+		},
+	}
+	for _, source := range tests {
+		if _, err := configurationRedeployInput(source, "ali"); err == nil {
+			t.Fatal("expected configuration redeploy without an active pinned source to fail")
+		}
+	}
+}
+
+func TestConfigurationRedeployMetadataLinksActiveDeployment(t *testing.T) {
+	sourceDeploymentID := pgtype.UUID{Bytes: [16]byte{3}, Valid: true}
+	metadata := configurationRedeployMetadata(
+		configurationRedeploySource{SourceDeploymentID: sourceDeploymentID},
+		db.Deployment{Trigger: "manual", Strategy: "blue_green"},
+	)
+	if metadata["source_deployment_id"] != uuidString(sourceDeploymentID) || metadata["reason"] != "configuration_changed" {
+		t.Fatalf("expected configuration redeploy source metadata, got %+v", metadata)
+	}
+}
+
+func TestConfigurationRedeployResponseDescribesInProgressAndPartialResults(t *testing.T) {
+	inProgress := newConfigurationRedeployResponse(nil, []configurationRedeployResult{{
+		Status: configurationRedeploySkipped,
+		Reason: configurationRedeployInProgress,
+	}})
+	if inProgress.State != "in_progress" || inProgress.Skipped != 1 {
+		t.Fatalf("expected explicit in-progress response, got %+v", inProgress)
+	}
+
+	partial := newConfigurationRedeployResponse([]db.Deployment{{ID: pgtype.UUID{Valid: true}}}, []configurationRedeployResult{
+		{Status: configurationRedeployQueued},
+		{Status: configurationRedeployFailed, Reason: configurationRedeployCreationFailed},
+	})
+	if partial.State != "partial" || partial.Queued != 1 || partial.Failed != 1 {
+		t.Fatalf("expected deterministic partial response counts, got %+v", partial)
+	}
+}
+
+func TestValidateBlueGreenDeploymentTargetRequiresColorAndPortAwareHealthCheck(t *testing.T) {
 	tests := []struct {
 		name        string
 		healthCheck pgtype.Text
 	}{
 		{name: "missing"},
 		{name: "without color", healthCheck: pgtype.Text{String: "https://api.example.com/healthz", Valid: true}},
-		{name: "invalid url", healthCheck: pgtype.Text{String: "mailto:api-{color}@example.com", Valid: true}},
+		{name: "without port", healthCheck: pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true}},
+		{name: "invalid url", healthCheck: pgtype.Text{String: "mailto:api-{color}:{port}@example.com", Valid: true}},
 	}
 
 	for _, test := range tests {
@@ -254,12 +376,12 @@ func TestValidateBlueGreenDeploymentTargetRequiresColorAwareHealthCheck(t *testi
 	}
 }
 
-func TestValidateBlueGreenDeploymentTargetAcceptsColorAwareHealthCheck(t *testing.T) {
+func TestValidateBlueGreenDeploymentTargetAcceptsColorAndPortAwareHealthCheck(t *testing.T) {
 	err := validateBlueGreenDeploymentTarget(db.Application{
-		HealthCheckUrl: pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
+		HealthCheckUrl: pgtype.Text{String: "http://127.0.0.1:{port}/healthz?color={color}", Valid: true},
 	})
 	if err != nil {
-		t.Fatalf("expected color-aware health check to pass, got %v", err)
+		t.Fatalf("expected color-and-port-aware health check to pass, got %v", err)
 	}
 }
 
@@ -300,6 +422,18 @@ func TestCreateDeploymentErrorKeepsUnexpectedErrors(t *testing.T) {
 
 	if err := createDeploymentError(cause); !errors.Is(err, cause) {
 		t.Fatalf("expected original error, got %v", err)
+	}
+}
+
+func TestCreateDeploymentErrorMapsConcurrentDeploymentToValidation(t *testing.T) {
+	err := createDeploymentError(&pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "deployments_one_in_progress_per_application",
+	})
+
+	var validation validationError
+	if !errors.As(err, &validation) || validation.Error() != deploymentInProgressMessage || !isDeploymentInProgressError(err) {
+		t.Fatalf("expected in-progress validation error, got %T: %v", err, err)
 	}
 }
 

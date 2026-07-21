@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	deploymentpkg "deploy-manager/internal/deployments"
 	"deploy-manager/internal/stringutil"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -80,6 +82,17 @@ func (s Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, applicationLookupError(err, "project not found"))
 		return
+	}
+	applications, err := s.queries.ListApplications(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for _, listed := range applications {
+		if listed.ProjectID == projectID {
+			writeError(w, validationError("delete every service in this project before deleting the project"))
+			return
+		}
 	}
 	if err := s.queries.DeleteProject(r.Context(), projectID); err != nil {
 		writeError(w, err)
@@ -239,12 +252,23 @@ func (s Server) deleteEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, applicationLookupError(err, "environment not found"))
 		return
 	}
-	if err := s.queries.DeleteEnvironment(r.Context(), environmentID); err != nil {
-		writeError(w, err)
+	if environment.Kind == "production" {
+		writeError(w, validationError("the production environment cannot be deleted"))
+		return
+	}
+	if _, err := s.queries.DeleteEnvironment(r.Context(), environmentID); err != nil {
+		writeError(w, environmentDeletionError(err))
 		return
 	}
 	s.audit(r, "environment.delete", "environment", uuidString(environment.ID), environment.Name, map[string]any{"project_id": uuidString(environment.ProjectID), "kind": environment.Kind})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func environmentDeletionError(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return validationError("remove all services before deleting the environment")
+	}
+	return err
 }
 
 func normalizeCreateProject(input db.CreateProjectWithDefaultEnvironmentsParams) (db.CreateProjectWithDefaultEnvironmentsParams, error) {

@@ -43,8 +43,8 @@ func TestGitHubStatusReportsMissingRuntimeConfig(t *testing.T) {
 	if !strings.Contains(body, `"app_configured":false`) || !strings.Contains(body, `"build_dispatch_enabled":false`) {
 		t.Fatalf("expected missing github app status, got %s", body)
 	}
-	if !strings.Contains(body, "GITHUB_WEBHOOK_SECRET") {
-		t.Fatalf("expected missing webhook secret evidence, got %s", body)
+	if strings.Contains(body, "GITHUB_WEBHOOK_SECRET") {
+		t.Fatalf("webhook secret should not be required for basic github setup, got %s", body)
 	}
 }
 

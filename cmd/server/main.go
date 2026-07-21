@@ -110,7 +110,11 @@ func newApplication(ctx context.Context, cfg config.Config) (*application, error
 	resend := notificationconnector.New("resend")
 	s3 := objectstorage.NewConnector("s3")
 	gcs := objectstorage.NewConnector("gcs")
-	runner := deployments.NewRunner(queries, logBus, notifier, runtime)
+	var sourceAuthenticator deployments.SourceAuthenticator
+	if githubApp != nil {
+		sourceAuthenticator = githubconnector.NewSourceAuthenticator(queries, githubApp)
+	}
+	runner := deployments.NewRunner(queries, logBus, notifier, runtime, sourceAuthenticator)
 	queue := deployments.NewQueue(redisClient, queries, runner)
 	if cfg.DeploymentWorkerEnabled {
 		if recovered, err := queue.RecoverInterrupted(ctx); err != nil {

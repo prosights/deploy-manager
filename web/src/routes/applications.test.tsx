@@ -80,7 +80,7 @@ describe('ApplicationsRoute', () => {
 
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'api' } })
     fireEvent.change(screen.getByLabelText('Remote directory'), { target: { value: '/srv/api' } })
-    fireEvent.change(screen.getByLabelText('Health check URL'), { target: { value: 'https://api-{color}.example.com/healthz' } })
+    fireEvent.change(screen.getByLabelText('Health check URL'), { target: { value: 'http://127.0.0.1:{port}/healthz?color={color}' } })
     fireEvent.change(screen.getByLabelText('Doppler project'), { target: { value: 'billing' } })
     fireEvent.change(screen.getByLabelText('Doppler config'), { target: { value: 'prd' } })
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
@@ -88,7 +88,7 @@ describe('ApplicationsRoute', () => {
     await waitFor(() => {
       expect(createApplication).toHaveBeenCalledWith(
         expect.objectContaining({
-          health_check_url: 'https://api-{color}.example.com/healthz',
+          health_check_url: 'http://127.0.0.1:{port}/healthz?color={color}',
           doppler_project: 'billing',
           doppler_config: 'prd',
         }),
@@ -336,6 +336,10 @@ function applicationFactory(overrides: Partial<Application>): Application {
     default_registry_id: null,
     default_registry_name: null,
     github_auto_deploy: false,
+    configuration_revision: 1,
+    deployed_configuration_revision: 1,
+    deployed_project_configuration_revision: 0,
+    redeploy_required: false,
     ...overrides,
   }
 }

@@ -262,6 +262,7 @@ func toCredentialInventory(input Repository) (connectors.CredentialInventory, er
 
 var repositoryPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 var branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$`)
+var commitSHAPattern = regexp.MustCompile(`^[0-9A-Fa-f]{7,40}$`)
 var numericIDPattern = regexp.MustCompile(`^[0-9]+$`)
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var imageRefPattern = regexp.MustCompile(`^[^[:space:][:cntrl:]]{1,512}$`)
@@ -281,6 +282,10 @@ func validRepository(value string) bool {
 
 func validBranch(value string) bool {
 	return branchPattern.MatchString(value) && !strings.Contains(value, "..") && !strings.Contains(value, "//")
+}
+
+func validCommitSHA(value string) bool {
+	return commitSHAPattern.MatchString(value)
 }
 
 func validNumericID(value string) bool {

@@ -93,7 +93,24 @@ vi.mock('../lib/queries', () => ({
   },
   deploymentsQuery: {
     queryKey: ['deployments'],
-    queryFn: async () => [],
+    queryFn: async () => [
+      {
+        id: 'deployment_1',
+        application_id: 'app_1',
+        server_id: 'server_1',
+        trigger: 'manual',
+        strategy: 'blue_green',
+        status: 'succeeded',
+        commit_sha: 'abc1234',
+        commit_message: 'Deploy billing API',
+        image_ref: null,
+        image_digest: null,
+        actor: 'pramit@example.com',
+        created_at: '2026-07-16T12:00:00Z',
+        started_at: '2026-07-16T12:00:10Z',
+        finished_at: '2026-07-16T12:01:00Z',
+      },
+    ],
   },
 }))
 
@@ -118,14 +135,15 @@ describe('ProjectsRoute', () => {
     )
   }
 
-  it('renders one tile per project with repository and service facts', async () => {
+  it('renders one tile per project with service and deployment facts', async () => {
     renderRoute()
 
     expect(await screen.findByText('Billing')).toBeInTheDocument()
     expect(screen.getByText('Recreate')).toBeInTheDocument()
-    expect(screen.getByText('prosights/billing#main')).toBeInTheDocument()
-    expect(screen.getByText('no repository connected')).toBeInTheDocument()
+    expect(screen.queryByText('prosights/billing#main')).not.toBeInTheDocument()
+    expect(screen.queryByText('no repository connected')).not.toBeInTheDocument()
     expect(screen.getByText('1 service')).toBeInTheDocument()
+    expect(screen.getByText(/last deploy/)).toBeInTheDocument()
     expect(screen.getByLabelText('Open project Billing')).toBeInTheDocument()
   })
 
@@ -159,8 +177,9 @@ describe('ProjectsRoute', () => {
     expect(screen.getByText('Billing')).toBeInTheDocument()
     expect(screen.queryByText('Recreate')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by repository' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Not connected' }))
-    expect(screen.getByText('No projects match these filters.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by status' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Empty' }))
+    expect(screen.queryByText('Billing')).not.toBeInTheDocument()
+    expect(screen.getByText('Recreate')).toBeInTheDocument()
   })
 })

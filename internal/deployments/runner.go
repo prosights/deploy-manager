@@ -2,9 +2,12 @@ package deployments
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -24,6 +27,7 @@ type Runner struct {
 	queries runnerQueries
 	logs    *LogBus
 	runtime RuntimeVariableSource
+	source  SourceAuthenticator
 	signer  sshutil.SignerSource
 
 	notifier notifications.Notifier
@@ -32,6 +36,8 @@ type Runner struct {
 const (
 	maxDeploymentLogMessageLength = 32768
 	deploymentLogTruncatedMarker  = "\n...[truncated]"
+	maxCommitMessageLength        = 500
+	stackRuntimeConfigName        = "__stack__"
 )
 
 type runnerQueries interface {
@@ -41,13 +47,17 @@ type runnerQueries interface {
 	GetDeploymentTarget(context.Context, pgtype.UUID) (db.GetDeploymentTargetRow, error)
 	GetActiveDeploymentSlot(context.Context, db.GetActiveDeploymentSlotParams) (db.ApplicationDeploymentSlot, error)
 	GetStandbyDeploymentSlot(context.Context, db.GetStandbyDeploymentSlotParams) (db.ApplicationDeploymentSlot, error)
+	ListApplicationServiceRuntimeConfigs(context.Context, pgtype.UUID) ([]db.ApplicationServiceRuntimeConfig, error)
+	ListProjectRuntimeVariablesForApplication(context.Context, pgtype.UUID) ([]db.ProjectRuntimeVariable, error)
 	ListProxyRouteTargetsForApplication(context.Context, db.ListProxyRouteTargetsForApplicationParams) ([]db.ListProxyRouteTargetsForApplicationRow, error)
+	MarkApplicationConfigurationDeployed(context.Context, db.MarkApplicationConfigurationDeployedParams) (db.Application, error)
 	MarkProxyRouteApplied(context.Context, pgtype.UUID) (db.ProxyRoute, error)
 	MarkProxyRouteFailed(context.Context, pgtype.UUID) (db.ProxyRoute, error)
+	PromoteProxyRoutes(context.Context, db.PromoteProxyRoutesParams) ([]db.ProxyRoute, error)
+	SetDeploymentCommitSHA(context.Context, db.SetDeploymentCommitSHAParams) (db.Deployment, error)
 	StartQueuedDeployment(context.Context, pgtype.UUID) (db.Deployment, error)
 	UpdateApplicationStatus(context.Context, db.UpdateApplicationStatusParams) (db.Application, error)
 	UpdateDeploymentStatus(context.Context, db.UpdateDeploymentStatusParams) (db.Deployment, error)
-	UpdateProxyRouteUpstream(context.Context, db.UpdateProxyRouteUpstreamParams) (db.ProxyRoute, error)
 	UpsertDeploymentSlot(context.Context, db.UpsertDeploymentSlotParams) (db.ApplicationDeploymentSlot, error)
 }
 
@@ -55,11 +65,19 @@ type RuntimeVariableSource interface {
 	RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error)
 }
 
-func NewRunner(queries runnerQueries, logs *LogBus, notifier notifications.Notifier, runtime RuntimeVariableSource) Runner {
+type SourceAuthenticator interface {
+	AuthorizationHeader(context.Context, pgtype.UUID, string) (string, error)
+}
+
+func NewRunner(queries runnerQueries, logs *LogBus, notifier notifications.Notifier, runtime RuntimeVariableSource, source ...SourceAuthenticator) Runner {
 	if notifier == nil {
 		notifier = notifications.Noop{}
 	}
-	return Runner{queries: queries, logs: logs, notifier: notifier, runtime: runtime, signer: sshutil.FileSigner{}}
+	runner := Runner{queries: queries, logs: logs, notifier: notifier, runtime: runtime, signer: sshutil.FileSigner{}}
+	if len(source) > 0 {
+		runner.source = source[0]
+	}
+	return runner
 }
 
 func (r Runner) Run(ctx context.Context, deployment db.Deployment) {
@@ -92,7 +110,7 @@ func (r Runner) Run(ctx context.Context, deployment db.Deployment) {
 		Version: deploymentVersion(target),
 	})
 
-	if err := r.deploy(ctx, deployment, target); err != nil {
+	if err := r.deploy(ctx, deployment, &target); err != nil {
 		failed := r.fail(ctx, deployment, "remote deployment failed", err)
 		r.audit(ctx, failed, target, "deployment.failed", map[string]any{
 			"status": "failed",
@@ -121,6 +139,15 @@ func (r Runner) complete(ctx context.Context, deployment db.Deployment, target d
 		Status:  "healthy",
 		Version: deploymentVersion(target),
 	})
+	if deployment.Trigger != "rollback" {
+		if _, err := r.queries.MarkApplicationConfigurationDeployed(ctx, db.MarkApplicationConfigurationDeployedParams{
+			ID:                           target.ApplicationID,
+			ConfigurationRevision:        target.ConfigurationRevision,
+			ProjectConfigurationRevision: target.ProjectConfigurationRevision,
+		}); err != nil {
+			r.append(ctx, deployment, "stderr", "mark deployed configuration: "+err.Error())
+		}
+	}
 	r.append(ctx, deployment, "system", "Deployment completed")
 	r.audit(ctx, completed, target, "deployment.succeeded", map[string]any{"status": "succeeded"})
 	r.notify(ctx, completed, target, "")
@@ -167,12 +194,12 @@ func deploymentLogEvent(entry db.DeploymentLog) LogEvent {
 	}
 }
 
-func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow) error {
+func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target *db.GetDeploymentTargetRow) error {
 	if target.ConnectionMode != sshutil.ConnectionModeTailscaleSSH && (!target.SshKeyPath.Valid || strings.TrimSpace(target.SshKeyPath.String) == "") {
 		return fmt.Errorf("server %s has no ssh key path configured", target.ServerName)
 	}
 
-	client, err := deploymentSSHClient(ctx, target, r.signer)
+	client, err := deploymentSSHClient(ctx, *target, r.signer)
 	if err != nil {
 		return fmt.Errorf("prepare ssh client: %w", err)
 	}
@@ -180,55 +207,74 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 	r.append(ctx, deployment, "system", fmt.Sprintf("Connecting to %s@%s", target.SshUser, target.Hostname))
 	r.append(ctx, deployment, "system", fmt.Sprintf("Strategy: %s", target.Strategy))
 	if deployment.Trigger == "rollback" {
-		return r.rollback(ctx, deployment, target, client)
+		return r.rollback(ctx, deployment, *target, client)
 	}
 
-	var variables []connectors.RuntimeVariable
-	if r.runtime != nil {
-		var runtimeErr error
-		variables, runtimeErr = r.runtime.RuntimeVariables(ctx, runtimeScope(target))
-		if runtimeErr != nil {
-			return fmt.Errorf("sync runtime variables: %w", runtimeErr)
-		}
-		r.append(ctx, deployment, "system", fmt.Sprintf("Runtime variables synced: %d", validRuntimeVariableCount(variables)))
-	}
-
-	targetColor, err := r.nextDeploymentColor(ctx, target)
+	variables, err := r.deploymentRuntimeVariables(ctx, *target)
 	if err != nil {
 		return err
 	}
-	ports, err := r.blueGreenPorts(ctx, target)
+	serviceVariables, err := r.deploymentServiceRuntimeVariables(ctx, *target, variables)
 	if err != nil {
 		return err
 	}
-	steps, err := remoteSteps(target, variables, remoteStepOptions{
-		targetColor: targetColor,
-		imageRef:    deployment.ImageRef.String,
-		bluePort:    ports.blue,
-		greenPort:   ports.green,
+	if len(variables) > 0 || len(serviceVariables) > 0 {
+		r.append(ctx, deployment, "system", fmt.Sprintf("Runtime variables synced: %d shared, %d service environments", validRuntimeVariableCount(variables), len(serviceVariables)))
+	}
+
+	targetColor, err := r.nextDeploymentColor(ctx, *target)
+	if err != nil {
+		return err
+	}
+	ports, err := r.blueGreenPorts(ctx, *target)
+	if err != nil {
+		return err
+	}
+	sourceAuthorizationHeader, err := r.sourceAuthorizationHeader(ctx, *target, deployment.ImageRef.String)
+	if err != nil {
+		return err
+	}
+	steps, err := remoteSteps(*target, variables, remoteStepOptions{
+		targetColor:               targetColor,
+		imageRef:                  deployment.ImageRef.String,
+		bluePort:                  ports.blue,
+		greenPort:                 ports.green,
+		portVariables:             ports.variables,
+		serviceVariables:          serviceVariables,
+		sourceAuthorizationHeader: sourceAuthorizationHeader,
 	})
 	if err != nil {
 		return err
 	}
 	for _, step := range steps {
 		r.append(ctx, deployment, "system", step.label)
-		output, err := client.Run(ctx, step.command)
+		var output string
+		if step.input == "" {
+			output, err = client.Run(ctx, step.command)
+		} else {
+			output, err = client.RunWithInput(ctx, step.command, step.input)
+		}
 		if strings.TrimSpace(output) != "" {
 			r.append(ctx, deployment, "stdout", output)
 		}
 		if err != nil {
 			return fmt.Errorf("%s: %w", step.label, err)
 		}
+		if step.resolvesCommit {
+			if err := r.resolveSourceCommit(ctx, deployment, target, client); err != nil {
+				return err
+			}
+		}
 	}
-	if target.Strategy == "blue_green" && blueGreenSlotTracked(target) {
-		if err := r.upsertSlot(ctx, deployment, target, targetColor, "standby"); err != nil {
+	if target.Strategy == "blue_green" && blueGreenSlotTracked(*target) {
+		if err := r.upsertSlot(ctx, deployment, *target, targetColor, "standby"); err != nil {
 			return err
 		}
 	}
-	if err := r.applyProxyRoutes(ctx, deployment, target, client, targetColor); err != nil {
+	if err := r.applyProxyRoutes(ctx, deployment, *target, client, targetColor); err != nil {
 		return err
 	}
-	if target.Strategy == "blue_green" && blueGreenSlotTracked(target) {
+	if target.Strategy == "blue_green" && blueGreenSlotTracked(*target) {
 		if _, err := r.queries.ActivateDeploymentSlot(ctx, db.ActivateDeploymentSlotParams{
 			ApplicationID: target.ApplicationID,
 			ServerID:      target.ServerID,
@@ -238,6 +284,181 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target db.
 		}
 	}
 
+	return nil
+}
+
+func (r Runner) sourceAuthorizationHeader(ctx context.Context, target db.GetDeploymentTargetRow, imageRef string) (string, error) {
+	if r.source == nil || strings.TrimSpace(imageRef) != "" || !isSourceDeploy(target) {
+		return "", nil
+	}
+	header, err := r.source.AuthorizationHeader(ctx, target.RepositoryConnectorID, target.RepositoryUrl.String)
+	if err != nil {
+		return "", fmt.Errorf("authenticate source repository: %w", err)
+	}
+	return header, nil
+}
+
+func (r Runner) deploymentRuntimeVariables(ctx context.Context, target db.GetDeploymentTargetRow) ([]connectors.RuntimeVariable, error) {
+	projectVariables, err := r.queries.ListProjectRuntimeVariablesForApplication(ctx, target.ApplicationID)
+	if err != nil {
+		return nil, fmt.Errorf("load project runtime variables: %w", err)
+	}
+
+	variables := make([]connectors.RuntimeVariable, 0, len(projectVariables))
+	for _, variable := range projectVariables {
+		variables = append(variables, connectors.RuntimeVariable{Key: variable.Key, Value: variable.Value})
+	}
+	if r.runtime == nil {
+		return variables, nil
+	}
+
+	dopplerVariables, err := r.runtime.RuntimeVariables(ctx, runtimeScope(target))
+	if err != nil {
+		return nil, fmt.Errorf("sync runtime variables: %w", err)
+	}
+	return mergeRuntimeVariables(variables, dopplerVariables), nil
+}
+
+func (r Runner) deploymentServiceRuntimeVariables(ctx context.Context, target db.GetDeploymentTargetRow, shared []connectors.RuntimeVariable) (map[string][]connectors.RuntimeVariable, error) {
+	configs, err := r.queries.ListApplicationServiceRuntimeConfigs(ctx, target.ApplicationID)
+	if err != nil {
+		return nil, fmt.Errorf("load compose service runtime configuration: %w", err)
+	}
+	stackVariables := shared
+	for _, config := range configs {
+		if config.ComposeService != stackRuntimeConfigName {
+			continue
+		}
+		variables, err := runtimeConfigVariables(config)
+		if err != nil {
+			return nil, fmt.Errorf("decode stack runtime variables: %w", err)
+		}
+		stackVariables = mergeRuntimeVariables(shared, variables)
+		if r.runtime != nil && config.DopplerProject.Valid && config.DopplerConfig.Valid {
+			dopplerVariables, err := r.runtime.RuntimeVariables(ctx, connectors.RuntimeVariableScope{
+				ApplicationName: target.ApplicationName + "/stack",
+				Project:         strings.TrimSpace(config.DopplerProject.String),
+				Config:          strings.TrimSpace(config.DopplerConfig.String),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("sync runtime variables for stack: %w", err)
+			}
+			stackVariables = mergeRuntimeVariables(stackVariables, dopplerVariables)
+		}
+	}
+
+	services := make(map[string][]connectors.RuntimeVariable, len(configs))
+	for _, name := range deploymentComposeServiceNames(target.ComposeServices) {
+		services[name] = stackVariables
+	}
+	for _, config := range configs {
+		if config.ComposeService == stackRuntimeConfigName {
+			continue
+		}
+		direct, err := runtimeConfigVariables(config)
+		if err != nil {
+			return nil, fmt.Errorf("decode runtime variables for compose service %s: %w", config.ComposeService, err)
+		}
+		variables := mergeRuntimeVariables(stackVariables, direct)
+		if r.runtime != nil && config.DopplerProject.Valid && config.DopplerConfig.Valid {
+			dopplerVariables, err := r.runtime.RuntimeVariables(ctx, connectors.RuntimeVariableScope{
+				ApplicationName: target.ApplicationName + "/" + config.ComposeService,
+				Project:         strings.TrimSpace(config.DopplerProject.String),
+				Config:          strings.TrimSpace(config.DopplerConfig.String),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("sync runtime variables for compose service %s: %w", config.ComposeService, err)
+			}
+			variables = mergeRuntimeVariables(variables, dopplerVariables)
+		}
+		services[config.ComposeService] = variables
+	}
+	return services, nil
+}
+
+func runtimeConfigVariables(config db.ApplicationServiceRuntimeConfig) ([]connectors.RuntimeVariable, error) {
+	var inputs []struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(config.Variables, &inputs); err != nil {
+		return nil, err
+	}
+	variables := make([]connectors.RuntimeVariable, 0, len(inputs))
+	for _, input := range inputs {
+		variables = append(variables, connectors.RuntimeVariable{Key: input.Key, Value: input.Value})
+	}
+	return variables, nil
+}
+
+func deploymentComposeServiceNames(raw []byte) []string {
+	var services []struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(raw, &services) != nil {
+		return nil
+	}
+	names := make([]string, 0, len(services))
+	for _, service := range services {
+		if service.Name != "" {
+			names = append(names, service.Name)
+		}
+	}
+	return names
+}
+
+func mergeRuntimeVariables(projectVariables []connectors.RuntimeVariable, dopplerVariables []connectors.RuntimeVariable) []connectors.RuntimeVariable {
+	byKey := make(map[string]connectors.RuntimeVariable, len(projectVariables)+len(dopplerVariables))
+	for _, variable := range projectVariables {
+		byKey[variable.Key] = variable
+	}
+	for _, variable := range dopplerVariables {
+		byKey[variable.Key] = variable
+	}
+
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	variables := make([]connectors.RuntimeVariable, 0, len(keys))
+	for _, key := range keys {
+		variables = append(variables, byKey[key])
+	}
+	return variables
+}
+
+func (r Runner) resolveSourceCommit(ctx context.Context, deployment db.Deployment, target *db.GetDeploymentTargetRow, client remoteRunner) error {
+	output, err := client.Run(ctx, "cd "+stringutil.ShellQuote(target.RemoteDirectory)+" && git log -1 --format='%H%n%s'")
+	if err != nil {
+		return fmt.Errorf("resolve source commit: %w", err)
+	}
+	parts := strings.SplitN(strings.TrimRight(output, "\r\n"), "\n", 2)
+	commit := strings.TrimSpace(parts[0])
+	decoded, decodeErr := hex.DecodeString(commit)
+	if decodeErr != nil || len(decoded) != 20 {
+		return fmt.Errorf("resolve source commit: git returned an invalid SHA")
+	}
+	message := ""
+	if len(parts) == 2 {
+		message = strings.TrimSpace(parts[1])
+		if !utf8.ValidString(message) || stringutil.HasControlCharacter(message) {
+			message = ""
+		} else if runes := []rune(message); len(runes) > maxCommitMessageLength {
+			message = string(runes[:maxCommitMessageLength])
+		}
+	}
+	pinned, err := r.queries.SetDeploymentCommitSHA(ctx, db.SetDeploymentCommitSHAParams{
+		DeploymentID:  deployment.ID,
+		CommitSha:     commit,
+		CommitMessage: message,
+	})
+	if err != nil {
+		return fmt.Errorf("record source commit: %w", err)
+	}
+	target.CommitSha = pinned.CommitSha
+	r.append(ctx, deployment, "system", "Source commit: "+commit[:12])
 	return nil
 }
 
@@ -361,7 +582,7 @@ func (r Runner) checkColorHealth(ctx context.Context, target db.GetDeploymentTar
 	if err != nil {
 		return err
 	}
-	command := fmt.Sprintf("curl -fsS --retry 3 --retry-delay 1 %s >/dev/null", shellQuoteColorURL(healthCheckURL, color, ports))
+	command := fmt.Sprintf("curl -fsS --retry 3 --retry-delay 1 %s >/dev/null", shellQuoteColorURL(deploymentHealthCheckURL(target, healthCheckURL), color, ports))
 	if output, err := client.Run(ctx, command); err != nil {
 		if strings.TrimSpace(output) != "" {
 			return fmt.Errorf("rollback health check failed: %w: %s", err, strings.TrimSpace(output))
@@ -391,8 +612,9 @@ func colorPort(color string, ports blueGreenPorts) string {
 }
 
 type blueGreenPorts struct {
-	blue  string
-	green string
+	blue      string
+	green     string
+	variables []composePortVariable
 }
 
 func (r Runner) blueGreenPorts(ctx context.Context, target db.GetDeploymentTargetRow) (blueGreenPorts, error) {
@@ -406,16 +628,47 @@ func (r Runner) blueGreenPorts(ctx context.Context, target db.GetDeploymentTarge
 	if err != nil {
 		return blueGreenPorts{}, fmt.Errorf("load proxy route ports: %w", err)
 	}
-	for _, route := range routes {
-		ports := blueGreenPorts{
-			blue:  upstreamPort(route.BlueUpstreamUrl),
-			green: upstreamPort(route.GreenUpstreamUrl),
-		}
-		if ports.blue != "" || ports.green != "" {
-			return ports, nil
+	ports, err := routePorts(routes)
+	if err != nil || len(routes) > 0 {
+		return ports, err
+	}
+	return composeMetadataPorts(target.ComposeServices), nil
+}
+
+func composeMetadataPorts(raw []byte) blueGreenPorts {
+	var services []struct {
+		Name  string `json:"name"`
+		Ports []struct {
+			ContainerPort int `json:"container_port"`
+			PublishedPort int `json:"published_port"`
+		} `json:"ports"`
+	}
+	if json.Unmarshal(raw, &services) != nil {
+		return blueGreenPorts{}
+	}
+	result := blueGreenPorts{}
+	for _, service := range services {
+		for _, port := range service.Ports {
+			if port.ContainerPort < 1 || port.PublishedPort < 1 {
+				continue
+			}
+			name := fmt.Sprintf("DEPLOY_PORT_%s_%d", strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(service.Name)), port.ContainerPort)
+			if result.blue == "" {
+				result.blue = fmt.Sprint(port.PublishedPort)
+				result.green = fmt.Sprint(port.PublishedPort + 1)
+				name = "DEPLOY_PORT"
+			}
+			result.variables = append(result.variables, composePortVariable{name: name, serviceName: service.Name, containerPort: int32(port.ContainerPort), bluePort: fmt.Sprint(port.PublishedPort), greenPort: fmt.Sprint(port.PublishedPort + 1)})
 		}
 	}
-	return blueGreenPorts{}, nil
+	return result
+}
+
+func deploymentHealthCheckURL(target db.GetDeploymentTargetRow, healthCheckURL string) string {
+	if strings.TrimSpace(target.Hostname) == "playground" {
+		return strings.Replace(healthCheckURL, "://127.0.0.1", "://host.docker.internal", 1)
+	}
+	return healthCheckURL
 }
 
 func upstreamPort(value pgtype.Text) string {
@@ -440,52 +693,81 @@ func (r Runner) applyProxyRoutes(ctx context.Context, deployment db.Deployment, 
 	if err != nil {
 		return fmt.Errorf("load proxy routes: %w", err)
 	}
+	prepared := make([]preparedProxyRoute, 0, len(routes))
 	for _, route := range routes {
-		if err := r.applyProxyRoute(ctx, deployment, route, client, color); err != nil {
-			return err
+		item, err := prepareProxyRoute(route, color)
+		if err != nil {
+			_, _ = r.queries.MarkProxyRouteFailed(ctx, route.ID)
+			return fmt.Errorf("prepare proxy route %s: %w", route.Domain, err)
+		}
+		prepared = append(prepared, item)
+	}
+
+	applied := make([]preparedProxyRoute, 0, len(prepared))
+	for _, item := range prepared {
+		r.append(ctx, deployment, "system", "Applying proxy route "+item.route.Domain)
+		output, err := client.Run(ctx, item.command)
+		if strings.TrimSpace(output) != "" {
+			r.append(ctx, deployment, "stdout", output)
+		}
+		if err != nil {
+			_, _ = r.queries.MarkProxyRouteFailed(ctx, item.route.ID)
+			rollbackProxyRoutes(ctx, client, applied)
+			return fmt.Errorf("apply proxy route %s: %w", item.route.Domain, err)
+		}
+		applied = append(applied, item)
+	}
+
+	ids := make([]pgtype.UUID, 0, len(prepared))
+	upstreams := make([]string, 0, len(prepared))
+	for _, item := range prepared {
+		ids = append(ids, item.route.ID)
+		upstreams = append(upstreams, item.upstream)
+	}
+	if len(ids) > 0 {
+		promoted, err := r.queries.PromoteProxyRoutes(ctx, db.PromoteProxyRoutesParams{RouteIds: ids, UpstreamUrls: upstreams})
+		if err != nil || len(promoted) != len(prepared) {
+			rollbackProxyRoutes(ctx, client, applied)
+			if err != nil {
+				return fmt.Errorf("record promoted proxy routes: %w", err)
+			}
+			return fmt.Errorf("record promoted proxy routes: updated %d of %d routes", len(promoted), len(prepared))
 		}
 	}
 	return nil
 }
 
-func (r Runner) applyProxyRoute(ctx context.Context, deployment db.Deployment, route db.ListProxyRouteTargetsForApplicationRow, client remoteRunner, color string) error {
+type preparedProxyRoute struct {
+	route           db.ListProxyRouteTargetsForApplicationRow
+	upstream        string
+	command         string
+	rollbackCommand string
+}
+
+func prepareProxyRoute(route db.ListProxyRouteTargetsForApplicationRow, color string) (preparedProxyRoute, error) {
 	upstream, err := proxyRouteUpstream(route, color)
 	if err != nil {
-		_, _ = r.queries.MarkProxyRouteFailed(ctx, route.ID)
-		return fmt.Errorf("select proxy upstream %s: %w", route.Domain, err)
-	}
-	if upstream != route.UpstreamUrl {
-		updated, err := r.queries.UpdateProxyRouteUpstream(ctx, db.UpdateProxyRouteUpstreamParams{ID: route.ID, UpstreamUrl: upstream})
-		if err != nil {
-			_, _ = r.queries.MarkProxyRouteFailed(ctx, route.ID)
-			return fmt.Errorf("update proxy upstream %s: %w", route.Domain, err)
-		}
-		route.UpstreamUrl = updated.UpstreamUrl
+		return preparedProxyRoute{}, err
 	}
 	command, err := proxypkg.BuildCommand(proxypkg.Target{
-		Domain:     route.Domain,
-		Upstream:   route.UpstreamUrl,
-		TLSEnabled: route.TlsEnabled,
-		ProxyType:  route.ProxyType,
+		Domain: route.Domain, Upstream: upstream, TLSEnabled: route.TlsEnabled, ProxyType: route.ProxyType,
 	})
 	if err != nil {
-		_, _ = r.queries.MarkProxyRouteFailed(ctx, route.ID)
-		return fmt.Errorf("build proxy route %s: %w", route.Domain, err)
+		return preparedProxyRoute{}, err
 	}
-
-	r.append(ctx, deployment, "system", "Applying proxy route "+route.Domain)
-	output, err := client.Run(ctx, command)
-	if strings.TrimSpace(output) != "" {
-		r.append(ctx, deployment, "stdout", output)
-	}
+	rollbackCommand, err := proxypkg.BuildCommand(proxypkg.Target{
+		Domain: route.Domain, Upstream: route.UpstreamUrl, TLSEnabled: route.TlsEnabled, ProxyType: route.ProxyType,
+	})
 	if err != nil {
-		_, _ = r.queries.MarkProxyRouteFailed(ctx, route.ID)
-		return fmt.Errorf("apply proxy route %s: %w", route.Domain, err)
+		return preparedProxyRoute{}, err
 	}
-	if _, err := r.queries.MarkProxyRouteApplied(ctx, route.ID); err != nil {
-		return fmt.Errorf("mark proxy route applied: %w", err)
+	return preparedProxyRoute{route: route, upstream: upstream, command: command, rollbackCommand: rollbackCommand}, nil
+}
+
+func rollbackProxyRoutes(ctx context.Context, client remoteRunner, applied []preparedProxyRoute) {
+	for index := len(applied) - 1; index >= 0; index-- {
+		_, _ = client.Run(ctx, applied[index].rollbackCommand)
 	}
-	return nil
 }
 
 func proxyRouteUpstream(route db.ListProxyRouteTargetsForApplicationRow, color string) (string, error) {

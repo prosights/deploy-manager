@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,6 +41,21 @@ type RepositoryContent struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
 	Type string `json:"type"`
+}
+
+type RepositoryCommit struct {
+	SHA             string `json:"sha"`
+	Message         string `json:"message"`
+	AuthorName      string `json:"author_name"`
+	AuthorLogin     string `json:"author_login"`
+	AuthorAvatarURL string `json:"author_avatar_url"`
+	HTMLURL         string `json:"html_url"`
+}
+
+type repositoryFile struct {
+	Type     string `json:"type"`
+	Encoding string `json:"encoding"`
+	Content  string `json:"content"`
 }
 
 func NewAppClient(appID string, privateKeyPEM string, httpClient *http.Client) (*AppClient, error) {
@@ -152,6 +168,45 @@ func (c *AppClient) ListRepositoryContents(ctx context.Context, installationID s
 	return contents, nil
 }
 
+func (c *AppClient) GetRepositoryFile(ctx context.Context, installationID string, repository string, filePath string, ref string) ([]byte, error) {
+	installationID = strings.TrimSpace(installationID)
+	if !validNumericID(installationID) {
+		return nil, fmt.Errorf("installation_id must be numeric")
+	}
+	repository = strings.TrimSpace(repository)
+	if !validRepository(repository) {
+		return nil, fmt.Errorf("repository must be owner/name")
+	}
+	filePath = strings.Trim(strings.TrimSpace(filePath), "/")
+	if filePath == "" || strings.ContainsAny(filePath, "\r\n\t") || strings.Contains(filePath, "..") {
+		return nil, fmt.Errorf("file path contains unsupported characters")
+	}
+	ref = strings.TrimSpace(ref)
+	if ref != "" && !validBranch(ref) {
+		return nil, fmt.Errorf("ref contains unsupported characters")
+	}
+	token, err := c.installationToken(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	requestPath := "/repos/" + repository + "/contents/" + url.PathEscape(filePath)
+	if ref != "" {
+		requestPath += "?ref=" + url.QueryEscape(ref)
+	}
+	var file repositoryFile
+	if _, err := c.getJSON(ctx, requestPath, token, &file); err != nil {
+		return nil, err
+	}
+	if file.Type != "file" || file.Encoding != "base64" {
+		return nil, fmt.Errorf("github content response was not a base64 file")
+	}
+	content, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(file.Content, "\n", ""))
+	if err != nil {
+		return nil, fmt.Errorf("decode github file content: %w", err)
+	}
+	return content, nil
+}
+
 func (c *AppClient) ListRepositoryBranches(ctx context.Context, installationID string, repository string) ([]string, error) {
 	installationID = strings.TrimSpace(installationID)
 	if !validNumericID(installationID) {
@@ -185,7 +240,80 @@ func (c *AppClient) ListRepositoryBranches(ctx context.Context, installationID s
 	return branches, nil
 }
 
+func (c *AppClient) GetRepositoryCommit(ctx context.Context, installationID string, repository string, sha string) (RepositoryCommit, error) {
+	installationID = strings.TrimSpace(installationID)
+	if !validNumericID(installationID) {
+		return RepositoryCommit{}, fmt.Errorf("installation_id must be numeric")
+	}
+	repository = strings.TrimSpace(repository)
+	if !validRepository(repository) {
+		return RepositoryCommit{}, fmt.Errorf("repository must be owner/name")
+	}
+	sha = strings.TrimSpace(sha)
+	if !validCommitSHA(sha) {
+		return RepositoryCommit{}, fmt.Errorf("sha must be a 7 to 40 character hexadecimal commit")
+	}
+	token, err := c.installationToken(ctx, installationID)
+	if err != nil {
+		return RepositoryCommit{}, err
+	}
+	var response struct {
+		SHA     string `json:"sha"`
+		HTMLURL string `json:"html_url"`
+		Commit  struct {
+			Message string `json:"message"`
+			Author  struct {
+				Name string `json:"name"`
+			} `json:"author"`
+		} `json:"commit"`
+		Author struct {
+			Login     string `json:"login"`
+			AvatarURL string `json:"avatar_url"`
+		} `json:"author"`
+	}
+	if _, err := c.getJSON(ctx, "/repos/"+repository+"/commits/"+sha, token, &response); err != nil {
+		return RepositoryCommit{}, err
+	}
+	message := strings.TrimSpace(strings.SplitN(strings.ReplaceAll(response.Commit.Message, "\r\n", "\n"), "\n", 2)[0])
+	return RepositoryCommit{
+		SHA:             response.SHA,
+		Message:         message,
+		AuthorName:      strings.TrimSpace(response.Commit.Author.Name),
+		AuthorLogin:     strings.TrimSpace(response.Author.Login),
+		AuthorAvatarURL: strings.TrimSpace(response.Author.AvatarURL),
+		HTMLURL:         strings.TrimSpace(response.HTMLURL),
+	}, nil
+}
+
+// InstallationToken returns a short-lived, read-only token scoped to one
+// repository. Callers must keep it in memory and must not log or persist it.
+func (c *AppClient) InstallationToken(ctx context.Context, installationID string, repositoryID string) (string, error) {
+	installationID = strings.TrimSpace(installationID)
+	if !validNumericID(installationID) {
+		return "", fmt.Errorf("installation_id must be numeric")
+	}
+	repositoryID = strings.TrimSpace(repositoryID)
+	if !validNumericID(repositoryID) {
+		return "", fmt.Errorf("repository_id must be numeric")
+	}
+	numericRepositoryID, err := strconv.ParseInt(repositoryID, 10, 64)
+	if err != nil {
+		return "", fmt.Errorf("repository_id must fit in an int64")
+	}
+	return c.createInstallationToken(ctx, installationID, struct {
+		RepositoryIDs []int64           `json:"repository_ids"`
+		Permissions   map[string]string `json:"permissions"`
+	}{
+		RepositoryIDs: []int64{numericRepositoryID},
+		Permissions:   map[string]string{"contents": "read"},
+	})
+}
+
 func (c *AppClient) installationToken(ctx context.Context, installationID string) (string, error) {
+	return c.createInstallationToken(ctx, installationID, nil)
+}
+
+func (c *AppClient) createInstallationToken(ctx context.Context, installationID string, scope any) (string, error) {
 	jwt, err := c.jwt(time.Now())
 	if err != nil {
 		return "", err
@@ -194,7 +322,7 @@ func (c *AppClient) installationToken(ctx context.Context, installationID string
 		Token string `json:"token"`
 	}
 	path := "/app/installations/" + installationID + "/access_tokens"
-	if err := c.postJSON(ctx, path, jwt, &response); err != nil {
+	if err := c.postJSONBody(ctx, path, jwt, scope, &response); err != nil {
 		return "", err
 	}
 	if strings.TrimSpace(response.Token) == "" {

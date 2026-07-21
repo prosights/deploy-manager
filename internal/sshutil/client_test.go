@@ -103,6 +103,24 @@ func TestCappedBufferStopsAtLimit(t *testing.T) {
 	}
 }
 
+func TestLocalClientRunWithInputUsesStdin(t *testing.T) {
+	client := NewLocalClient()
+	output, err := client.RunWithInput(context.Background(), "IFS= read -r value && printf '%s' \"$value\"", "ephemeral\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "ephemeral" {
+		t.Fatalf("expected stdin to reach command, got %q", output)
+	}
+}
+
+func TestRunWithInputRejectsOversizedInput(t *testing.T) {
+	client := NewLocalClient()
+	if _, err := client.RunWithInput(context.Background(), "true", string(make([]byte, maxSSHInputBytes+1))); err == nil {
+		t.Fatal("expected oversized input to be rejected")
+	}
+}
+
 func TestRunReturnsPromptlyOnContextCancellation(t *testing.T) {
 	addr, hostKey := blockingSSHServer(t)
 	host, portStr, err := net.SplitHostPort(addr)

@@ -19,7 +19,7 @@ export function TextInput({
     <label className="space-y-1 text-xs text-muted">
       <span>{label}</span>
       <input
-        className="h-9 w-full rounded-md border bg-background px-3 text-sm text-ink outline-none placeholder:text-muted/60 focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60"
+        className="h-9 w-full rounded-prosights-lg border border-prosights-border bg-prosights-surface px-3 text-sm text-prosights-text outline-none placeholder:text-prosights-muted/60 focus-visible:border-prosights-text focus-visible:ring-2 focus-visible:ring-prosights-ring disabled:cursor-not-allowed disabled:opacity-60"
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}

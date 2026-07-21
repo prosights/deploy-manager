@@ -90,16 +90,30 @@ func NewLocalDockerHostClient(user string) Client {
 // remote command. A misbehaving or compromised host could otherwise stream
 // unbounded output and exhaust memory before any downstream truncation runs.
 const maxSSHOutputBytes = 1 << 20
+const maxSSHInputBytes = 16 << 10
 
 func (c Client) Run(ctx context.Context, command string) (string, error) {
+	return c.run(ctx, command, "")
+}
+
+// RunWithInput sends sensitive command input over stdin so it never appears in
+// a remote process command line or environment.
+func (c Client) RunWithInput(ctx context.Context, command string, input string) (string, error) {
+	if len(input) > maxSSHInputBytes {
+		return "", fmt.Errorf("ssh command input exceeds %d bytes", maxSSHInputBytes)
+	}
+	return c.run(ctx, command, input)
+}
+
+func (c Client) run(ctx context.Context, command string, input string) (string, error) {
 	if c.localShell {
-		return runLocalShell(ctx, command)
+		return runLocalShell(ctx, command, input)
 	}
 	if c.localDockerHost {
-		return runLocalDockerHostShell(ctx, c.user, command)
+		return runLocalDockerHostShell(ctx, c.user, command, input)
 	}
 	if c.tailscaleCLI {
-		return c.runTailscaleSSH(ctx, command)
+		return c.runTailscaleSSH(ctx, command, input)
 	}
 
 	sshClient, err := c.connect(ctx)
@@ -117,6 +131,9 @@ func (c Client) Run(ctx context.Context, command string) (string, error) {
 	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
 	session.Stdout = buffer
 	session.Stderr = buffer
+	if input != "" {
+		session.Stdin = strings.NewReader(input)
+	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -132,7 +149,7 @@ func (c Client) Run(ctx context.Context, command string) (string, error) {
 	}
 }
 
-func runLocalShell(ctx context.Context, command string) (string, error) {
+func runLocalShell(ctx context.Context, command string, input string) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("shell command is required")
 	}
@@ -140,13 +157,16 @@ func runLocalShell(ctx context.Context, command string) (string, error) {
 	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
 	cmd.Stdout = buffer
 	cmd.Stderr = buffer
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	if err := cmd.Run(); err != nil {
 		return buffer.String(), err
 	}
 	return buffer.String(), nil
 }
 
-func runLocalDockerHostShell(ctx context.Context, user string, command string) (string, error) {
+func runLocalDockerHostShell(ctx context.Context, user string, command string, input string) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("shell command is required")
 	}
@@ -154,6 +174,10 @@ func runLocalDockerHostShell(ctx context.Context, user string, command string) (
 		return "", fmt.Errorf("local docker host user is required")
 	}
 
+	interactive := ""
+	if input != "" {
+		interactive = " -i"
+	}
 	hostCommand := fmt.Sprintf(
 		"docker image inspect deploy-manager-host-runner:proxy-v2 >/dev/null 2>&1 || docker build -t deploy-manager-host-runner:proxy-v2 - <<'EOF'\nFROM alpine:3.23\nRUN apk add --no-cache bash python3 git openssh-client curl docker-cli docker-cli-compose\nEOF\n"+
 			"target_user=%s\n"+
@@ -163,14 +187,15 @@ func runLocalDockerHostShell(ctx context.Context, user string, command string) (
 			"[ -n \"$user_id\" ] || { echo \"host user not found: $target_user\" >&2; exit 1; }\n"+
 			"[ -n \"$deployers_group\" ] || { echo \"host group not found: deployers\" >&2; exit 1; }\n"+
 			"[ -n \"$docker_group\" ] || { echo \"host group not found: docker\" >&2; exit 1; }\n"+
-			"docker run --rm --network host --user \"$user_id\" --group-add \"$deployers_group\" --group-add \"$docker_group\" -e HOME=/tmp -e DOCKER_CONFIG=/docker-config -v /srv/deploy-manager:/srv/deploy-manager -v /opt/infrastructure:/opt/infrastructure -v /var/run/docker.sock:/var/run/docker.sock -v /srv/deploy-manager/control/docker-config:/docker-config:ro deploy-manager-host-runner:proxy-v2 sh -lc %s",
+			"docker run%s --rm --network host --user \"$user_id\" --group-add \"$deployers_group\" --group-add \"$docker_group\" -e HOME=/tmp -e DOCKER_CONFIG=/docker-config -v /srv/deploy-manager:/srv/deploy-manager -v /opt/infrastructure:/opt/infrastructure -v /var/run/docker.sock:/var/run/docker.sock -v /srv/deploy-manager/control/docker-config:/docker-config:ro deploy-manager-host-runner:proxy-v2 sh -lc %s",
 		stringutil.ShellQuote(user),
+		interactive,
 		stringutil.ShellQuote(command),
 	)
-	return runLocalShell(ctx, hostCommand)
+	return runLocalShell(ctx, hostCommand, input)
 }
 
-func (c Client) runTailscaleSSH(ctx context.Context, command string) (string, error) {
+func (c Client) runTailscaleSSH(ctx context.Context, command string, input string) (string, error) {
 	if err := c.validateTailscaleDestination(); err != nil {
 		return "", err
 	}
@@ -182,6 +207,9 @@ func (c Client) runTailscaleSSH(ctx context.Context, command string) (string, er
 	buffer := &cappedBuffer{limit: maxSSHOutputBytes}
 	cmd.Stdout = buffer
 	cmd.Stderr = buffer
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
 	if err := cmd.Run(); err != nil {
 		return stripTailscaleWarnings(buffer.String()), err
 	}

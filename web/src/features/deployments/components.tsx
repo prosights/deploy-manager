@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef } from 'react'
-import { Ban, History, RotateCcw, Rocket, Save, ScrollText } from 'lucide-react'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { Ban, History, RotateCcw, Rocket, Save, ScrollText, X } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { Panel } from '../../components/ui/panel'
@@ -151,7 +151,7 @@ export function DeploymentQueuePanel({
         </div>
       )}
       <div className="border-t px-4 py-3 text-sm text-muted">
-        Blue-green compose targets must use <span className="font-mono text-ink">DEPLOY_COLOR</span> for color-specific service names, labels, or ports, and the application health check URL must include <span className="font-mono text-ink">{'{color}'}</span>.
+        Blue-green compose targets must use <span className="font-mono text-ink">DEPLOY_COLOR</span> for color-specific service names, labels, or ports, and the application health check URL must include <span className="font-mono text-ink">{'{color}'}</span> and <span className="font-mono text-ink">{'{port}'}</span>.
       </div>
     </Panel>
   )
@@ -231,8 +231,8 @@ function canBuildFromSource(target: Application | undefined): boolean {
 }
 
 export function blueGreenHealthCheckError(value: string): string {
-  if (!value.trim().includes('{color}')) {
-    return 'Configure a health check URL with {color} before queueing blue-green deployments.'
+  if (!value.trim().includes('{color}') || !value.trim().includes('{port}')) {
+    return 'Configure a health check URL with {color} and {port} before queueing blue-green deployments.'
   }
   try {
     validateHealthCheckURL(value)
@@ -265,16 +265,6 @@ export function DeploymentList({
   onCancel,
   onRetry,
 }: DeploymentListProps) {
-  const selectedDetailRef = useRef<HTMLTableRowElement | null>(null)
-
-  useEffect(() => {
-    if (!selectedDeployment?.id || !selectedDetailRef.current || typeof selectedDetailRef.current.scrollIntoView !== 'function') {
-      return
-    }
-    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
-    selectedDetailRef.current.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' })
-  }, [selectedDeployment?.id])
-
   return (
     <Panel>
       <div className="overflow-x-auto">
@@ -293,10 +283,8 @@ export function DeploymentList({
           </thead>
           <tbody>
             {deployments.map((deployment) => {
-              const isSelected = deployment.id === selectedDeployment?.id
               return (
-                <Fragment key={deployment.id}>
-                  <tr className={isSelected ? 'border-t bg-accent/5' : 'border-t'}>
+                <tr key={deployment.id} className="border-t">
                     <td className="px-4 py-3 font-mono text-xs text-muted">{deployment.id.slice(0, 8)}</td>
                     <td className="px-4 py-3">
                       <div className="font-medium">{deployment.application_name}</div>
@@ -312,12 +300,11 @@ export function DeploymentList({
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
                         <Button
-                          variant={isSelected ? 'secondary' : 'ghost'}
-                          aria-expanded={isSelected}
+                          variant="ghost"
                           onClick={() => onInspect(deployment.id)}
                         >
                           <ScrollText className="size-4" />
-                          {isSelected ? 'Hide logs' : 'Inspect'}
+                          Inspect
                         </Button>
                         {deployment.status === 'queued' && (
                           <Button variant="ghost" disabled={isCancelling} onClick={() => onCancel(deployment.id)}>
@@ -334,25 +321,67 @@ export function DeploymentList({
                       </div>
                     </td>
                   </tr>
-                  {isSelected && (
-                    <tr ref={selectedDetailRef} className="border-t bg-background">
-                      <td colSpan={8} className="p-0">
-                        <DeploymentLogStream
-                          deployment={deployment}
-                          logs={selectedDeploymentLogs}
-                          live={selectedDeploymentLive}
-                          className="border-t bg-background px-4 py-5"
-                        />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
               )
             })}
           </tbody>
         </table>
       </div>
       {deployments.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No deployments found.</div>}
+      <DeploymentLogDialog
+        deployment={selectedDeployment}
+        logs={selectedDeploymentLogs}
+        live={selectedDeploymentLive}
+        onOpenChange={(open) => {
+          if (!open) onInspect('')
+        }}
+      />
     </Panel>
+  )
+}
+
+function DeploymentLogDialog({
+  deployment,
+  logs,
+  live,
+  onOpenChange,
+}: {
+  deployment?: Deployment
+  logs: DeploymentLog[]
+  live: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <DialogPrimitive.Root open={Boolean(deployment)} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 flex h-[min(82svh,760px)] w-[calc(100%-2rem)] max-w-5xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-prosights-xl border border-prosights-border bg-prosights-surface shadow-prosights-float outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out">
+          {deployment && (
+            <>
+              <header className="flex shrink-0 items-start justify-between gap-4 border-b border-prosights-border px-5 py-4 pr-14">
+                <div className="min-w-0">
+                  <DialogPrimitive.Title className="truncate text-[17px] font-semibold tracking-[-0.01em] text-prosights-text">
+                    {deployment.application_name} deployment
+                  </DialogPrimitive.Title>
+                  <DialogPrimitive.Description className="mt-1 truncate font-mono text-xs text-prosights-muted">
+                    {deployment.id} · {deployment.server_name}
+                  </DialogPrimitive.Description>
+                </div>
+                <Badge tone={statusTone(deployment.status)}>{deployment.status}</Badge>
+              </header>
+              <DialogPrimitive.Close asChild>
+                <button
+                  type="button"
+                  aria-label="Close deployment logs"
+                  className="absolute right-4 top-4 inline-flex size-8 items-center justify-center rounded-prosights-md bg-black text-white hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-prosights-ring"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </button>
+              </DialogPrimitive.Close>
+              <DeploymentLogStream deployment={deployment} logs={logs} live={live} className="min-h-0 flex-1" />
+            </>
+          )}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }

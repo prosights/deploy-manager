@@ -10,6 +10,8 @@ container:
   `control_default` Docker network.
 - `docker-compose.yml` runs only the Deploy Manager app image. Deploy Manager
   starts it twice, once for blue and once for green, on local ports 3101/3102.
+- The stable control instance is the only deployment queue worker. The public
+  blue/green instances explicitly run with `DEPLOYMENT_WORKER_ENABLED=false`.
 - Caddy routes `deploy.internal.prosights.co` to the currently promoted color.
 
 ## One-time VM bootstrap
@@ -42,7 +44,7 @@ Create one application for the control plane itself:
 | Compose path | `docker-compose.yml` |
 | Remote directory | `/srv/deploy-manager/apps/production/deploy-manager` |
 | Health check URL | `http://127.0.0.1:{port}/api/readyz?color={color}` |
-| Auto deploy | enabled |
+| Auto deploy | disabled |
 
 The health URL includes `{color}` because blue/green deployments require it,
 and uses `{port}` so each new color is checked before traffic moves.
@@ -78,12 +80,22 @@ tags for every dispatched `main` build:
 
 - `main-<short-sha>`: immutable tag Deploy Manager deploys.
 - `sha-<short-sha>`: immutable tag for audit/debugging.
+- `sha-<full-sha>`: exact image used by the protected release workflow.
 - `main`: moving convenience tag for humans.
 
 Pushing a Git tag such as `v1.2.3` also publishes `v1.2.3` when the GitHub repo
 variable `DEPLOY_MANAGER_IMAGE` is set to the image name without a tag, for
 example `us-east1-docker.pkg.dev/prosights-platform/deploy-manager/deploy-manager`.
-Tag pushes do not auto-deploy; production auto-deploys from `main`.
+Image builds never deploy production. Keep GitHub auto deploy disabled on the
+Deploy Manager application so a merge cannot bypass the protected release.
+
+## Production release
+
+Configure the GitHub `production` environment with required reviewers and keep
+its GCP and API secrets scoped to that environment. Run **Release Deploy
+Manager** with the full 40-character SHA of a commit already merged to `main`.
+The workflow rejects branch names, abbreviated SHAs, commits outside `main`,
+and commits whose immutable image has not finished building.
 
 ## Runtime env
 
@@ -109,13 +121,14 @@ Redis service names.
 
 ## Rollout behavior
 
-1. A push to `main` hits the Deploy Manager GitHub webhook.
-2. Deploy Manager dispatches `.github/workflows/deploy-manager-build.yml`.
-3. GitHub Actions builds and pushes `main-<short-sha>`.
-4. The workflow calls back to `/api/builds/{id}/complete`.
-5. Deploy Manager starts the inactive color on port 3101 or 3102.
-6. Deploy Manager checks `/api/readyz`.
-7. Deploy Manager flips the Caddy upstream to the healthy color and records the
-   previous color as rollback standby.
+1. A push to `main` builds and publishes `main-<short-sha>` without touching
+   production.
+2. An approved manual release resolves that tag to an immutable image digest.
+3. The existing stable worker starts and checks the inactive public color.
+4. Deploy Manager flips Caddy only after the new color is ready.
+5. The workflow backs up and updates the stable control compose file, then
+   waits for the control API to become ready.
+6. If the control update fails, the workflow restores the compose backup and
+   queues a public rollback to the previous color.
 
 Rollback only flips Caddy back to the standby color; it does not rebuild.
