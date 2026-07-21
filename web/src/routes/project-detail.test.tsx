@@ -519,7 +519,7 @@ describe('ProjectDetailRoute', () => {
     expect(within(drawer).queryByRole('button', { name: 'Add domain' })).not.toBeInTheDocument()
   })
 
-  it('adds a domain for a compose service and container port', async () => {
+  it('adds a domain with explicit upstreams', async () => {
     renderRoute()
     fireEvent.click(await screen.findByRole('button', { name: 'Open API' }))
     const drawer = await screen.findByRole('dialog', { name: 'API' })
@@ -527,9 +527,19 @@ describe('ProjectDetailRoute', () => {
 
     fireEvent.click(within(drawer).getByRole('button', { name: 'Add domain' }))
     fireEvent.change(within(drawer).getByLabelText('Domain'), { target: { value: 'api.example.com' } })
+    fireEvent.change(within(drawer).getByLabelText('Upstream'), { target: { value: 'http://127.0.0.1:3101' } })
+    fireEvent.change(within(drawer).getByLabelText('Blue upstream'), { target: { value: 'http://127.0.0.1:3101' } })
+    fireEvent.change(within(drawer).getByLabelText('Green upstream'), { target: { value: 'http://127.0.0.1:3102' } })
     fireEvent.click(within(drawer).getByRole('button', { name: 'Add domain' }))
 
-    await waitFor(() => expect(createProxyRoute).toHaveBeenCalledWith({ application_id: 'app_1', domain: 'api.example.com', compose_service: 'api', container_port: 8080, tls_enabled: true }))
+    await waitFor(() => expect(createProxyRoute).toHaveBeenCalledWith({
+      application_id: 'app_1',
+      domain: 'api.example.com',
+      upstream_url: 'http://127.0.0.1:3101',
+      blue_upstream_url: 'http://127.0.0.1:3101',
+      green_upstream_url: 'http://127.0.0.1:3102',
+      tls_enabled: true,
+    }))
   })
 
   it('deploys managed route changes instead of applying them manually', async () => {

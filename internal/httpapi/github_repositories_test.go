@@ -69,6 +69,36 @@ func TestGitHubConfigFromInstallationRepositoriesPreservesBuildMetadata(t *testi
 	}
 }
 
+func TestGitHubConfigFromInstallationRepositoriesPreservesEveryApplicationTarget(t *testing.T) {
+	const portalID = "11111111-1111-4111-8111-111111111111"
+	const finopsID = "22222222-2222-4222-8222-222222222222"
+	config, err := githubConfigFromInstallationRepositoriesWithDefaults("123456", []githubconnector.AppRepository{{
+		ID:            42,
+		FullName:      "prosights/internal",
+		DefaultBranch: "main",
+	}}, []githubconnector.Repository{{
+		Repository:    "prosights/internal",
+		Branch:        "main",
+		ApplicationID: portalID,
+		ImageRef:      "registry.example.com/portal:${SHORT_SHA}",
+	}, {
+		Repository:    "prosights/internal",
+		Branch:        "main",
+		ApplicationID: finopsID,
+		ImageRef:      "registry.example.com/finops:${SHORT_SHA}",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositories, err := githubconnector.RepositoriesFromConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repositories) != 2 || repositories[0].ApplicationID != portalID || repositories[1].ApplicationID != finopsID {
+		t.Fatalf("expected both application targets to survive sync, got %+v", repositories)
+	}
+}
+
 func TestGitHubConfigFromInstallationRepositoriesRejectsEmptyResult(t *testing.T) {
 	_, err := githubConfigFromInstallationRepositories("123456", []githubconnector.AppRepository{{ID: 42}})
 	if err == nil {

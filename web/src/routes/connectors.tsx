@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
 import { PageHeader } from '../components/page-header'
 import { IntegrationGrid } from '../features/connectors/components'
 import {
@@ -17,7 +16,6 @@ export function ConnectorsRoute() {
   const dopplerProjects = useQuery({ ...dopplerProjectsQuery, enabled: dopplerStatus.ready })
   const { data: registries } = useSuspenseQuery(containerRegistriesQuery)
   const { data: connectors } = useSuspenseQuery(connectorsQuery)
-  const syncedConnectors = useRef(new Set<string>())
   const githubConnector = connectors.find((connector) => connector.provider === 'github' && connector.enabled)
 
   const syncRepos = useMutation({
@@ -35,12 +33,6 @@ export function ConnectorsRoute() {
       await queryClient.invalidateQueries({ queryKey: containerRegistriesQuery.queryKey })
     },
   })
-
-  useEffect(() => {
-    if (!githubStatus.app_configured || !githubConnector || syncedConnectors.current.has(githubConnector.id)) return
-    syncedConnectors.current.add(githubConnector.id)
-    syncRepos.mutate(githubConnector.id)
-  }, [githubStatus.app_configured, githubConnector, syncRepos])
 
   return (
     <div className="space-y-8">

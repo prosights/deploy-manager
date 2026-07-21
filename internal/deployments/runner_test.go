@@ -351,17 +351,6 @@ func TestDeploymentServiceRuntimeVariablesAreIsolatedAndCanOverrideSharedValues(
 	}
 }
 
-func TestComposeMetadataPortsManageBlueGreenWithoutDomain(t *testing.T) {
-	ports := composeMetadataPorts([]byte(`[{"name":"web","ports":[{"container_port":80,"published_port":3080}]}]`))
-	if ports.blue != "3080" || ports.green != "3081" || len(ports.variables) != 1 {
-		t.Fatalf("expected compose port pair, got %+v", ports)
-	}
-	port := ports.variables[0]
-	if port.name != "DEPLOY_PORT" || port.serviceName != "web" || port.containerPort != 80 {
-		t.Fatalf("expected managed web port, got %+v", port)
-	}
-}
-
 func TestResolveSourceCommitPinsDeploymentRevision(t *testing.T) {
 	const commit = "0123456789abcdef0123456789abcdef01234567"
 	const message = "Show deployment commit subjects"

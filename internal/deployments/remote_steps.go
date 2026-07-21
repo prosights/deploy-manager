@@ -93,17 +93,15 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 		})
 	}
 
-	if len(variables) > 0 {
-		envFile, err := renderRuntimeEnvFile(variables)
-		if err != nil {
-			return nil, err
-		}
-		envPath := path.Join(path.Dir(target.ComposePath), ".env")
-		steps = append(steps, remoteStep{
-			label:   "Writing runtime environment",
-			command: fmt.Sprintf("cd %s && umask 077 && printf %%s %s > %s", remoteDir, stringutil.ShellQuote(envFile), stringutil.ShellQuote(envPath)),
-		})
+	envFile, err := renderRuntimeEnvFile(variables)
+	if err != nil {
+		return nil, err
 	}
+	envPath := path.Join(path.Dir(target.ComposePath), ".env")
+	steps = append(steps, remoteStep{
+		label:   "Writing runtime environment",
+		command: fmt.Sprintf("cd %s && umask 077 && printf %%s %s > %s", remoteDir, stringutil.ShellQuote(envFile), stringutil.ShellQuote(envPath)),
+	})
 	serviceSteps, err := serviceRuntimeSteps(target, stepOptions.serviceVariables, stepOptions.portVariables)
 	if err != nil {
 		return nil, err

@@ -508,6 +508,23 @@ func TestServiceConfigurationMigrationIsAdditive(t *testing.T) {
 	}
 }
 
+func TestOneActiveDeploymentMigrationUsesDatabaseInvariant(t *testing.T) {
+	migration, err := files.ReadFile("sql/035_one_active_deployment.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(migration)
+	for _, expected := range []string{
+		"deployments_one_in_progress_per_application",
+		"ON deployments (application_id)",
+		"WHERE status IN ('queued', 'running')",
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("expected active deployment guard %q", expected)
+		}
+	}
+}
+
 func rootMigrationNames() ([]string, error) {
 	entries, err := os.ReadDir(filepath.Join("..", "..", "db", "migrations"))
 	if err != nil {

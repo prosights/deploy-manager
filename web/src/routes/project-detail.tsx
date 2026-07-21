@@ -1770,12 +1770,11 @@ function ApplicationSettings({
 
 function ApplicationDomains({ application, routes, server }: { application: Application, routes: ProxyRoute[], server?: ServerRecord }) {
   const queryClient = useQueryClient()
-  const composeServices = applicationComposeServices(application)
-  const firstService = composeServices[0]
   const [addingDomain, setAddingDomain] = useState(false)
   const [domain, setDomain] = useState('')
-  const [composeService, setComposeService] = useState(firstService?.name ?? '')
-  const [containerPort, setContainerPort] = useState(firstService?.ports?.[0]?.container_port ? String(firstService.ports[0].container_port) : '')
+  const [upstreamURL, setUpstreamURL] = useState('')
+  const [blueUpstreamURL, setBlueUpstreamURL] = useState('')
+  const [greenUpstreamURL, setGreenUpstreamURL] = useState('')
   const [tlsEnabled, setTLSEnabled] = useState(true)
   const [error, setError] = useState<string>()
   const invalidate = () => queryClient.invalidateQueries({ queryKey: proxyRoutesQuery.queryKey })
@@ -1785,9 +1784,15 @@ function ApplicationDomains({ application, routes, server }: { application: Appl
   })
   const create = useMutation({
     mutationFn: () => {
-      const port = Number(containerPort)
-      validateProxyEndpoint(domain, composeService, port)
-      return createProxyRoute({ application_id: application.id, domain: domain.trim().toLowerCase(), compose_service: composeService.trim(), container_port: port, tls_enabled: tlsEnabled })
+      validateProxyEndpoint(domain, upstreamURL, blueUpstreamURL, greenUpstreamURL)
+      return createProxyRoute({
+        application_id: application.id,
+        domain: domain.trim().toLowerCase(),
+        upstream_url: upstreamURL.trim(),
+        blue_upstream_url: optionalTrimmed(blueUpstreamURL),
+        green_upstream_url: optionalTrimmed(greenUpstreamURL),
+        tls_enabled: tlsEnabled,
+      })
     },
     onSuccess: async () => {
       setAddingDomain(false)
@@ -1797,24 +1802,15 @@ function ApplicationDomains({ application, routes, server }: { application: Appl
     },
   })
   const remove = useMutation({ mutationFn: deleteProxyRoute, onSuccess: invalidate })
-  const selectedService = composeServices.find((item) => item.name === composeService)
 
   function openDomainForm() {
     setAddingDomain(true)
     setDomain('')
+    setUpstreamURL('')
+    setBlueUpstreamURL('')
+    setGreenUpstreamURL('')
     setTLSEnabled(server?.hostname !== 'playground')
     setError(undefined)
-  }
-
-  function selectComposeService(value: string) {
-    const selected = composeServices.find((item) => item.name === value)
-    const port = selected?.ports?.[0]?.container_port ? String(selected.ports[0].container_port) : ''
-    setComposeService(value)
-    setContainerPort(port)
-  }
-
-  function selectContainerPort(value: string) {
-    setContainerPort(value)
   }
 
   if (server?.proxy_type === 'none') {
@@ -1826,7 +1822,7 @@ function ApplicationDomains({ application, routes, server }: { application: Appl
   }
 
   return (
-    <SettingsSection title="Networking" description="Expose any HTTP service in this compose stack on its own domain.">
+    <SettingsSection title="Networking" description="Route a domain to ports published by this compose stack.">
       <div className="space-y-3">
         {routes.map((route) => {
           const scheme = route.tls_enabled ? 'https' : 'http'
@@ -1835,7 +1831,7 @@ function ApplicationDomains({ application, routes, server }: { application: Appl
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <div className="flex min-w-0 flex-1 items-center gap-3">
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-prosights-md bg-prosights-surface text-prosights-muted"><Globe2 className="size-4" /></div>
-                  <div className="min-w-0"><a href={`${scheme}://${route.domain}`} target="_blank" rel="noreferrer" className="block truncate text-[13px] font-medium text-prosights-text hover:underline">{route.domain}</a><div className="mt-0.5 text-[11px] text-prosights-muted">{route.compose_service || 'stack'}{route.container_port ? `:${route.container_port}` : ''}</div></div>
+                  <div className="min-w-0"><a href={`${scheme}://${route.domain}`} target="_blank" rel="noreferrer" className="block truncate text-[13px] font-medium text-prosights-text hover:underline">{route.domain}</a><div className="mt-0.5 truncate font-mono text-[11px] text-prosights-muted">{route.upstream_url}</div></div>
                 </div>
                 <Badge tone={statusTone(route.status)}>{route.status}</Badge>
                 {route.status !== 'applied' && !(route.application_id && route.compose_service) && <Button disabled={apply.isPending} onClick={() => apply.mutate(route.id)}>{apply.isPending ? <RefreshCw className="size-4 animate-spin" /> : <RefreshCw className="size-4" />} Apply</Button>}
@@ -1849,16 +1845,13 @@ function ApplicationDomains({ application, routes, server }: { application: Appl
 
         {addingDomain
           ? (
-              <form className="grid gap-3 rounded-prosights-md border border-prosights-border bg-prosights-surface p-3 sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); setError(undefined); try { validateProxyEndpoint(domain, composeService, Number(containerPort)); create.mutate() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Domain is invalid.') } }}>
+              <form className="grid gap-3 rounded-prosights-md border border-prosights-border bg-prosights-surface p-3 sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); setError(undefined); try { validateProxyEndpoint(domain, upstreamURL, blueUpstreamURL, greenUpstreamURL); create.mutate() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Domain is invalid.') } }}>
                 <TextInput label="Domain" value={domain} onChange={setDomain} placeholder="api.example.com" required />
-                {composeServices.length > 0
-                  ? <SelectInput label="Compose service" value={composeService} onChange={selectComposeService}>{composeServices.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}</SelectInput>
-                  : <TextInput label="Compose service" value={composeService} onChange={setComposeService} placeholder="web" required />}
-                {(selectedService?.ports ?? []).length > 0
-                  ? <SelectInput label="Container port" value={containerPort} onChange={selectContainerPort}>{selectedService?.ports?.map((port) => <option key={`${port.container_port}/${port.protocol ?? 'tcp'}`} value={port.container_port}>{port.container_port}/{port.protocol ?? 'tcp'}</option>)}</SelectInput>
-                  : <TextInput label="Container port" value={containerPort} onChange={selectContainerPort} placeholder="3000" required />}
+                <TextInput label="Upstream" value={upstreamURL} onChange={setUpstreamURL} placeholder="http://127.0.0.1:3101" required />
+                <TextInput label="Blue upstream" value={blueUpstreamURL} onChange={setBlueUpstreamURL} placeholder="http://127.0.0.1:3101" />
+                <TextInput label="Green upstream" value={greenUpstreamURL} onChange={setGreenUpstreamURL} placeholder="http://127.0.0.1:3102" />
                 <label className="flex items-center justify-between gap-3 rounded-prosights-md border border-prosights-border bg-prosights-surface-muted px-3 py-2.5 text-[12px]"><span className="text-prosights-text">HTTPS / TLS</span><input type="checkbox" className="size-4 accent-black" checked={tlsEnabled} onChange={(event) => setTLSEnabled(event.target.checked)} /></label>
-				<p className="sm:col-span-2 text-[11px] text-prosights-muted">Deploy Manager assigns available blue and green host ports on {application.server_name}. You only choose the port inside the container.</p>
+                <p className="sm:col-span-2 text-[11px] text-prosights-muted">Use the host ports published by Docker Compose. Blue and green targets are used during zero-downtime deployments.</p>
                 {(error || create.error) && <div className="sm:col-span-2"><InlineError message={error ?? create.error?.message ?? 'Domain could not be added.'} /></div>}
                 <div className="flex justify-end gap-2 sm:col-span-2"><Button type="button" onClick={() => { setAddingDomain(false); setError(undefined) }}>Cancel</Button><Button type="submit" variant="primary" disabled={create.isPending}>{create.isPending ? 'Adding…' : 'Add domain'}</Button></div>
               </form>
@@ -2385,11 +2378,22 @@ function validateRepositoryRoot(value: string): void {
   if (root.startsWith('/') || root.endsWith('/') || root.includes('//') || root.split('/').includes('..') || hasControlCharacters(root)) throw new Error('Root directory must be a safe relative path.')
 }
 
-function validateProxyEndpoint(domain: string, composeService: string, containerPort: number): void {
+function validateProxyEndpoint(domain: string, upstreamURL: string, blueUpstreamURL: string, greenUpstreamURL: string): void {
   const hostname = domain.trim().toLowerCase()
   if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(hostname)) throw new Error('Enter a hostname without a protocol or path.')
-  if (!/^[A-Za-z0-9_.-]+$/.test(composeService.trim())) throw new Error('Select a valid compose service.')
-  if (!Number.isInteger(containerPort) || containerPort < 1 || containerPort > 65535) throw new Error('Container port must be between 1 and 65535.')
+  for (const [label, value] of [['Upstream', upstreamURL], ['Blue upstream', blueUpstreamURL], ['Green upstream', greenUpstreamURL]] as const) {
+    if (!value.trim()) {
+      if (label === 'Upstream') throw new Error('Upstream is required.')
+      continue
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(value.trim())
+    } catch {
+      throw new Error(`${label} must be an absolute HTTP URL.`)
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.host || parsed.username || parsed.password) throw new Error(`${label} must be an absolute HTTP URL without credentials.`)
+  }
 }
 
 function validateRepositoryURL(value: string): void {

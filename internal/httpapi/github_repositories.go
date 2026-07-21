@@ -1178,7 +1178,6 @@ func githubConfigFromInstallationRepositoriesWithDefaults(installationID string,
 		InstallationID string             `json:"installation_id"`
 		Repositories   []repositoryConfig `json:"repositories"`
 	}{InstallationID: installationID}
-	defaults := githubRepositoryBuildDefaults(existing)
 	for _, repository := range repositories {
 		fullName := repository.FullName
 		if fullName == "" {
@@ -1188,36 +1187,43 @@ func githubConfigFromInstallationRepositoriesWithDefaults(installationID string,
 		if branch == "" {
 			branch = "main"
 		}
-		item := repositoryConfig{
-			InstallationID: installationID,
-			RepositoryID:   strconv.FormatInt(repository.ID, 10),
-			Repository:     fullName,
-			Branch:         branch,
+		preserved := false
+		for _, previous := range existing {
+			if previous.Repository != fullName {
+				continue
+			}
+			previousBranch := previous.Branch
+			if previousBranch == "" {
+				previousBranch = branch
+			}
+			config.Repositories = append(config.Repositories, repositoryConfig{
+				InstallationID:  installationID,
+				RepositoryID:    strconv.FormatInt(repository.ID, 10),
+				Repository:      fullName,
+				Branch:          previousBranch,
+				WorkflowID:      previous.WorkflowID,
+				BuildContext:    previous.BuildContext,
+				Dockerfile:      previous.Dockerfile,
+				ImageRef:        previous.ImageRef,
+				BuildMatrix:     previous.BuildMatrix,
+				Runner:          previous.Runner,
+				ApplicationID:   previous.ApplicationID,
+				ApplicationName: previous.ApplicationName,
+				PathFilters:     previous.PathFilters,
+			})
+			preserved = true
 		}
-		if previous, ok := defaults[fullName+"#"+branch]; ok {
-			item.WorkflowID = previous.WorkflowID
-			item.BuildContext = previous.BuildContext
-			item.Dockerfile = previous.Dockerfile
-			item.ImageRef = previous.ImageRef
-			item.BuildMatrix = previous.BuildMatrix
-			item.Runner = previous.Runner
-			item.ApplicationID = previous.ApplicationID
-			item.ApplicationName = previous.ApplicationName
-			item.PathFilters = previous.PathFilters
+		if !preserved {
+			config.Repositories = append(config.Repositories, repositoryConfig{
+				InstallationID: installationID,
+				RepositoryID:   strconv.FormatInt(repository.ID, 10),
+				Repository:     fullName,
+				Branch:         branch,
+			})
 		}
-		config.Repositories = append(config.Repositories, item)
 	}
 	if len(config.Repositories) == 0 {
 		return nil, validationError("github installation did not return repositories")
 	}
 	return json.Marshal(config)
-}
-
-func githubRepositoryBuildDefaults(repositories []githubconnector.Repository) map[string]githubconnector.Repository {
-	defaults := make(map[string]githubconnector.Repository, len(repositories))
-	for _, repository := range repositories {
-		key := repository.Repository + "#" + repository.Branch
-		defaults[key] = repository
-	}
-	return defaults
 }

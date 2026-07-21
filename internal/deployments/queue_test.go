@@ -785,6 +785,26 @@ func TestRemoteStepsWriteRuntimeEnvironmentBesideNestedComposeFile(t *testing.T)
 	}
 }
 
+func TestRemoteStepsClearRuntimeEnvironmentWhenVariablesAreRemoved(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "evals",
+		ComposePath:     "evals/compose.yml",
+		RemoteDirectory: "/srv/evals",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		if step.label == "Writing runtime environment" {
+			if !strings.Contains(step.command, "printf %s '' > 'evals/.env'") {
+				t.Fatalf("expected an empty managed environment file, got %s", step.command)
+			}
+			return
+		}
+	}
+	t.Fatal("expected the managed environment file to be rewritten")
+}
+
 func TestRemoteStepsWriteAnIsolatedEnvironmentForEachConfiguredComposeService(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "alleyes-v2/compose.yml",

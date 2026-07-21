@@ -142,6 +142,7 @@ describe('ConnectorsRoute', () => {
     expect(screen.getAllByText('Doppler').length).toBeGreaterThan(0)
     expect(screen.getByText('Docker Registry')).toBeTruthy()
     expect(screen.queryByRole('link', { name: /connect/i })).not.toBeInTheDocument()
+    expect(syncGitHubConnectorRepositories).not.toHaveBeenCalled()
   })
 
   it('shows install action when app credentials exist without an installation', async () => {

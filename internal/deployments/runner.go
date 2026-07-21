@@ -628,40 +628,7 @@ func (r Runner) blueGreenPorts(ctx context.Context, target db.GetDeploymentTarge
 	if err != nil {
 		return blueGreenPorts{}, fmt.Errorf("load proxy route ports: %w", err)
 	}
-	ports, err := routePorts(routes)
-	if err != nil || len(routes) > 0 {
-		return ports, err
-	}
-	return composeMetadataPorts(target.ComposeServices), nil
-}
-
-func composeMetadataPorts(raw []byte) blueGreenPorts {
-	var services []struct {
-		Name  string `json:"name"`
-		Ports []struct {
-			ContainerPort int `json:"container_port"`
-			PublishedPort int `json:"published_port"`
-		} `json:"ports"`
-	}
-	if json.Unmarshal(raw, &services) != nil {
-		return blueGreenPorts{}
-	}
-	result := blueGreenPorts{}
-	for _, service := range services {
-		for _, port := range service.Ports {
-			if port.ContainerPort < 1 || port.PublishedPort < 1 {
-				continue
-			}
-			name := fmt.Sprintf("DEPLOY_PORT_%s_%d", strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(service.Name)), port.ContainerPort)
-			if result.blue == "" {
-				result.blue = fmt.Sprint(port.PublishedPort)
-				result.green = fmt.Sprint(port.PublishedPort + 1)
-				name = "DEPLOY_PORT"
-			}
-			result.variables = append(result.variables, composePortVariable{name: name, serviceName: service.Name, containerPort: int32(port.ContainerPort), bluePort: fmt.Sprint(port.PublishedPort), greenPort: fmt.Sprint(port.PublishedPort + 1)})
-		}
-	}
-	return result
+	return routePorts(routes)
 }
 
 func deploymentHealthCheckURL(target db.GetDeploymentTargetRow, healthCheckURL string) string {
