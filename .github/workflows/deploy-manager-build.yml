@@ -242,3 +242,11 @@ jobs:
             -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data "{\"status\":\"failed\",\"external_url\":\"$RUN_URL\",\"error_message\":\"Deploy Manager image build failed\"}"
+
+  release:
+    if: ${{ github.event_name == 'push' }}
+    needs: build
+    uses: ./.github/workflows/deploy-manager-release.yml
+    with:
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
