@@ -86,16 +86,15 @@ tags for every dispatched `main` build:
 Pushing a Git tag such as `v1.2.3` also publishes `v1.2.3` when the GitHub repo
 variable `DEPLOY_MANAGER_IMAGE` is set to the image name without a tag, for
 example `us-east1-docker.pkg.dev/prosights-platform/deploy-manager/deploy-manager`.
-Image builds never deploy production. Keep GitHub auto deploy disabled on the
-Deploy Manager application so a merge cannot bypass the protected release.
+Keep GitHub auto deploy disabled on the Deploy Manager application so its
+generic webhook path cannot start a second build or bypass the release workflow.
 
 ## Production release
 
-Configure the GitHub `production` environment with required reviewers and keep
-its GCP and API secrets scoped to that environment. Run **Release Deploy
-Manager** with the full 40-character SHA of a commit already merged to `main`.
-The workflow rejects branch names, abbreviated SHAs, commits outside `main`,
-and commits whose immutable image has not finished building.
+A successful `main` image build calls **Release Deploy Manager** automatically
+with the exact commit SHA. The release workflow remains manually runnable as a
+recovery fallback and rejects branch names, abbreviated SHAs, commits outside
+`main`, and commits whose immutable image has not finished building.
 
 ## Runtime env
 
@@ -121,9 +120,9 @@ Redis service names.
 
 ## Rollout behavior
 
-1. A push to `main` builds and publishes `main-<short-sha>` without touching
-   production.
-2. An approved manual release resolves that tag to an immutable image digest.
+1. A push to `main` builds and publishes `main-<short-sha>`.
+2. The successful build calls the release workflow, which resolves the full-SHA
+   tag to an immutable image digest.
 3. The existing stable worker starts and checks the inactive public color.
 4. Deploy Manager flips Caddy only after the new color is ready.
 5. The workflow backs up and updates the stable control compose file, then
