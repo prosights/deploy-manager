@@ -3,6 +3,7 @@ package httpapi
 import (
 	"io"
 	"net/http"
+	"path"
 	"strings"
 
 	"deploy-manager/internal/db"
@@ -140,9 +141,8 @@ func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 // tryBuildDispatch attempts to dispatch a GitHub Actions build for the
-// application. Returns true once a connector explicitly owns the repo so the
-// webhook does not silently fall back to source-build-on-target on dispatch
-// errors.
+// application. Access-only repositories fall back to source-build-on-target;
+// configured image builds stay on GitHub Actions.
 func (s Server) tryBuildDispatch(r *http.Request, application db.ListApplicationsForGitHubPushRow, push githubhook.Push) (db.BuildRun, bool) {
 	if s.github.App == nil {
 		return db.BuildRun{}, false
@@ -155,6 +155,8 @@ func (s Server) tryBuildDispatch(r *http.Request, application db.ListApplication
 	if repoName == "" {
 		return db.BuildRun{}, false
 	}
+	hasOwnedTarget := false
+	sourceMatch := false
 	for _, account := range accounts {
 		if account.Provider != "github" || !account.Enabled {
 			continue
@@ -167,14 +169,19 @@ func (s Server) tryBuildDispatch(r *http.Request, application db.ListApplication
 		if !owned {
 			continue
 		}
+		hasOwnedTarget = true
 		if repo.Repository == "" {
-			return db.BuildRun{}, true
+			continue
 		}
 		if repo.InstallationID == "" {
 			s.auditGitHubSkip(r, application, validationError("github repository requires installation_id before builds can be dispatched"), push)
 			return db.BuildRun{}, true
 		}
 		request := githubPushBuildRequest(repo, push)
+		if strings.TrimSpace(request.Inputs["image_ref"]) == "" {
+			sourceMatch = true
+			continue
+		}
 		if err := validateGitHubBuildDispatchRequest(request); err != nil {
 			s.auditGitHubSkip(r, application, err, push)
 			return db.BuildRun{}, true
@@ -211,6 +218,12 @@ func (s Server) tryBuildDispatch(r *http.Request, application db.ListApplication
 		})
 		return build, true
 	}
+	if sourceMatch {
+		return db.BuildRun{}, false
+	}
+	if hasOwnedTarget || !applicationMatchesChangedPaths(application, push.ChangedPaths) {
+		return db.BuildRun{}, true
+	}
 	return db.BuildRun{}, false
 }
 
@@ -219,16 +232,34 @@ func githubConnectorBuildTarget(raw []byte, repoName string, branch string, appl
 	if err != nil {
 		return githubconnector.Repository{}, false, nil
 	}
-	for _, repository := range repositories {
-		if !repositoryTargetsApplication(repository, application.ID, application.Name) {
-			continue
+	for _, applicationSpecific := range []bool{true, false} {
+		for _, repository := range repositories {
+			isApplicationSpecific := repository.ApplicationID != "" || repository.ApplicationName != ""
+			if isApplicationSpecific != applicationSpecific || !repositoryTargetsApplication(repository, application.ID, application.Name) {
+				continue
+			}
+			if len(repository.PathFilters) == 0 && !isApplicationSpecific {
+				repository.PathFilters = applicationPathFilters(application.ComposePath)
+			}
+			if !repositoryMatchesChangedPaths(repository, changedPaths) {
+				return githubconnector.Repository{}, true, nil
+			}
+			return repository, true, nil
 		}
-		if !repositoryMatchesChangedPaths(repository, changedPaths) {
-			return githubconnector.Repository{}, true, nil
-		}
-		return repository, true, nil
 	}
 	return githubconnector.Repository{}, false, nil
+}
+
+func applicationMatchesChangedPaths(application db.ListApplicationsForGitHubPushRow, changedPaths []string) bool {
+	return repositoryMatchesChangedPaths(githubconnector.Repository{PathFilters: applicationPathFilters(application.ComposePath)}, changedPaths)
+}
+
+func applicationPathFilters(composePath string) []string {
+	root := path.Dir(strings.Trim(strings.TrimSpace(composePath), "/"))
+	if root == "." {
+		return nil
+	}
+	return []string{root + "/**"}
 }
 
 func repositoryTargetsApplication(repository githubconnector.Repository, applicationID pgtype.UUID, applicationName string) bool {

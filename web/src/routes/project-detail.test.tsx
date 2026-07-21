@@ -192,6 +192,7 @@ let serverProxyType: 'caddy' | 'none' = 'caddy'
 let serverHostname = '10.0.0.1'
 let proxyRoutes: Array<Record<string, unknown>> = []
 let deploymentResults = [deployment, failedDeployment]
+let githubRepository = repository
 
 vi.mock('../lib/queries', () => ({
   applicationServiceRuntimeConfigsQuery: (applicationID: string) => ({ queryKey: ['applications', applicationID, 'service-variables'], queryFn: async () => [] }),
@@ -220,7 +221,7 @@ vi.mock('../lib/queries', () => ({
     }],
   },
   containerRegistriesQuery: { queryKey: ['container-registries'], queryFn: async () => [] },
-  githubRepositoriesQuery: { queryKey: ['github-repositories'], queryFn: async () => [repository] },
+  githubRepositoriesQuery: { queryKey: ['github-repositories'], queryFn: async () => [githubRepository] },
   githubCommitQuery: (connectorID: string, repositoryName: string, sha: string) => ({
     queryKey: ['github-commit', connectorID, repositoryName, sha],
     queryFn: async () => ({
@@ -271,6 +272,7 @@ describe('ProjectDetailRoute', () => {
     serverHostname = '10.0.0.1'
     proxyRoutes = []
     deploymentResults = [deployment, failedDeployment]
+    githubRepository = repository
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
@@ -427,6 +429,22 @@ describe('ProjectDetailRoute', () => {
       application_id: 'app_1',
       branch: 'main',
     }))
+  })
+
+  it('deploys access-only GitHub repositories from source', async () => {
+    githubRepository = { ...repository, application_id: '', image_ref: '' }
+    deploymentResults = []
+    renderRoute()
+    fireEvent.click(await screen.findByRole('button', { name: 'Open API' }))
+    const drawer = await screen.findByRole('dialog', { name: 'API' })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Deploy latest' }))
+
+    await waitFor(() => expect(createDeployment).toHaveBeenCalledWith(expect.objectContaining({
+      application_id: 'app_1',
+      image_ref: undefined,
+      trigger: 'manual',
+    })))
+    expect(dispatchGitHubBuild).not.toHaveBeenCalled()
   })
 
   it('stores Doppler and extra variables for only the selected service', async () => {

@@ -504,7 +504,7 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 			ComposePath:      service.ComposePath,
 			RemoteDirectory:  "/srv/deploy-manager/apps/" + project.Slug + "/" + environment.Slug + "/" + service.Name,
 			HealthCheckUrl:   blankStringAsText("http://127.0.0.1:{port}/?color={color}"),
-			GithubAutoDeploy: false,
+			GithubAutoDeploy: true,
 		})
 		if err != nil {
 			writeError(w, err)

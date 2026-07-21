@@ -966,7 +966,7 @@ function ApplicationDeployments({
   const currentHistoryPage = Math.min(historyPage, historyPageCount)
   const historyPageItems = history.slice((currentHistoryPage - 1) * deploymentHistoryPageSize, currentHistoryPage * deploymentHistoryPageSize)
   const hasStandby = slots.some((slot) => slot.status === 'standby')
-  const useGitHubBuild = Boolean(repository?.workflow_id && application.github_auto_deploy)
+  const useGitHubBuild = Boolean(repository?.workflow_id && repository.image_ref && application.github_auto_deploy)
   const hasSource = Boolean(useGitHubBuild || (application.repository_url && application.compose_path) || latestArtifact?.image_ref)
   const hasHealthCheck = Boolean(application.health_check_url?.includes('{color}'))
   const ready = hasSource && hasHealthCheck
@@ -1720,7 +1720,7 @@ function ApplicationSettings({
             <TextInput label="Branch" value={form.branch} onChange={(branch) => setForm((current) => ({ ...current, branch }))} required />
             <TextInput label="Compose path" value={form.compose_path} onChange={(compose_path) => setForm((current) => ({ ...current, compose_path }))} required />
             <label className="sm:col-span-2 flex items-center justify-between gap-4 rounded-prosights-md border border-prosights-border bg-prosights-surface-muted px-3 py-2.5 text-[12px]">
-              <span><span className="block font-medium text-prosights-text">Automatic deploys</span><span className="mt-0.5 block text-prosights-muted">Deploy after a connected GitHub build succeeds.</span></span>
+              <span><span className="block font-medium text-prosights-text">Automatic deployments</span><span className="mt-0.5 block text-prosights-muted">Deploy matching GitHub pushes. Turn this off only to pause releases.</span></span>
               <input type="checkbox" checked={form.github_auto_deploy} onChange={(event) => setForm((current) => ({ ...current, github_auto_deploy: event.target.checked }))} className="size-4 accent-black" />
             </label>
           </div>
