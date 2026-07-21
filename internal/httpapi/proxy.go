@@ -32,13 +32,15 @@ func (s Server) createProxyRoute(w http.ResponseWriter, r *http.Request) {
 	input.UpstreamUrl = strings.TrimSpace(input.UpstreamUrl)
 	input.BlueUpstreamUrl.String = strings.TrimSpace(input.BlueUpstreamUrl.String)
 	input.GreenUpstreamUrl.String = strings.TrimSpace(input.GreenUpstreamUrl.String)
+	input.ComposeService.String = strings.TrimSpace(input.ComposeService.String)
+	input.PortVariable.String = strings.TrimSpace(input.PortVariable.String)
 	if input.ApplicationID.Valid {
-		application, err := s.queries.GetApplication(r.Context(), input.ApplicationID)
+		loaded, err := s.queries.GetApplication(r.Context(), input.ApplicationID)
 		if err != nil {
 			writeError(w, proxyLookupError(err, "application not found"))
 			return
 		}
-		input = normalizeCreateProxyRoute(input, &application)
+		input = normalizeCreateProxyRoute(input, &loaded)
 	}
 	input = normalizeCreateProxyRoute(input, nil)
 	if !input.ServerID.Valid || input.Domain == "" || input.UpstreamUrl == "" {
@@ -50,30 +52,16 @@ func (s Server) createProxyRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, proxyLookupError(err, "server not found"))
 		return
 	}
-	if err := proxypkg.ValidateTarget(proxypkg.Target{
-		Domain:     input.Domain,
-		Upstream:   input.UpstreamUrl,
-		TLSEnabled: input.TlsEnabled,
-		ProxyType:  server.ProxyType,
-	}); err != nil {
-		writeError(w, validationError(err.Error()))
+	if err := validateProxyRouteInput(input, server.ProxyType); err != nil {
+		writeError(w, err)
 		return
 	}
-	if err := validateOptionalProxyUpstream(input.BlueUpstreamUrl, server.ProxyType); err != nil {
-		writeError(w, validationError("blue_"+err.Error()))
-		return
-	}
-	if err := validateOptionalProxyUpstream(input.GreenUpstreamUrl, server.ProxyType); err != nil {
-		writeError(w, validationError("green_"+err.Error()))
-		return
-	}
-
 	route, err := s.queries.CreateProxyRoute(r.Context(), input)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	s.audit(r, "proxy_route.upsert", "proxy_route", uuidString(route.ID), route.Domain, map[string]any{"server_id": uuidString(route.ServerID), "tls_enabled": route.TlsEnabled})
+	s.audit(r, "proxy_route.upsert", "proxy_route", uuidString(route.ID), route.Domain, map[string]any{"server_id": uuidString(route.ServerID), "tls_enabled": route.TlsEnabled, "compose_service": route.ComposeService.String, "container_port": route.ContainerPort.Int32})
 	writeJSON(w, http.StatusCreated, route)
 }
 
@@ -87,6 +75,24 @@ func (s Server) deleteProxyRoute(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, proxyLookupError(err, "proxy route not found"))
 		return
+	}
+	if route.Status != "pending" {
+		server, err := s.queries.GetServer(r.Context(), route.ServerID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		command, err := proxypkg.BuildRemoveCommand(route.Domain, route.ProxyType)
+		if err != nil {
+			writeError(w, validationError(err.Error()))
+			return
+		}
+		removeCtx, cancel := context.WithTimeout(r.Context(), serverCheckTimeout)
+		defer cancel()
+		if _, err := s.remoteCommandRunner().Run(removeCtx, server, command); err != nil {
+			writeError(w, err)
+			return
+		}
 	}
 	if err := s.queries.DeleteProxyRoute(r.Context(), routeID); err != nil {
 		writeError(w, err)
@@ -107,7 +113,22 @@ func normalizeCreateProxyRoute(input db.CreateProxyRouteParams, application *db.
 	input.UpstreamUrl = strings.TrimSpace(input.UpstreamUrl)
 	input.BlueUpstreamUrl = blankTextAsNull(input.BlueUpstreamUrl)
 	input.GreenUpstreamUrl = blankTextAsNull(input.GreenUpstreamUrl)
+	input.ComposeService = blankTextAsNull(input.ComposeService)
+	input.PortVariable = blankTextAsNull(input.PortVariable)
 	return input
+}
+
+func validateProxyRouteInput(input db.CreateProxyRouteParams, proxyType string) error {
+	if err := proxypkg.ValidateTarget(proxypkg.Target{Domain: input.Domain, Upstream: input.UpstreamUrl, TLSEnabled: input.TlsEnabled, ProxyType: proxyType}); err != nil {
+		return validationError(err.Error())
+	}
+	if err := validateOptionalProxyUpstream(input.BlueUpstreamUrl, proxyType); err != nil {
+		return validationError(err.Error())
+	}
+	if err := validateOptionalProxyUpstream(input.GreenUpstreamUrl, proxyType); err != nil {
+		return validationError(err.Error())
+	}
+	return nil
 }
 
 func validateOptionalProxyUpstream(value pgtype.Text, proxyType string) error {

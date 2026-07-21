@@ -76,6 +76,9 @@ func TestRemoteDevUsersApplyCommandUsesBash(t *testing.T) {
 	if !strings.Contains(command, "PROSIGHTS_USERS") || !strings.Contains(command, "narasaka") {
 		t.Fatalf("expected rendered users file in command, got %q", command)
 	}
+	if !strings.Contains(command, "groupadd --system sudo") {
+		t.Fatalf("expected command to create the sudo group when missing, got %q", command)
+	}
 }
 
 func TestLocalHostDevUsersApplyCommandTargetsHostFilesystem(t *testing.T) {

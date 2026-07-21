@@ -182,13 +182,59 @@ func TestRuntimeVariablesUsesConfiguredCommandPath(t *testing.T) {
 	}
 }
 
+func TestCatalogListsSortedProjectsAndConfigs(t *testing.T) {
+	connector := Connector{
+		token: "token-123",
+		run: func(_ context.Context, token string, args []string) ([]byte, error) {
+			if token != "token-123" {
+				t.Fatalf("expected token to be forwarded, got %q", token)
+			}
+			switch args[1] {
+			case "projects":
+				return []byte(`[{"id":"zeta"},{"id":" billing "},{"id":"billing"}]`), nil
+			case "configs":
+				if !reflect.DeepEqual(args, []string{"doppler", "configs", "--json", "--no-check-version", "--project", "billing"}) {
+					t.Fatalf("unexpected config args: %+v", args)
+				}
+				return []byte(`[{"name":"stg"},{"name":" prd "},{"name":"prd"}]`), nil
+			default:
+				t.Fatalf("unexpected Doppler command: %+v", args)
+				return nil, nil
+			}
+		},
+	}
+
+	projects, err := connector.ListProjects(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configs, err := connector.ListConfigs(context.Background(), " billing ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(projects, []string{"billing", "zeta"}) || !reflect.DeepEqual(configs, []string{"prd", "stg"}) {
+		t.Fatalf("unexpected catalog: projects=%+v configs=%+v", projects, configs)
+	}
+}
+
 func TestCheckFindsConfiguredCommandPath(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := NewWithCommand("", "", "", executable).Check(); err != nil {
+	if err := NewWithCommand("", "", "token-123", executable).Check(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCheckRequiresToken(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := NewWithCommand("", "", "", executable).Check(); err == nil {
+		t.Fatal("expected missing token to fail")
 	}
 }

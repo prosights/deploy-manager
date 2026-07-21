@@ -52,6 +52,22 @@ jobs:
           ref: ${{ inputs.commit_sha || inputs.branch || github.sha }}
           fetch-depth: 0
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: go test ./...
+      - run: npm test
+      - run: npm run lint
+      - run: npm run typecheck
+
       - id: image
         name: Resolve image tags
         shell: bash
@@ -94,6 +110,7 @@ jobs:
           image_name="${image_ref%:*}"
           tag_list="$image_ref"
           tag_list="$tag_list"$'\n'"$image_name:sha-$short_sha"
+          tag_list="$tag_list"$'\n'"$image_name:sha-$commit_sha"
           deploy_image_ref="$image_name:sha-$short_sha"
 
           if [ "$branch" = "main" ]; then
@@ -242,7 +259,7 @@ jobs:
             --zone "$GCE_ZONE" \
             --tunnel-through-iap \
             --ssh-flag="-p 2345" \
-            --command "set -euo pipefail; image_ref='$IMAGE_REF'; compose=/srv/deploy-manager/control/docker-compose.yml; sudo sed -i \"s|^    image: .*|    image: \${image_ref}|\" \$compose; sudo docker compose -f \$compose pull app; sudo docker compose -f \$compose up -d --no-deps app" \
+            --command "set -euo pipefail; image_ref='$IMAGE_REF'; compose=/srv/deploy-manager/control/docker-compose.yml; tmp=\$(mktemp); sudo awk -v image=\"\$image_ref\" 'BEGIN { in_app=0; replaced=0 } /^  app:/ { in_app=1 } in_app && /^    image:/ { print \"    image: \" image; in_app=0; replaced=1; next } { print } END { if (!replaced) exit 42 }' \"\$compose\" > \"\$tmp\"; sudo install -m 0644 \"\$tmp\" \"\$compose\"; rm -f \"\$tmp\"; sudo docker compose -f \"\$compose\" pull app; sudo docker compose -f \"\$compose\" up -d --no-deps app" \
             --quiet
 
           gcloud compute ssh "$GCE_INSTANCE" \

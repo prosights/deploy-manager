@@ -8,6 +8,6 @@ describe('AppNotFound', () => {
 
     expect(screen.getByText('Route not found')).toBeInTheDocument()
     expect(screen.getByText('This page is not part of the deployment manager.')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /overview/i })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: /projects/i })).toHaveAttribute('href', '/projects')
   })
 })

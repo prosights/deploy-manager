@@ -389,6 +389,10 @@ if ! getent group docker >/dev/null; then
   groupadd --system docker
 fi
 
+if ! getent group sudo >/dev/null; then
+  groupadd --system sudo
+fi
+
 if ! getent group deployers >/dev/null; then
   groupadd --system deployers
 fi

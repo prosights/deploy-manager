@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ChevronDown, Clipboard, Radio, Search } from 'lucide-react'
+import { AlertTriangle, ChevronDown, Clipboard, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { Badge } from '../../components/ui/badge'
 import { Panel } from '../../components/ui/panel'
 import { cn } from '../../lib/cn'
 import type { DeploymentLog } from '../../lib/api'
@@ -25,32 +24,25 @@ type DeploymentSummary = {
 }
 
 export function useDeploymentLogs(deploymentID: string | undefined) {
-  const [streamedLogs, setStreamedLogs] = useState<DeploymentLog[]>([])
-  const [live, setLive] = useState(false)
+  const [stream, setStream] = useState<{ deploymentID: string; logs: DeploymentLog[] }>({ deploymentID: '', logs: [] })
+  const [liveDeploymentID, setLiveDeploymentID] = useState('')
   const history = useQuery({
     ...deploymentLogsQuery(deploymentID ?? ''),
     enabled: Boolean(deploymentID),
   })
 
   useEffect(() => {
-    if (!deploymentID) {
-      setStreamedLogs([])
-      setLive(false)
-      return
-    }
-    if (typeof EventSource === 'undefined') {
+    if (!deploymentID || typeof EventSource === 'undefined') {
       return
     }
 
-    setStreamedLogs([])
-    setLive(true)
     const events = new EventSource(withAccessToken(`/api/deployments/${deploymentID}/events`))
-    events.addEventListener('open', () => setLive(true))
+    events.addEventListener('open', () => setLiveDeploymentID(deploymentID))
     events.addEventListener('error', () => {
       // EventSource auto-reconnects unless the connection is permanently closed.
       // Only mark the stream as not-live once it reaches the CLOSED state.
       if (events.readyState === EventSource.CLOSED) {
-        setLive(false)
+        setLiveDeploymentID((current) => current === deploymentID ? '' : current)
       }
     })
     events.addEventListener('log', (event) => {
@@ -60,19 +52,21 @@ export function useDeploymentLogs(deploymentID: string | undefined) {
       } catch {
         return
       }
-      setStreamedLogs((state) => [...state.slice(-(maxLogLines - 1)), entry])
+      setStream((current) => {
+        const logs = current.deploymentID === deploymentID ? current.logs : []
+        return { deploymentID, logs: [...logs.slice(-(maxLogLines - 1)), entry] }
+      })
     })
     return () => {
       events.close()
-      setLive(false)
     }
   }, [deploymentID])
 
-  const logs = useMemo(
-    () => mergeLogs(history.data ?? [], streamedLogs),
-    [history.data, streamedLogs],
-  )
-  return { logs, live }
+  const logs = useMemo(() => {
+    const streamedLogs = stream.deploymentID === deploymentID ? stream.logs : []
+    return mergeLogs(history.data ?? [], streamedLogs)
+  }, [deploymentID, history.data, stream])
+  return { logs, live: liveDeploymentID === deploymentID }
 }
 
 const maxLogLines = 500
@@ -99,93 +93,81 @@ export function DeploymentLogStream({
   logs,
   live = false,
   className = '',
+  showDetails = true,
 }: {
   deployment: DeploymentSummary
   logs: DeploymentLog[]
   live?: boolean
   className?: string
+  showDetails?: boolean
 }) {
   const [query, setQuery] = useState('')
-  const filteredLogs = useMemo(() => filterLogs(logs, query), [logs, query])
-  const warningCount = logs.filter(isWarningLog).length
-  const logText = logs.map((entry) => `${formatLogTime(entry.created_at)} ${entry.message}`).join('\n')
+  const displayLogs = useMemo(() => expandLogLines(logs), [logs])
+  const filteredLogs = useMemo(() => filterLogs(displayLogs, query), [displayLogs, query])
+  const warningCount = displayLogs.filter(isWarningLog).length
+  const logText = displayLogs.map((entry) => `${formatLogTime(entry.created_at)} ${entry.message}`).join('\n')
 
   return (
-    <div className={className}>
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-5">
-          <h2 className="text-2xl font-semibold text-ink">Deployment</h2>
-          <div className="mt-5 flex items-center gap-3 text-base text-ink">
-            <span className={cn('size-4 rounded-full border-2', live ? 'animate-spin border-muted border-t-accent' : 'border-muted')} />
-            <span>Deployment {deployment.status ?? 'started'} {relativeDeploymentTime(deployment)}...</span>
-          </div>
-        </div>
-
-        <section className="overflow-hidden rounded-lg border bg-surface">
-          <header className="flex min-h-16 items-center justify-between gap-4 border-b px-4">
-            <div className="flex min-w-0 items-center gap-3">
-              <ChevronDown className="size-5 text-muted" />
-              <div className="truncate text-lg font-medium text-ink">Build Logs</div>
-            </div>
-            <div className="flex items-center gap-3 text-sm text-muted">
-              <span>{deploymentDuration(deployment)}</span>
-              <Badge tone={live ? 'accent' : 'neutral'}>
-                <Radio className="mr-1 size-3" />
-                {live ? 'live stream' : 'disconnected'}
-              </Badge>
-            </div>
-          </header>
-
-          <div className="flex flex-wrap items-center gap-3 border-b bg-panel/60 px-4 py-3">
-            <button
-              type="button"
-              className="inline-flex items-center gap-2 rounded-md text-sm text-muted transition-colors hover:text-ink"
-              onClick={() => void copyText(logText)}
-            >
-              <Clipboard className="size-4" />
-              {logs.length} {logs.length === 1 ? 'line' : 'lines'}
-            </button>
-            <div className="inline-flex items-center gap-2 text-sm text-ink">
-              <AlertTriangle className={cn('size-4', warningCount ? 'text-warning' : 'text-muted')} />
-              {warningCount}
-            </div>
-            <label className="ml-auto flex h-9 min-w-64 items-center gap-2 rounded-md border bg-background px-3 text-sm text-muted focus-within:ring-2 focus-within:ring-accent">
-              <Search className="size-4" />
-              <input
-                className="w-full bg-transparent text-ink outline-none placeholder:text-muted/70"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Find in logs"
-              />
-              <span className="hidden rounded border px-1.5 py-0.5 text-xs text-muted md:inline">⌘F</span>
-            </label>
-          </div>
-
-          <div className="max-h-[min(56vh,620px)] overflow-auto bg-background py-3 font-mono text-[13px] leading-6">
-            {filteredLogs.length === 0 && <div className="px-4 py-5 text-sm text-muted">{logs.length === 0 ? 'No logs have been written yet.' : 'No matching log lines.'}</div>}
-            {filteredLogs.map((entry, index) => (
-              <LogLine key={`${entry.id ?? 'live'}-${index}`} entry={entry} />
-            ))}
-          </div>
-
-          <footer className="border-t bg-surface">
-            <details className="group">
-              <summary className="flex min-h-14 cursor-pointer list-none items-center gap-3 px-4 text-sm font-medium text-muted transition-colors hover:text-ink">
-                <ChevronDown className="size-4 -rotate-90 transition-transform group-open:rotate-0" />
-                Deployment Summary
-              </summary>
-              <div className="grid gap-3 border-t px-4 py-4 text-sm md:grid-cols-3">
-                <SummaryItem label="Target" value={`${deployment.application_name ?? 'deployment'} / ${deployment.server_name ?? 'server'}`} />
-                <SummaryItem label="Strategy" value={deployment.strategy ?? 'n/a'} />
-                <SummaryItem label="Trigger" value={deployment.trigger ?? 'n/a'} />
-                <SummaryItem label="Actor" value={deployment.actor ?? 'system'} />
-                <SummaryItem label="Commit" value={deployment.commit_sha?.slice(0, 12) ?? 'not pinned'} />
-                <SummaryItem label="Image" value={deployment.image_digest?.slice(0, 19) ?? deployment.image_ref ?? 'not pinned'} />
-              </div>
-            </details>
-          </footer>
-        </section>
+    <div className={cn('flex min-h-0 flex-col overflow-hidden bg-prosights-surface', className)}>
+      <div className="flex items-center gap-2 border-b border-prosights-border bg-prosights-surface p-2">
+        <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-prosights-sm border border-prosights-border bg-prosights-canvas px-3 text-xs text-prosights-muted focus-within:border-prosights-subtle">
+          <Search className="size-3.5 shrink-0" />
+          <input
+            aria-label="Filter logs"
+            className="min-w-0 flex-1 bg-transparent text-prosights-text outline-none placeholder:text-prosights-subtle"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter and search logs"
+          />
+        </label>
+        <button
+          type="button"
+          aria-label={`Copy ${displayLogs.length} log lines`}
+          title="Copy logs"
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-prosights-sm bg-black text-white transition-colors duration-100 hover:bg-black/80"
+          onClick={() => void copyText(logText)}
+        >
+          <Clipboard className="size-3.5" />
+        </button>
       </div>
+      <div className="grid grid-cols-[152px_minmax(0,1fr)_auto] items-center gap-3 border-b border-prosights-border bg-prosights-surface-muted px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-prosights-muted">
+        <span>Time</span>
+        <span>Data</span>
+        <div className="flex items-center gap-3 normal-case tracking-normal">
+          {warningCount > 0 && (
+            <span className="inline-flex items-center gap-1 text-warning">
+              <AlertTriangle className="size-3" />
+              {warningCount}
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1.5">
+            <span className={cn('size-1.5 rounded-full', live ? 'animate-pulse bg-success' : 'bg-prosights-subtle')} />
+            {live ? 'Live' : deploymentDuration(deployment)}
+          </span>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto bg-prosights-canvas py-1 font-mono text-[12px] leading-5">
+        {filteredLogs.length === 0 && <div className="px-4 py-5 text-sm text-prosights-muted">{displayLogs.length === 0 ? 'Waiting for logs…' : 'No matching log lines.'}</div>}
+        {filteredLogs.map((entry, index) => (
+          <LogLine key={`${entry.id ?? 'live'}-${index}`} entry={entry} />
+        ))}
+      </div>
+      {showDetails && (
+        <details className="group shrink-0 border-t border-prosights-border bg-prosights-surface text-prosights-muted">
+          <summary className="flex h-10 cursor-pointer list-none items-center gap-2 px-4 text-xs font-medium hover:text-prosights-text">
+            <ChevronDown className="size-3.5 -rotate-90 transition-transform group-open:rotate-0" />
+            Deployment details
+          </summary>
+          <div className="grid gap-3 border-t border-prosights-border px-4 py-3 text-xs md:grid-cols-3">
+            <SummaryItem label="Target" value={`${deployment.application_name ?? 'deployment'} / ${deployment.server_name ?? 'server'}`} />
+            <SummaryItem label="Strategy" value={deployment.strategy ?? 'n/a'} />
+            <SummaryItem label="Trigger" value={deployment.trigger ?? 'n/a'} />
+            <SummaryItem label="Actor" value={deployment.actor ?? 'system'} />
+            <SummaryItem label="Commit" value={deployment.commit_sha?.slice(0, 12) ?? 'not pinned'} />
+            <SummaryItem label="Image" value={deployment.image_digest?.slice(0, 19) ?? deployment.image_ref ?? 'not pinned'} />
+          </div>
+        </details>
+      )}
     </div>
   )
 }
@@ -195,15 +177,15 @@ function LogLine({ entry }: { entry: DeploymentLog }) {
   return (
     <div
       className={cn(
-        'grid grid-cols-[132px_minmax(0,1fr)] gap-3 px-4',
-        tone === 'warning' && 'bg-warning/15 text-warning',
-        tone === 'danger' && 'bg-danger/15 text-danger',
-        tone === 'system' && 'text-accent',
-        tone === 'neutral' && 'text-ink',
+        'grid min-h-8 grid-cols-[152px_minmax(0,1fr)] gap-3 border-l-2 border-transparent px-4 py-1.5',
+        tone === 'warning' && 'border-amber-500/70 bg-amber-500/[0.04] text-prosights-text',
+        tone === 'danger' && 'border-danger/70 bg-danger/[0.04] text-prosights-text',
+        tone === 'system' && 'text-prosights-muted',
+        tone === 'neutral' && 'text-prosights-text',
       )}
     >
-      <span className="select-none text-muted">{formatLogTime(entry.created_at)}</span>
-      <span className="min-w-0 whitespace-pre-wrap break-words">{entry.message}</span>
+      <span className="select-none whitespace-nowrap text-[11px] text-prosights-subtle">{formatLogTime(entry.created_at)}</span>
+      <span className="min-w-0 whitespace-pre-wrap break-words text-[11.5px]">{entry.message}</span>
     </div>
   )
 }
@@ -211,8 +193,8 @@ function LogLine({ entry }: { entry: DeploymentLog }) {
 function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs text-muted">{label}</div>
-      <div className="mt-1 truncate font-mono text-xs text-ink">{value}</div>
+      <div className="text-prosights-subtle">{label}</div>
+      <div className="mt-1 truncate font-mono text-prosights-text">{value}</div>
     </div>
   )
 }
@@ -239,6 +221,13 @@ function mergeLogs(history: DeploymentLog[], streamed: DeploymentLog[]) {
     logs.push(entry)
   }
   return logs.slice(-maxLogLines)
+}
+
+export function expandLogLines(logs: DeploymentLog[]): DeploymentLog[] {
+  return logs.flatMap((entry) => {
+    const lines = entry.message.replaceAll('\r\n', '\n').split('\n')
+    return lines.map((message) => ({ ...entry, message }))
+  }).slice(-maxLogLines)
 }
 
 function filterLogs(logs: DeploymentLog[], query: string): DeploymentLog[] {
@@ -279,22 +268,8 @@ function formatLogTime(value?: string): string {
   ].join(':') + `.${pad(date.getMilliseconds(), 3)}`
 }
 
-function relativeDeploymentTime(deployment: DeploymentSummary): string {
-  const value = deployment.started_at ?? deployment.created_at
-  const date = value ? new Date(value) : undefined
-  if (!date || Number.isNaN(date.getTime())) {
-    return 'just now'
-  }
-  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000))
-  if (seconds < 60) {
-    return `${seconds}s ago`
-  }
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) {
-    return `${minutes}m ago`
-  }
-  const hours = Math.round(minutes / 60)
-  return `${hours}h ago`
+function pad(value: number, length: number): string {
+  return String(value).padStart(length, '0')
 }
 
 function deploymentDuration(deployment: DeploymentSummary): string {
@@ -314,10 +289,6 @@ function deploymentDuration(deployment: DeploymentSummary): string {
     return `${remainder}s`
   }
   return `${minutes}m ${remainder}s`
-}
-
-function pad(value: number, length: number): string {
-  return String(value).padStart(length, '0')
 }
 
 async function copyText(value: string): Promise<void> {

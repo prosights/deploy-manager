@@ -1,8 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { addServerDevUser, checkServer, createServer, deleteServerDevUser } from '../lib/api'
-import { useUiStore } from '../store/ui'
+import { addServerDevUser, checkServer, createServer, deleteServerDevUser, runServerCommand } from '../lib/api'
 import { ServersRoute } from './servers'
 
 vi.mock('@xterm/xterm', () => ({
@@ -61,6 +60,7 @@ vi.mock('../lib/api', () => ({
     path: '/srv/deploy-manager/ops/dev-sudo-users.txt',
     script_path: '/srv/deploy-manager/ops/provision-dev-sudo-users.sh',
   })),
+  runServerCommand: vi.fn(async () => ({ output: 'Jul 21 12:00:00 server dockerd[1]: ready' })),
   webSocketURL: vi.fn(() => 'ws://127.0.0.1:5173/api/servers/server_1/terminal'),
 }))
 
@@ -138,7 +138,6 @@ vi.mock('../lib/queries', () => ({
 describe('ServersRoute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useUiStore.setState({ searchQuery: '' })
     class MockWebSocket extends EventTarget {
       static OPEN = 1
       readyState = MockWebSocket.OPEN
@@ -165,6 +164,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'prod-2' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '10.0.0.20' } })
     fireEvent.change(screen.getByLabelText('SSH port'), { target: { value: '2222' } })
@@ -200,6 +200,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.click(await screen.findByRole('combobox', { name: 'Tailscale machine' }))
     fireEvent.click(await screen.findByRole('option', { name: 'internal · 100.107.110.108' }))
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
@@ -223,6 +224,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'vpc-production' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '100.79.100.28' } })
     fireEvent.click(screen.getByRole('combobox', { name: 'Connection' }))
@@ -248,6 +250,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: ' prod-2 ' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: ' 10.0.0.20 ' } })
     fireEvent.change(screen.getByLabelText('SSH user'), { target: { value: ' ' } })
@@ -268,7 +271,7 @@ describe('ServersRoute', () => {
     })
   })
 
-  it('shows SSH and Docker check results separately', async () => {
+  it('refreshes SSH and Docker check results automatically', async () => {
     const client = new QueryClient()
 
     render(
@@ -277,11 +280,10 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: /check/i }))
-
     await waitFor(() => {
       expect(checkServer).toHaveBeenCalledWith('server_1')
     })
+    expect(screen.queryByRole('button', { name: /check/i })).not.toBeInTheDocument()
     expect(await screen.findByText('SSH ok')).toBeInTheDocument()
     expect(screen.getByText('Docker failed')).toBeInTheDocument()
     expect(screen.getByText('docker unavailable')).toBeInTheDocument()
@@ -296,11 +298,24 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'prod-1' }))
+    expect(await screen.findByRole('dialog', { name: 'prod-1' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'configure' }))
+    expect(screen.getByRole('button', { name: 'configure' })).toHaveAttribute('aria-current', 'page')
     expect(await screen.findByText('narasaka')).toBeInTheDocument()
+    expect(screen.getByText(/passwordless sudo plus Docker and deployer group access/)).toBeInTheDocument()
     expect(screen.getByText(/\/srv\/deploy-manager\/ops\/dev-sudo-users\.txt/)).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'User' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Access' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /reapply access/i })).not.toBeInTheDocument()
 
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search privileged users' }), { target: { value: 'rootsec1' } })
+    expect(screen.queryByText('narasaka')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search privileged users' }), { target: { value: '' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add user' }))
     fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'alihussaini' } })
-    fireEvent.click(screen.getByRole('button', { name: /add user/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save user' }))
 
     await waitFor(() => {
       expect(addServerDevUser).toHaveBeenCalledWith('server_1', 'alihussaini')
@@ -313,6 +328,17 @@ describe('ServersRoute', () => {
     })
   })
 
+  it('shows server journal logs', async () => {
+    const client = new QueryClient()
+    render(<QueryClientProvider client={client}><ServersRoute /></QueryClientProvider>)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'prod-1' }))
+    expect(await screen.findByRole('button', { name: 'logs' })).toHaveAttribute('aria-current', 'page')
+
+    expect(await screen.findByText(/dockerd\[1\]: ready/)).toBeInTheDocument()
+    expect(runServerCommand).toHaveBeenCalledWith('server_1', expect.stringContaining('journalctl --no-pager -n 300 -r'))
+  })
+
   it('opens a literal terminal console from the server row', async () => {
     const client = new QueryClient()
 
@@ -322,18 +348,18 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
-    const consoleButton = await screen.findByRole('button', { name: /console/i })
-    expect(screen.queryByRole('heading', { name: 'Terminal console' })).not.toBeInTheDocument()
+    const consoleButton = await screen.findByRole('button', { name: 'Console' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
     fireEvent.click(consoleButton)
 
-    expect(await screen.findByRole('heading', { name: 'Terminal console' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'prod-1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'console' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('heading', { name: 'Server console' })).toBeInTheDocument()
     expect(screen.getByText('ssh console')).toBeInTheDocument()
-    expect(screen.getByText('/srv/deploy-manager/apps/production/workflows-server-blue-green')).toBeInTheDocument()
   })
 
-  it('filters server rows from the global search query', async () => {
-    useUiStore.setState({ searchQuery: 'worker' })
+  it('filters server rows from the server search field', async () => {
     const client = new QueryClient()
 
     render(
@@ -342,6 +368,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search servers' }), { target: { value: 'worker' } })
     expect(await screen.findByText('No servers found.')).toBeInTheDocument()
     expect(screen.queryByText('prod-1')).not.toBeInTheDocument()
   })
@@ -355,6 +382,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'prod-2' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '10.0.0.20' } })
     fireEvent.change(screen.getByLabelText('SSH port'), { target: { value: '70000' } })
@@ -374,6 +402,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'prod-2' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '10.0.0.20' } })
 
@@ -390,6 +419,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'prod-2' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '10.0.0.20' } })
     fireEvent.change(screen.getByLabelText('SSH key path'), { target: { value: '~/.ssh/prod_ed25519\tbad' } })
@@ -408,6 +438,7 @@ describe('ServersRoute', () => {
       </QueryClientProvider>,
     )
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Register server' }))
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'prod-2' } })
     fireEvent.change(screen.getByLabelText('Hostname'), { target: { value: '10.0.0.20' } })
     fireEvent.change(screen.getByLabelText('SSH key path'), { target: { value: 'id_ed25519' } })

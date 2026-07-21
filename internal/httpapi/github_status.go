@@ -18,15 +18,12 @@ func (s Server) githubStatus(w http.ResponseWriter, _ *http.Request) {
 	appConfigured := s.github.App != nil
 	webhookConfigured := s.github.Secret != ""
 	installURL := githubInstallURL(s.github.AppSlug)
-	missing := make([]string, 0, 3)
+	missing := make([]string, 0, 2)
 	if installURL == "" {
 		missing = append(missing, "GITHUB_APP_SLUG")
 	}
 	if !appConfigured {
 		missing = append(missing, "GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY or GITHUB_APP_PRIVATE_KEY_PATH")
-	}
-	if !webhookConfigured {
-		missing = append(missing, "GITHUB_WEBHOOK_SECRET")
 	}
 	writeJSON(w, http.StatusOK, githubStatusResponse{
 		WebhookConfigured:     webhookConfigured,

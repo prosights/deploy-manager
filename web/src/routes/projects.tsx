@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { ArrowRight, FolderKanban, GitBranch, Layers3, Package, Plus, Rocket, Search, X } from 'lucide-react'
+import { ArrowRight, FolderKanban, Layers3, Package, Plus, Rocket, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -28,7 +28,6 @@ type ProjectForm = {
 
 type ProjectStatus = 'empty' | 'failed' | 'deploying' | 'healthy' | 'idle'
 type ProjectStatusFilter = 'all' | ProjectStatus
-type RepositoryFilter = 'all' | 'connected' | 'unconnected'
 
 const defaultProjectForm: ProjectForm = { name: '', slug: '', description: '' }
 
@@ -47,7 +46,6 @@ export function ProjectsRoute() {
   const [formError, setFormError] = useState<string>()
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<ProjectStatusFilter>('all')
-  const [repositoryFilter, setRepositoryFilter] = useState<RepositoryFilter>('all')
   const [creating, setCreating] = useState(false)
 
   // Legacy URLs looked like /projects?project=<id>#section. Forward them to
@@ -87,10 +85,8 @@ export function ProjectsRoute() {
 
   const visibleProjects = projects.filter((project) => {
     const status = projectStatus(applications.filter((application) => application.project_id === project.id))
-    const hasRepository = Boolean(project.repository_full_name)
     return matchesProjectSearch(project, query)
       && (statusFilter === 'all' || status === statusFilter)
-      && (repositoryFilter === 'all' || hasRepository === (repositoryFilter === 'connected'))
   })
 
   return (
@@ -120,17 +116,6 @@ export function ProjectsRoute() {
           <option value="idle">Idle</option>
           <option value="empty">Empty</option>
         </SelectInput>
-        <SelectInput
-          label="Filter projects by repository"
-          labelHidden
-          className="w-44"
-          value={repositoryFilter}
-          onChange={(value) => setRepositoryFilter(value as RepositoryFilter)}
-        >
-          <option value="all">All repositories</option>
-          <option value="connected">Connected</option>
-          <option value="unconnected">Not connected</option>
-        </SelectInput>
         <DialogPrimitive.Root
           open={creating}
           onOpenChange={(open) => {
@@ -145,10 +130,10 @@ export function ProjectsRoute() {
             </Button>
           </DialogPrimitive.Trigger>
           <DialogPrimitive.Portal>
-            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
-            <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-prosights-lg border border-prosights-border bg-prosights-surface shadow-prosights-float outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95">
-              <div className="border-b border-prosights-border px-5 py-4 pr-12">
-                <DialogPrimitive.Title className="text-base font-semibold text-prosights-text">
+            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out" />
+            <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[28rem] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-prosights-xl border border-prosights-border bg-prosights-surface shadow-prosights-float outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out">
+              <div className="px-6 pb-3 pt-6 pr-14">
+                <DialogPrimitive.Title className="text-[17px] font-semibold tracking-[-0.01em] text-prosights-text">
                   Create project
                 </DialogPrimitive.Title>
                 <DialogPrimitive.Description className="mt-1 text-[13px] leading-5 text-prosights-muted">
@@ -159,7 +144,7 @@ export function ProjectsRoute() {
                 <button
                   type="button"
                   aria-label="Close create project"
-                  className="absolute right-4 top-4 inline-flex size-7 items-center justify-center rounded-prosights-md text-prosights-muted transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-prosights-ring"
+                  className="absolute right-5 top-5 inline-flex size-7 items-center justify-center rounded-prosights-md text-prosights-muted transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-prosights-ring"
                 >
                   <X className="size-4" aria-hidden="true" />
                 </button>
@@ -187,13 +172,7 @@ export function ProjectsRoute() {
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {visibleProjects.map((project) => (
-          <ProjectTile
-            key={project.id}
-            project={project}
-            environments={environments.filter((environment) => environment.project_id === project.id)}
-            applications={applications.filter((application) => application.project_id === project.id)}
-            deployments={deployments.filter((deployment) => deployment.project_id === project.id)}
-          />
+          <ProjectTile key={project.id} project={project} environments={environments.filter((environment) => environment.project_id === project.id)} applications={applications.filter((application) => application.project_id === project.id)} deployments={projectDeployments(project.id, applications, deployments)} />
         ))}
         {projects.length > 0 && visibleProjects.length === 0 && (
           <div className="rounded-lg border border-dashed bg-surface px-4 py-10 text-center text-sm text-muted sm:col-span-2 xl:col-span-3">
@@ -228,7 +207,7 @@ function ProjectTile({
   deployments: Deployment[]
 }) {
   const status = projectStatus(applications)
-  const lastDeployment = deployments[0]
+  const lastDeployment = newestDeployment(deployments)
   return (
     <Link
       to="/projects/$projectId"
@@ -250,14 +229,6 @@ function ProjectTile({
         {project.description || 'No description yet.'}
       </p>
       <div className="mt-auto space-y-2 pt-3">
-        <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
-          <GitBranch className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate font-mono">
-            {project.repository_full_name
-              ? `${project.repository_full_name}#${project.repository_branch ?? 'main'}`
-              : 'no repository connected'}
-          </span>
-        </div>
         <div className="flex items-center gap-4 text-xs text-muted">
           <span className="inline-flex items-center gap-1.5">
             <Package className="size-3.5" aria-hidden="true" />
@@ -294,7 +265,7 @@ function NewProjectForm({
 }) {
   return (
     <form
-      className="space-y-4 p-5"
+      className="space-y-5 px-6 pb-5 pt-3"
       onSubmit={(event) => {
         event.preventDefault()
         onSubmit()
@@ -308,7 +279,7 @@ function NewProjectForm({
         placeholder="recreate"
       />
       {errorMessage && <InlineError message={errorMessage} />}
-      <div className="flex justify-end gap-2">
+      <div className="flex items-center justify-end gap-2 border-t border-prosights-border pt-4">
         <Button type="button" onClick={onCancel}>Cancel</Button>
         <Button variant="primary" disabled={isSaving || !form.name || !form.slug}>
           {isSaving ? 'Creating...' : 'Create'}
@@ -329,8 +300,19 @@ function projectStatus(applications: Application[]): ProjectStatus {
 function matchesProjectSearch(project: Project, query: string): boolean {
   const value = query.trim().toLowerCase()
   if (!value) return true
-  return [project.name, project.slug, project.description, project.repository_full_name]
+  return [project.name, project.slug, project.description]
     .some((field) => field?.toLowerCase().includes(value))
+}
+
+function projectDeployments(projectID: string, applications: Application[], deployments: Deployment[]): Deployment[] {
+  const applicationIDs = new Set(applications.filter((application) => application.project_id === projectID).map((application) => application.id))
+  return deployments.filter((deployment) => applicationIDs.has(deployment.application_id))
+}
+
+function newestDeployment(deployments: Deployment[]): Deployment | undefined {
+  return deployments.reduce<Deployment | undefined>((newest, deployment) => (
+    !newest || Date.parse(deployment.created_at) > Date.parse(newest.created_at) ? deployment : newest
+  ), undefined)
 }
 
 function deploymentAge(deployment: Deployment): string {

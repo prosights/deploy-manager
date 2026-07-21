@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"deploy-manager/internal/connectors"
 	"deploy-manager/internal/db"
+	"deploy-manager/internal/sshutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -191,6 +195,81 @@ func TestRemoteStepsUseRepositoryWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestRemoteStepsAuthenticateHTTPSFetchAndCloneInMemory(t *testing.T) {
+	const header = "Authorization: Basic ephemeral"
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		RepositoryUrl:   pgtype.Text{String: "https://github.com/acme/app.git", Valid: true},
+		Branch:          "main",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+	}, nil, remoteStepOptions{sourceAuthorizationHeader: header})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sync remoteStep
+	for _, step := range steps {
+		if step.label == "Syncing repository" {
+			sync = step
+			break
+		}
+	}
+	if sync.input != header+"\n" {
+		t.Fatalf("expected authorization header to be sent over protected input")
+	}
+	if strings.Contains(sync.command, header) || strings.Contains(sync.command, "https://x-access-token") {
+		t.Fatalf("credential must not appear in the command line: %s", sync.command)
+	}
+	if !strings.Contains(sync.command, "IFS= read -r GIT_CONFIG_VALUE_0") || !strings.Contains(sync.command, "GIT_CONFIG_KEY_0=http.extraHeader") || !strings.Contains(sync.command, "git -c safe.directory='/srv/app' fetch") || !strings.Contains(sync.command, "git clone") {
+		t.Fatalf("expected fetch and clone to inherit ephemeral config from stdin: %s", sync.command)
+	}
+}
+
+func TestAuthenticatedSourceSyncReadsCredentialFromProtectedInput(t *testing.T) {
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin.git")
+	seed := filepath.Join(root, "seed")
+	target := filepath.Join(root, "target")
+	runGit(t, "init", "--bare", origin)
+	runGit(t, "init", seed)
+	runGit(t, "-C", seed, "config", "user.email", "test@example.com")
+	runGit(t, "-C", seed, "config", "user.name", "Deploy Manager Test")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, "-C", seed, "add", "README.md")
+	runGit(t, "-C", seed, "commit", "-m", "initial")
+	runGit(t, "-C", seed, "branch", "-M", "main")
+	runGit(t, "-C", seed, "remote", "add", "origin", origin)
+	runGit(t, "-C", seed, "push", "-u", "origin", "main")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		RepositoryUrl:   pgtype.Text{String: origin, Valid: true},
+		Branch:          "main",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: target,
+	}, nil, remoteStepOptions{sourceAuthorizationHeader: "Authorization: Basic ZXBoZW1lcmFs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sync remoteStep
+	for _, step := range steps {
+		if step.label == "Syncing repository" {
+			sync = step
+			break
+		}
+	}
+	if _, err := sshutil.NewLocalClient().RunWithInput(context.Background(), sync.command, sync.input); err != nil {
+		t.Fatalf("run authenticated source sync: %v", err)
+	}
+	runGit(t, "-C", target, "rev-parse", "--verify", "HEAD")
+}
+
 func TestRemoteStepsUseStableComposeProjectForRollingDeployments(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ApplicationName: "Billing API",
@@ -207,6 +286,73 @@ func TestRemoteStepsUseStableComposeProjectForRollingDeployments(t *testing.T) {
 	}
 	if !strings.Contains(joined, "COMPOSE_PROJECT_NAME='billing-api' docker compose -f 'docker-compose.yml' up -d --remove-orphans") {
 		t.Fatalf("expected compose up to use stable project name, got %s", joined)
+	}
+	if strings.Contains(joined, "DEPLOY_COLOR=") || strings.Contains(joined, "DEPLOY_PORT=") {
+		t.Fatalf("rolling deployments must preserve the original compose contract, got %s", joined)
+	}
+}
+
+func TestBuildComposeDownCommandStopsRollingAndBlueGreenStacks(t *testing.T) {
+	command, err := BuildComposeDownCommand(db.Application{
+		ID:              pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+		Name:            "billing api",
+		Branch:          "main",
+		ComposePath:     "services/api/compose.yml",
+		RemoteDirectory: "/srv/apps/internal",
+	}, []db.ListProxyRouteTargetsForApplicationRow{{
+		BlueUpstreamUrl:  pgtype.Text{String: "http://127.0.0.1:3101", Valid: true},
+		GreenUpstreamUrl: pgtype.Text{String: "http://127.0.0.1:3102", Valid: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"docker compose -f 'services/api/compose.yml' down --remove-orphans",
+		"DEPLOY_COLOR='blue' DEPLOY_PORT='3101'",
+		"DEPLOY_COLOR='green' DEPLOY_PORT='3102'",
+		"-blue'",
+		"-green'",
+	} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("expected cleanup command to contain %q, got %s", expected, command)
+		}
+	}
+	if strings.Count(command, "down --remove-orphans") != 3 {
+		t.Fatalf("expected rolling, blue, and green cleanup commands, got %s", command)
+	}
+}
+
+func TestBuildComposeDownCommandExportsEachManagedRoutePort(t *testing.T) {
+	command, err := BuildComposeDownCommand(db.Application{
+		ID:              pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+		Name:            "alleyes",
+		Branch:          "main",
+		ComposePath:     "alleyes-v2/compose.yml",
+		RemoteDirectory: "/srv/apps/internal",
+	}, []db.ListProxyRouteTargetsForApplicationRow{
+		{
+			BlueUpstreamUrl:  pgtype.Text{String: "http://127.0.0.1:3043", Valid: true},
+			GreenUpstreamUrl: pgtype.Text{String: "http://127.0.0.1:3044", Valid: true},
+			PortVariable:     pgtype.Text{String: "WEB_DEPLOY_PORT", Valid: true},
+		},
+		{
+			BlueUpstreamUrl:  pgtype.Text{String: "http://127.0.0.1:8004", Valid: true},
+			GreenUpstreamUrl: pgtype.Text{String: "http://127.0.0.1:8005", Valid: true},
+			PortVariable:     pgtype.Text{String: "API_DEPLOY_PORT", Valid: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"API_DEPLOY_PORT='8004'",
+		"API_DEPLOY_PORT='8005'",
+		"WEB_DEPLOY_PORT='3043'",
+		"WEB_DEPLOY_PORT='3044'",
+	} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("expected cleanup command to contain %q, got %s", expected, command)
+		}
 	}
 }
 
@@ -369,7 +515,7 @@ func TestRemoteStepsPullForArtifactFromDeploymentOptions(t *testing.T) {
 		Branch:          "main",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1/{color}/health", Valid: true},
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1:{port}/{color}/health", Valid: true},
 	}, nil, remoteStepOptions{imageRef: "ghcr.io/acme/app:1.0.0"})
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +538,7 @@ func TestRemoteStepsBuildOnTargetForSourceBlueGreenDeploy(t *testing.T) {
 		Branch:          "main",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
-		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1:{port}/healthz?color={color}", Valid: true},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -406,12 +552,13 @@ func TestRemoteStepsBuildOnTargetForSourceBlueGreenDeploy(t *testing.T) {
 
 func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationID:   pgtype.UUID{Bytes: [16]byte{2}, Valid: true},
 		ApplicationName: "API Service",
 		Strategy:        "blue_green",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
-		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
-	}, nil)
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1:{port}/healthz?color={color}", Valid: true},
+	}, nil, remoteStepOptions{bluePort: "4501", greenPort: "4502"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,7 +567,7 @@ func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 	if !strings.Contains(joined, ".deploy-manager-next-color") {
 		t.Fatal("expected blue-green color selection")
 	}
-	if !strings.Contains(joined, "COMPOSE_PROJECT_NAME='api-service'-$color DEPLOY_COLOR=$color") {
+	if !strings.Contains(joined, "COMPOSE_PROJECT_NAME='api-service'-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port") {
 		t.Fatal("expected next color compose project")
 	}
 	if !strings.Contains(joined, "docker compose -f 'docker-compose.yml' config --quiet") {
@@ -431,6 +578,70 @@ func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 	}
 	if strings.Contains(joined, "down --remove-orphans") {
 		t.Fatal("did not expect previous color cleanup during warm blue-green deployment")
+	}
+	if strings.Count(joined, "DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose") != 3 {
+		t.Fatalf("expected compose config, pull, and up to share the selected color and port, got %s", joined)
+	}
+	if !strings.Contains(joined, "${BLUE_DEPLOY_PORT:-4501}") || !strings.Contains(joined, "${GREEN_DEPLOY_PORT:-4502}") {
+		t.Fatalf("expected the application port pair, got %s", joined)
+	}
+	if strings.Contains(joined, "3101") || strings.Contains(joined, "3102") {
+		t.Fatalf("did not expect fallback ports when route ports are supplied, got %s", joined)
+	}
+}
+
+func TestRemoteStepsExportEachManagedRoutePort(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "AllEyes",
+		Hostname:        "playground",
+		Strategy:        "blue_green",
+		ComposePath:     "compose.yml",
+		RemoteDirectory: "/srv/alleyes",
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1:{port}/health?color={color}", Valid: true},
+	}, nil, remoteStepOptions{
+		bluePort:  "3043",
+		greenPort: "3044",
+		portVariables: []composePortVariable{
+			{name: "WEB_DEPLOY_PORT", bluePort: "3043", greenPort: "3044"},
+			{name: "API_DEPLOY_PORT", bluePort: "8004", greenPort: "8005"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	for _, expected := range []string{
+		"API_DEPLOY_PORT=$(if [ \"$color\" = \"blue\" ]; then printf %s '8004'; else printf %s '8005'; fi)",
+		"WEB_DEPLOY_PORT=$(if [ \"$color\" = \"blue\" ]; then printf %s '3043'; else printf %s '3044'; fi)",
+	} {
+		if strings.Count(joined, expected) != 3 {
+			t.Fatalf("expected config, pull, and up to contain %q, got %s", expected, joined)
+		}
+	}
+	if !strings.Contains(joined, "http://host.docker.internal:{port}/health?color={color}") {
+		t.Fatalf("expected playground deploy health check to use the Docker host, got %s", joined)
+	}
+}
+
+func TestRoutePortsPrefersLegacyDeployPortRoute(t *testing.T) {
+	ports, err := routePorts([]db.ListProxyRouteTargetsForApplicationRow{
+		{
+			BlueUpstreamUrl:  pgtype.Text{String: "http://127.0.0.1:8004", Valid: true},
+			GreenUpstreamUrl: pgtype.Text{String: "http://127.0.0.1:8005", Valid: true},
+			PortVariable:     pgtype.Text{String: "API_DEPLOY_PORT", Valid: true},
+		},
+		{
+			BlueUpstreamUrl:  pgtype.Text{String: "http://127.0.0.1:3043", Valid: true},
+			GreenUpstreamUrl: pgtype.Text{String: "http://127.0.0.1:3044", Valid: true},
+			PortVariable:     pgtype.Text{String: "DEPLOY_PORT", Valid: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ports.blue != "3043" || ports.green != "3044" {
+		t.Fatalf("expected DEPLOY_PORT route to remain the legacy pair, got %+v", ports)
 	}
 }
 
@@ -507,7 +718,7 @@ func TestRemoteStepsGateBlueGreenPromotionOnHealthCheck(t *testing.T) {
 		Strategy:        "blue_green",
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/api",
-		HealthCheckUrl:  pgtype.Text{String: "https://api-{color}.example.com/healthz", Valid: true},
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1:{port}/healthz?color={color}", Valid: true},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -523,14 +734,17 @@ func TestRemoteStepsGateBlueGreenPromotionOnHealthCheck(t *testing.T) {
 	}
 
 	joined := strings.Join(commands(steps), "\n")
-	if !strings.Contains(joined, "curl -fsS --retry 10 --retry-delay 2") {
+	if !strings.Contains(joined, "curl -fsS --retry 10 --retry-delay 2 --retry-all-errors") {
 		t.Fatal("expected retrying health check command")
 	}
 	if !strings.Contains(joined, "sed \"s/{color}/$color/g\"") {
 		t.Fatal("expected health check URL to resolve next color")
 	}
-	if strings.Index(joinedLabels, "Checking next color health") > strings.Index(joinedLabels, "Promoting next color") {
-		t.Fatal("expected health check before promotion")
+	if !strings.Contains(joined, "sed \"s/{port}/$port/g\"") {
+		t.Fatal("expected health check URL to resolve the next color's assigned port")
+	}
+	if strings.Contains(joinedLabels, "Promoting next color") {
+		t.Fatal("route promotion must happen atomically after remote steps complete")
 	}
 }
 
@@ -547,7 +761,7 @@ func TestRemoteStepsWriteRuntimeEnvironment(t *testing.T) {
 	}
 
 	joined := strings.Join(commands(steps), "\n")
-	if !strings.Contains(joined, "umask 077") || !strings.Contains(joined, "> .env") {
+	if !strings.Contains(joined, "umask 077") || !strings.Contains(joined, "> '.env'") {
 		t.Fatal("expected locked-down runtime env write")
 	}
 	if !strings.Contains(joined, "DATABASE_URL=") {
@@ -555,6 +769,123 @@ func TestRemoteStepsWriteRuntimeEnvironment(t *testing.T) {
 	}
 	if strings.Contains(joined, "IGNORED-KEY") {
 		t.Fatal("did not expect invalid env key")
+	}
+}
+
+func TestRemoteStepsWriteRuntimeEnvironmentBesideNestedComposeFile(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ComposePath:     "evals/docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+	}, []connectors.RuntimeVariable{{Key: "API_URL", Value: "https://api.example.com"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(commands(steps), "\n"); !strings.Contains(joined, "> 'evals/.env'") {
+		t.Fatalf("expected runtime environment beside compose file, got %s", joined)
+	}
+}
+
+func TestRemoteStepsClearRuntimeEnvironmentWhenVariablesAreRemoved(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "evals",
+		ComposePath:     "evals/compose.yml",
+		RemoteDirectory: "/srv/evals",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range steps {
+		if step.label == "Writing runtime environment" {
+			if !strings.Contains(step.command, "printf %s '' > 'evals/.env'") {
+				t.Fatalf("expected an empty managed environment file, got %s", step.command)
+			}
+			return
+		}
+	}
+	t.Fatal("expected the managed environment file to be rewritten")
+}
+
+func TestRemoteStepsWriteAnIsolatedEnvironmentForEachConfiguredComposeService(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ComposePath:     "alleyes-v2/compose.yml",
+		RemoteDirectory: "/srv/app",
+	}, nil, remoteStepOptions{serviceVariables: map[string][]connectors.RuntimeVariable{
+		"frontend": {
+			{Key: "PUBLIC_API_URL", Value: "https://api.example.com"},
+		},
+		"worker": {
+			{Key: "WORKER_CONCURRENCY", Value: "4"},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var frontendCommand, workerCommand, overrideCommand string
+	for _, step := range steps {
+		switch step.label {
+		case "Writing runtime environment for frontend":
+			frontendCommand = step.command
+		case "Writing runtime environment for worker":
+			workerCommand = step.command
+		case "Writing compose runtime override":
+			overrideCommand = step.command
+		}
+	}
+	if !strings.Contains(frontendCommand, "PUBLIC_API_URL=") || strings.Contains(frontendCommand, "WORKER_CONCURRENCY") {
+		t.Fatalf("expected an isolated frontend env file, got %s", frontendCommand)
+	}
+	if !strings.Contains(workerCommand, "WORKER_CONCURRENCY=") || strings.Contains(workerCommand, "PUBLIC_API_URL") {
+		t.Fatalf("expected an isolated worker env file, got %s", workerCommand)
+	}
+	if !strings.Contains(overrideCommand, ".deploy-manager/frontend.env") || !strings.Contains(overrideCommand, ".deploy-manager/worker.env") {
+		t.Fatalf("expected both service env files in the compose override, got %s", overrideCommand)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	wantComposeFiles := "-f 'alleyes-v2/compose.yml' -f 'alleyes-v2/.deploy-manager.runtime.yml'"
+	if !strings.Contains(joined, wantComposeFiles+" config --quiet") || !strings.Contains(joined, wantComposeFiles+" up -d --remove-orphans") {
+		t.Fatalf("expected deploy commands to include the runtime override, got %s", joined)
+	}
+}
+
+func TestRemoteStepsPublishManagedComposePorts(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "portal",
+		ComposePath:     "compose.yml",
+		RemoteDirectory: "/srv/app",
+		Strategy:        "blue_green",
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1:{port}/health?color={color}", Valid: true},
+	}, nil, remoteStepOptions{
+		targetColor: "blue",
+		portVariables: []composePortVariable{{
+			name:          "DEPLOY_MANAGER_WEB_3000_PORT",
+			bluePort:      "20000",
+			greenPort:     "20001",
+			serviceName:   "web",
+			containerPort: 3000,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "ports: !override") || !strings.Contains(joined, "127.0.0.1:${DEPLOY_MANAGER_WEB_3000_PORT:?DEPLOY_MANAGER_WEB_3000_PORT is required}:3000") {
+		t.Fatalf("expected a managed compose port override, got %s", joined)
+	}
+	if !strings.Contains(joined, "DEPLOY_MANAGER_WEB_3000_PORT=$(if") || !strings.Contains(joined, "-f 'compose.yml' -f '.deploy-manager.runtime.yml'") {
+		t.Fatalf("expected managed ports on compose commands, got %s", joined)
+	}
+}
+
+func TestRemoteStepsExposeManagedPortsToTheLocalPlaygroundNetwork(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{Hostname: "playground", ComposePath: "compose.yml", RemoteDirectory: "/srv/app"}, nil, remoteStepOptions{portVariables: []composePortVariable{{name: "DEPLOY_PORT", serviceName: "web", containerPort: 80}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(commands(steps), "\n"); !strings.Contains(joined, `0.0.0.0:${DEPLOY_PORT:?DEPLOY_PORT is required}:80`) {
+		t.Fatalf("expected the playground proxy and health check to reach the managed port, got %s", joined)
 	}
 }
 
@@ -679,4 +1010,12 @@ func commands(steps []remoteStep) []string {
 		values = append(values, step.command)
 	}
 	return values
+}
+
+func runGit(t *testing.T, args ...string) {
+	t.Helper()
+	command := exec.Command("git", args...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
 }

@@ -48,6 +48,32 @@ func TestBuildCommandForTraefikWithoutTLS(t *testing.T) {
 	}
 }
 
+func TestBuildRemoveCommandForManagedRoutes(t *testing.T) {
+	caddy, err := BuildRemoveCommand("app.example.com", "caddy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"deploy-manager-app-example-com.caddy",
+		"DM_CADDY_ADDRESS",
+		"docker exec caddy caddy reload",
+	} {
+		assertContains(t, caddy, expected)
+	}
+
+	traefik, err := BuildRemoveCommand("app.example.com", "traefik")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, traefik, "rm -f '/etc/traefik/dynamic/deploy-manager-app-example-com.yml'")
+}
+
+func TestBuildRemoveCommandRejectsUnsafeDomain(t *testing.T) {
+	if _, err := BuildRemoveCommand("app.example.com;rm -rf /", "caddy"); err == nil {
+		t.Fatal("expected unsafe domain to be rejected")
+	}
+}
+
 func TestBuildCommandRejectsUnsafeDomain(t *testing.T) {
 	_, err := BuildCommand(Target{
 		Domain:     "app.example.com;rm -rf /",

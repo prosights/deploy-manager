@@ -163,12 +163,12 @@ func TestNormalizeCreateApplicationAcceptsHealthCheckURL(t *testing.T) {
 		ServerID:        pgtype.UUID{Valid: true},
 		Name:            "api",
 		RemoteDirectory: "/srv/api",
-		HealthCheckUrl:  pgtype.Text{String: " https://api-{color}.example.com/healthz ", Valid: true},
+		HealthCheckUrl:  pgtype.Text{String: " http://127.0.0.1:{port}/healthz?color={color} ", Valid: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.HealthCheckUrl.String != "https://api-{color}.example.com/healthz" {
+	if input.HealthCheckUrl.String != "http://127.0.0.1:{port}/healthz?color={color}" {
 		t.Fatalf("expected trimmed health check URL, got %q", input.HealthCheckUrl.String)
 	}
 }
@@ -212,8 +212,8 @@ func TestNormalizeCreateApplicationCanonicalizesDomain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if input.Domain.String != "api.example.com" {
-		t.Fatalf("expected canonical domain, got %q", input.Domain.String)
+	if !input.Domain.Valid || input.Domain.String != "api.example.com" {
+		t.Fatalf("expected canonical domain, got %+v", input.Domain)
 	}
 }
 
@@ -223,6 +223,18 @@ func TestApplicationLookupErrorMapsMissingServerToNotFound(t *testing.T) {
 	var notFound notFoundError
 	if !errors.As(err, &notFound) {
 		t.Fatalf("expected not found error, got %T", err)
+	}
+}
+
+func TestValidateApplicationServerRejectsServerMoves(t *testing.T) {
+	existing := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	requested := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+
+	if err := validateApplicationServer(existing, requested); err == nil {
+		t.Fatal("expected changing a service server to fail")
+	}
+	if err := validateApplicationServer(existing, existing); err != nil {
+		t.Fatalf("expected the existing service server to remain valid, got %v", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 
 	"deploy-manager/internal/connectors"
@@ -286,6 +287,17 @@ func looksLikeSecretMaterial(value string) bool {
 		return len(value) == 20
 	}
 	if strings.HasPrefix(lower, "https://hooks.slack.com/services/") {
+		return true
+	}
+	if strings.HasPrefix(lower, "bearer ") || strings.HasPrefix(lower, "basic ") {
+		return true
+	}
+	for _, marker := range []string{"password=", "passwd=", "pwd=", "token=", "secret=", "api_key=", "apikey=", "client_secret=", "access_key="} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	if parsed, err := url.Parse(value); err == nil && parsed.Scheme != "" && parsed.Host != "" && parsed.User != nil {
 		return true
 	}
 	return looksLikeCredentialJSON(value)

@@ -97,11 +97,11 @@ export function ApplicationCreatePanel({
         </div>
         <TextInput label="Branch" value={form.branch} onChange={(branch) => onChange({ branch })} />
         <TextInput label="Compose path" value={form.compose_path} onChange={(compose_path) => onChange({ compose_path })} />
-        <TextInput label="Health check URL" value={form.health_check_url} onChange={(health_check_url) => onChange({ health_check_url })} placeholder="https://api-{color}.example.com/healthz" />
+        <TextInput label="Health check URL" value={form.health_check_url} onChange={(health_check_url) => onChange({ health_check_url })} placeholder="http://127.0.0.1:{port}/healthz?color={color}" />
         <TextInput label="Doppler project" value={form.doppler_project} onChange={(doppler_project) => onChange({ doppler_project })} />
         <TextInput label="Doppler config" value={form.doppler_config} onChange={(doppler_config) => onChange({ doppler_config })} placeholder="prd" />
       </form>
-      <div className="border-t px-4 py-3 text-sm text-muted">Doppler tokens stay outside this app. Blue-green health checks must include <span className="font-mono text-ink">{'{color}'}</span> so the next color is checked before promotion.</div>
+      <div className="border-t px-4 py-3 text-sm text-muted">Doppler tokens stay outside this app. Blue-green health checks must include <span className="font-mono text-ink">{'{color}'}</span> and <span className="font-mono text-ink">{'{port}'}</span> so the next color and its assigned port are checked before promotion.</div>
       {errorMessage && <PanelError message={errorMessage} />}
     </Panel>
   )

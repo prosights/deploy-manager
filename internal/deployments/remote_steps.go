@@ -14,15 +14,28 @@ import (
 )
 
 type remoteStep struct {
-	label   string
-	command string
+	label          string
+	command        string
+	input          string
+	resolvesCommit bool
 }
 
 type remoteStepOptions struct {
-	targetColor string
-	imageRef    string
-	bluePort    string
-	greenPort   string
+	targetColor               string
+	imageRef                  string
+	bluePort                  string
+	greenPort                 string
+	portVariables             []composePortVariable
+	serviceVariables          map[string][]connectors.RuntimeVariable
+	sourceAuthorizationHeader string
+}
+
+type composePortVariable struct {
+	name          string
+	bluePort      string
+	greenPort     string
+	serviceName   string
+	containerPort int32
 }
 
 const (
@@ -37,11 +50,14 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	}
 	stepOptions := resolveRemoteStepOptions(target, options)
 	if stepOptions.imageRef != "" {
-		variables = appendArtifactVariables(variables, target, stepOptions)
+		generated := appendArtifactVariables(nil, target, stepOptions)
+		variables = mergeRuntimeVariables(variables, generated)
+		for service, scoped := range stepOptions.serviceVariables {
+			stepOptions.serviceVariables[service] = mergeRuntimeVariables(scoped, generated)
+		}
 	}
 
 	remoteDir := stringutil.ShellQuote(target.RemoteDirectory)
-	composePath := stringutil.ShellQuote(target.ComposePath)
 	steps := []remoteStep{
 		{
 			label:   "Preparing remote directory",
@@ -52,58 +68,180 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	if isSourceDeployWithOptions(target, stepOptions) {
 		repository := stringutil.ShellQuote(target.RepositoryUrl.String)
 		branch := stringutil.ShellQuote(target.Branch)
-		git := "git -c safe.directory=" + remoteDir
+		gitCommands, err := sourceGitCommands(remoteDir, stepOptions.sourceAuthorizationHeader)
+		if err != nil {
+			return nil, err
+		}
 		commitCheckout, err := gitCommitCheckout(remoteDir, deploymentCommit(target))
 		if err != nil {
 			return nil, err
 		}
+		syncCommand := fmt.Sprintf(
+			"if [ -d %[1]s/.git ]; then cd %[1]s && %[5]s fetch --prune origin %[2]s && git -c safe.directory=%[1]s reset --hard && git -c safe.directory=%[1]s checkout %[2]s && git -c safe.directory=%[1]s reset --hard origin/%[2]s; else find %[1]s -mindepth 1 -maxdepth 1 -exec rm -rf {} + && %[6]s clone --branch %[2]s %[3]s %[1]s; fi%[4]s",
+			remoteDir,
+			branch,
+			repository,
+			commitCheckout,
+			gitCommands.fetch,
+			gitCommands.clone,
+		)
 		steps = append(steps, remoteStep{
-			label: "Syncing repository",
-			command: fmt.Sprintf(
-				"if [ -d %[1]s/.git ]; then cd %[1]s && %[5]s fetch --prune origin %[2]s && %[5]s reset --hard && %[5]s checkout %[2]s && %[5]s reset --hard origin/%[2]s; else find %[1]s -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --branch %[2]s %[3]s %[1]s; fi%[4]s",
-				remoteDir,
-				branch,
-				repository,
-				commitCheckout,
-				git,
-			),
+			label:          "Syncing repository",
+			command:        gitCommands.prefix + syncCommand + gitCommands.suffix,
+			input:          gitCommands.input,
+			resolvesCommit: true,
 		})
 	}
 
-	if len(variables) > 0 {
-		envFile, err := renderRuntimeEnvFile(variables)
-		if err != nil {
-			return nil, err
-		}
-		steps = append(steps, remoteStep{
-			label:   "Writing runtime environment",
-			command: fmt.Sprintf("cd %s && umask 077 && printf %%s %s > .env", remoteDir, stringutil.ShellQuote(envFile)),
-		})
+	envFile, err := renderRuntimeEnvFile(variables)
+	if err != nil {
+		return nil, err
 	}
+	envPath := path.Join(path.Dir(target.ComposePath), ".env")
+	steps = append(steps, remoteStep{
+		label:   "Writing runtime environment",
+		command: fmt.Sprintf("cd %s && umask 077 && printf %%s %s > %s", remoteDir, stringutil.ShellQuote(envFile), stringutil.ShellQuote(envPath)),
+	})
+	serviceSteps, err := serviceRuntimeSteps(target, stepOptions.serviceVariables, stepOptions.portVariables)
+	if err != nil {
+		return nil, err
+	}
+	steps = append(steps, serviceSteps...)
 
 	if target.Strategy == "blue_green" {
 		steps = append(steps, blueGreenSteps(target, stepOptions)...)
 	} else {
 		project := stringutil.ShellQuote(projectSlug(target.ApplicationName))
-		steps = append(steps, composeConfigStep(remoteDir, composePath))
+		composeFiles := composeFileArguments(target.ComposePath, stepOptions.serviceVariables, stepOptions.portVariables)
+		steps = append(steps, composeConfigStep(remoteDir, composeFiles))
 		if isSourceDeployWithOptions(target, stepOptions) {
 			steps = append(steps, remoteStep{
 				label:   "Building compose images",
-				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s build --pull", remoteDir, project, composePath),
+				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose %s build --pull", remoteDir, project, composeFiles),
 			})
 		} else {
 			steps = append(steps, remoteStep{
 				label:   "Pulling compose images",
-				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s pull", remoteDir, project, composePath),
+				command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose %s pull", remoteDir, project, composeFiles),
 			})
 		}
 		steps = append(steps, remoteStep{
 			label:   "Starting compose stack",
-			command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose -f %s up -d --remove-orphans", remoteDir, project, composePath),
+			command: fmt.Sprintf("cd %s && COMPOSE_PROJECT_NAME=%s docker compose %s up -d --remove-orphans", remoteDir, project, composeFiles),
 		})
 	}
 
 	return steps, nil
+}
+
+func serviceRuntimeSteps(target db.GetDeploymentTargetRow, services map[string][]connectors.RuntimeVariable, ports []composePortVariable) ([]remoteStep, error) {
+	managedPorts := make(map[string][]composePortVariable)
+	for _, port := range ports {
+		if port.serviceName != "" {
+			managedPorts[port.serviceName] = append(managedPorts[port.serviceName], port)
+		}
+	}
+	if len(services) == 0 && len(managedPorts) == 0 {
+		return nil, nil
+	}
+	composeDirectory := path.Dir(target.ComposePath)
+	runtimeDirectory := path.Join(composeDirectory, ".deploy-manager")
+	remoteDir := stringutil.ShellQuote(target.RemoteDirectory)
+	names := make([]string, 0, len(services)+len(managedPorts))
+	for name := range services {
+		if !composeServiceNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("compose service runtime target %q is invalid", name)
+		}
+		names = append(names, name)
+	}
+	for name := range managedPorts {
+		if !composeServiceNamePattern.MatchString(name) {
+			return nil, fmt.Errorf("compose service port target %q is invalid", name)
+		}
+		if _, ok := services[name]; !ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	steps := make([]remoteStep, 0, len(names)+1)
+	var override strings.Builder
+	bindHost := "127.0.0.1"
+	if strings.TrimSpace(target.Hostname) == "playground" {
+		bindHost = "0.0.0.0"
+	}
+	override.WriteString("services:\n")
+	for _, name := range names {
+		override.WriteString("  " + name + ":\n")
+		if variables, ok := services[name]; ok {
+			envFile, err := renderRuntimeEnvFile(variables)
+			if err != nil {
+				return nil, fmt.Errorf("render runtime variables for compose service %s: %w", name, err)
+			}
+			envPath := path.Join(runtimeDirectory, name+".env")
+			steps = append(steps, remoteStep{
+				label:   "Writing runtime environment for " + name,
+				command: fmt.Sprintf("cd %s && umask 077 && mkdir -p %s && printf %%s %s > %s", remoteDir, stringutil.ShellQuote(runtimeDirectory), stringutil.ShellQuote(envFile), stringutil.ShellQuote(envPath)),
+			})
+			override.WriteString("    env_file:\n      - .deploy-manager/" + name + ".env\n")
+		}
+		if bindings := managedPorts[name]; len(bindings) > 0 {
+			sort.Slice(bindings, func(i, j int) bool { return bindings[i].containerPort < bindings[j].containerPort })
+			override.WriteString("    ports: !override\n")
+			for _, binding := range bindings {
+				override.WriteString(fmt.Sprintf("      - \"%s:${%s:?%s is required}:%d\"\n", bindHost, binding.name, binding.name, binding.containerPort))
+			}
+		}
+	}
+	overridePath := runtimeComposePath(target.ComposePath)
+	steps = append(steps, remoteStep{
+		label:   "Writing compose runtime override",
+		command: fmt.Sprintf("cd %s && umask 077 && printf %%s %s > %s", remoteDir, stringutil.ShellQuote(override.String()), stringutil.ShellQuote(overridePath)),
+	})
+	return steps, nil
+}
+
+func runtimeComposePath(composePath string) string {
+	return path.Join(path.Dir(composePath), ".deploy-manager.runtime.yml")
+}
+
+func composeFileArguments(composePath string, services map[string][]connectors.RuntimeVariable, ports []composePortVariable) string {
+	arguments := "-f " + stringutil.ShellQuote(composePath)
+	if len(services) > 0 || hasManagedComposePorts(ports) {
+		arguments += " -f " + stringutil.ShellQuote(runtimeComposePath(composePath))
+	}
+	return arguments
+}
+
+func hasManagedComposePorts(ports []composePortVariable) bool {
+	for _, port := range ports {
+		if port.serviceName != "" {
+			return true
+		}
+	}
+	return false
+}
+
+type sourceGitCommandSet struct {
+	prefix string
+	fetch  string
+	clone  string
+	suffix string
+	input  string
+}
+
+func sourceGitCommands(remoteDir string, authorizationHeader string) (sourceGitCommandSet, error) {
+	commands := sourceGitCommandSet{fetch: "git -c safe.directory=" + remoteDir, clone: "git"}
+	authorizationHeader = strings.TrimSpace(authorizationHeader)
+	if authorizationHeader == "" {
+		return commands, nil
+	}
+	if len(authorizationHeader) > 4096 || stringutil.HasControlCharacter(authorizationHeader) {
+		return sourceGitCommandSet{}, fmt.Errorf("source authorization header is invalid")
+	}
+	commands.prefix = "IFS= read -r GIT_CONFIG_VALUE_0; export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0 GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0; "
+	commands.input = authorizationHeader + "\n"
+	return commands, nil
 }
 
 // isSourceDeploy reports whether the image must be built from the synced
@@ -291,55 +429,82 @@ func ValidateGitRefName(value string) error {
 
 func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions) []remoteStep {
 	remoteDir := stringutil.ShellQuote(target.RemoteDirectory)
-	composePath := stringutil.ShellQuote(target.ComposePath)
+	composeFiles := composeFileArguments(target.ComposePath, options.serviceVariables, options.portVariables)
 	project := stringutil.ShellQuote(projectSlug(target.ApplicationName))
 	targetColor := stringutil.ShellQuote(defaultTargetColor(options.targetColor))
+	composeCommand := func(action string) string {
+		return fmt.Sprintf(
+			"cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port%s docker compose %s %s",
+			remoteDir,
+			colorPortCommand(options),
+			project,
+			composePortVariableAssignments(options.portVariables),
+			composeFiles,
+			action,
+		)
+	}
 
 	steps := []remoteStep{
 		{
 			label:   "Selecting blue-green target",
 			command: fmt.Sprintf("cd %s && printf %%s %s > .deploy-manager-next-color", remoteDir, targetColor),
 		},
-		composeConfigStep(remoteDir, composePath),
+		{
+			label:   "Validating compose config",
+			command: composeCommand("config --quiet"),
+		},
 	}
 	if isSourceDeployWithOptions(target, options) {
 		steps = append(steps, remoteStep{
 			label:   "Building next color images",
-			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s build --pull", remoteDir, colorPortCommand(options), project, composePath),
+			command: composeCommand("build --pull"),
 		})
 	} else {
 		steps = append(steps, remoteStep{
 			label:   "Pulling next color images",
-			command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s pull", remoteDir, colorPortCommand(options), project, composePath),
+			command: composeCommand("pull"),
 		})
 	}
 	steps = append(steps, remoteStep{
 		label:   "Starting next color stack",
-		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && COMPOSE_PROJECT_NAME=%s-$color DEPLOY_COLOR=$color DEPLOY_PORT=$port docker compose -f %s up -d --remove-orphans", remoteDir, colorPortCommand(options), project, composePath),
+		command: composeCommand("up -d --remove-orphans"),
 	})
 	steps = append(steps, remoteStep{
 		label:   "Checking next color health",
-		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 --retry-connrefused \"$url\" >/dev/null", remoteDir, colorPortCommand(options), stringutil.ShellQuote(target.HealthCheckUrl.String)),
+		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 --retry-all-errors \"$url\" >/dev/null", remoteDir, colorPortCommand(options), stringutil.ShellQuote(deploymentHealthCheckURL(target, target.HealthCheckUrl.String))),
 	})
-	steps = append(steps,
-		remoteStep{
-			label:   "Promoting next color",
-			command: fmt.Sprintf("cd %s && cat .deploy-manager-next-color > .deploy-manager-active-color", remoteDir),
-		},
-	)
 	return steps
 }
 
+func composePortVariableAssignments(variables []composePortVariable) string {
+	assignments := make([]string, 0, len(variables))
+	for _, variable := range variables {
+		if variable.name == "DEPLOY_PORT" || !connectors.ValidRuntimeVariableKey(variable.name) {
+			continue
+		}
+		assignments = append(assignments, fmt.Sprintf(" %s=$(%s)", variable.name, fixedColorPortCommand(variable.bluePort, variable.greenPort)))
+	}
+	return strings.Join(assignments, "")
+}
+
 func colorPortCommand(options remoteStepOptions) string {
-	bluePort := strings.TrimSpace(options.bluePort)
+	return colorPortPairCommand(options.bluePort, options.greenPort)
+}
+
+func colorPortPairCommand(bluePort string, greenPort string) string {
+	bluePort = strings.TrimSpace(bluePort)
 	if bluePort == "" {
 		bluePort = "3101"
 	}
-	greenPort := strings.TrimSpace(options.greenPort)
+	greenPort = strings.TrimSpace(greenPort)
 	if greenPort == "" {
 		greenPort = "3102"
 	}
 	return fmt.Sprintf("if [ \"$color\" = \"blue\" ]; then printf %%s \"${BLUE_DEPLOY_PORT:-%s}\"; else printf %%s \"${GREEN_DEPLOY_PORT:-%s}\"; fi", bluePort, greenPort)
+}
+
+func fixedColorPortCommand(bluePort string, greenPort string) string {
+	return fmt.Sprintf("if [ \"$color\" = \"blue\" ]; then printf %%s %s; else printf %%s %s; fi", stringutil.ShellQuote(bluePort), stringutil.ShellQuote(greenPort))
 }
 
 func defaultTargetColor(color string) string {
@@ -350,14 +515,142 @@ func defaultTargetColor(color string) string {
 	return "blue"
 }
 
-func composeConfigStep(remoteDir string, composePath string) remoteStep {
+func composeConfigStep(remoteDir string, composeFiles string) remoteStep {
 	return remoteStep{
 		label:   "Validating compose config",
-		command: fmt.Sprintf("cd %s && docker compose -f %s config --quiet", remoteDir, composePath),
+		command: fmt.Sprintf("cd %s && docker compose %s config --quiet", remoteDir, composeFiles),
 	}
 }
 
+// BuildComposeDownCommand stops every project name an application may have
+// used across rolling and blue-green deployments. Volumes are preserved.
+func BuildComposeDownCommand(application db.Application, routes []db.ListProxyRouteTargetsForApplicationRow) (string, error) {
+	target := db.GetDeploymentTargetRow{
+		ApplicationID:   application.ID,
+		ApplicationName: application.Name,
+		RepositoryUrl:   application.RepositoryUrl,
+		Branch:          application.Branch,
+		ComposePath:     application.ComposePath,
+		RemoteDirectory: application.RemoteDirectory,
+	}
+	if err := validateRemoteTarget(target); err != nil {
+		return "", err
+	}
+
+	remoteDir := stringutil.ShellQuote(application.RemoteDirectory)
+	composePath := stringutil.ShellQuote(application.ComposePath)
+	project := projectSlug(application.Name)
+	ports, err := routePorts(routes)
+	if err != nil {
+		return "", err
+	}
+	down := func(name string, color string, port string) string {
+		return fmt.Sprintf(
+			"COMPOSE_PROJECT_NAME=%s DEPLOY_COLOR=%s DEPLOY_PORT=%s%s docker compose -f %s down --remove-orphans",
+			stringutil.ShellQuote(name),
+			stringutil.ShellQuote(color),
+			stringutil.ShellQuote(port),
+			composePortVariableValues(ports.variables, color),
+			composePath,
+		)
+	}
+	commands := []string{
+		down(project, "blue", ports.blue),
+		down(project+"-blue", "blue", ports.blue),
+		down(project+"-green", "green", ports.green),
+	}
+	return fmt.Sprintf(
+		"test -d %s && cd %s && test -f %s && %s",
+		remoteDir,
+		remoteDir,
+		composePath,
+		strings.Join(commands, " && "),
+	), nil
+}
+
+func composePortVariableValues(variables []composePortVariable, color string) string {
+	assignments := make([]string, 0, len(variables))
+	for _, variable := range variables {
+		if variable.name == "DEPLOY_PORT" || !connectors.ValidRuntimeVariableKey(variable.name) {
+			continue
+		}
+		port := variable.bluePort
+		if color == "green" {
+			port = variable.greenPort
+		}
+		assignments = append(assignments, fmt.Sprintf(" %s=%s", variable.name, stringutil.ShellQuote(port)))
+	}
+	return strings.Join(assignments, "")
+}
+
+func routePorts(routes []db.ListProxyRouteTargetsForApplicationRow) (blueGreenPorts, error) {
+	ports := blueGreenPorts{}
+	seen := map[string]composePortVariable{}
+	for _, route := range routes {
+		blue := upstreamPort(route.BlueUpstreamUrl)
+		green := upstreamPort(route.GreenUpstreamUrl)
+		if blue == "" && green == "" {
+			continue
+		}
+		if blue == "" {
+			blue = "3101"
+		}
+		if green == "" {
+			green = "3102"
+		}
+
+		name := strings.TrimSpace(route.PortVariable.String)
+		if route.PortVariable.Valid && !connectors.ValidRuntimeVariableKey(name) {
+			return blueGreenPorts{}, fmt.Errorf("proxy route port variable %q is invalid", name)
+		}
+		if ports.blue == "" || name == "DEPLOY_PORT" {
+			ports.blue, ports.green = blue, green
+		}
+		variable := composePortVariable{name: name, bluePort: blue, greenPort: green}
+		if name == "" && route.ComposeService.Valid && route.ContainerPort.Valid {
+			variable.name = managedComposePortName(route.ComposeService.String, route.ContainerPort.Int32)
+			variable.serviceName = route.ComposeService.String
+			variable.containerPort = route.ContainerPort.Int32
+			name = variable.name
+		}
+		if name == "" {
+			continue
+		}
+		if existing, ok := seen[name]; ok {
+			if existing.bluePort != blue || existing.greenPort != green {
+				return blueGreenPorts{}, fmt.Errorf("proxy route port variable %s has conflicting port pairs", name)
+			}
+			continue
+		}
+		seen[name] = variable
+	}
+	if ports.blue == "" {
+		ports.blue, ports.green = "3101", "3102"
+	}
+	for _, variable := range seen {
+		ports.variables = append(ports.variables, variable)
+	}
+	sort.Slice(ports.variables, func(i int, j int) bool { return ports.variables[i].name < ports.variables[j].name })
+	return ports, nil
+}
+
+func managedComposePortName(service string, port int32) string {
+	var name strings.Builder
+	for _, char := range strings.ToUpper(service) {
+		if (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') {
+			name.WriteRune(char)
+		} else {
+			name.WriteByte('_')
+		}
+		if name.Len() == 48 {
+			break
+		}
+	}
+	return fmt.Sprintf("DEPLOY_MANAGER_%s_%d_%08X_PORT", strings.Trim(name.String(), "_"), port, hashProjectName(service))
+}
+
 var projectSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
+var composeServiceNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func projectSlug(value string) string {
 	original := value

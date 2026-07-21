@@ -13,12 +13,14 @@ import (
 	"deploy-manager/internal/deployments"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const (
 	defaultDeploymentHistoryLimit int32 = 100
 	maxDeploymentHistoryLimit     int32 = 500
+	deploymentInProgressMessage         = "application already has a queued or running deployment"
 )
 
 var imageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -87,7 +89,16 @@ func createDeploymentError(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return notFoundError("application not found")
 	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) && postgresError.Code == "23505" && postgresError.ConstraintName == "deployments_one_in_progress_per_application" {
+		return validationError(deploymentInProgressMessage)
+	}
 	return err
+}
+
+func isDeploymentInProgressError(err error) bool {
+	var validation validationError
+	return errors.As(err, &validation) && validation.Error() == deploymentInProgressMessage
 }
 
 func (s Server) cancelDeployment(w http.ResponseWriter, r *http.Request) {
@@ -326,8 +337,8 @@ func validateBlueGreenDeploymentTarget(application db.Application) error {
 }
 
 func validateBlueGreenHealthCheck(healthCheckURL pgtype.Text) error {
-	if !healthCheckURL.Valid || !strings.Contains(healthCheckURL.String, "{color}") {
-		return validationError("blue_green deployments require a health_check_url with {color}")
+	if !healthCheckURL.Valid || !strings.Contains(healthCheckURL.String, "{color}") || !strings.Contains(healthCheckURL.String, "{port}") {
+		return validationError("blue_green deployments require a health_check_url with {color} and {port}")
 	}
 	if err := validateHealthCheckURL(healthCheckURL.String); err != nil {
 		return validationError(err.Error())

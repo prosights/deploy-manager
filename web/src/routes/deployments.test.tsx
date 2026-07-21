@@ -1,9 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication } from '../lib/api'
-import { useDeploymentSelection } from '../store/deployments'
-import { useUiStore } from '../store/ui'
 import { DeploymentsRoute } from './deployments'
 
 const queryData = vi.hoisted(() => ({
@@ -34,539 +31,277 @@ const queryData = vi.hoisted(() => ({
   applications: [
     {
       id: 'app_1',
-      environment_id: 'env_1',
-      server_id: 'server_1',
-      name: 'api',
-      repository_url: null,
-      branch: 'main',
-      compose_path: 'docker-compose.yml',
-      remote_directory: '/srv/api',
-      domain: null,
-      health_check_url: null as string | null,
-      doppler_project: null,
-      doppler_config: null,
-      status: 'idle',
-      current_version: null,
-      target_version: null,
-      server_name: 'prod-1',
-      environment_name: 'Production',
-      environment_slug: 'production',
-      environment_kind: 'production',
-      environment_is_ephemeral: false,
       project_id: 'project_1',
-      project_name: 'Billing',
-      project_slug: 'billing',
-      default_registry_id: null,
-      default_registry_name: null,
-      github_auto_deploy: false,
+      name: 'api',
     },
     {
       id: 'app_2',
-      environment_id: 'env_2',
-      server_id: 'server_2',
+      project_id: 'project_2',
       name: 'worker',
-      repository_url: null,
-      branch: 'main',
-      compose_path: 'docker-compose.yml',
-      remote_directory: '/srv/worker',
-      domain: null,
-      health_check_url: 'http://127.0.0.1:{port}/healthz?color={color}' as string | null,
-      doppler_project: null,
-      doppler_config: null,
-      status: 'idle',
-      current_version: null,
-      target_version: null,
+    },
+  ],
+  githubRepositories: [
+    {
+      connector_id: 'github_1',
+      application_id: 'app_1',
+      repository: 'prosights/billing',
+      clone_url: 'https://github.com/prosights/billing.git',
+    },
+    {
+      connector_id: 'github_1',
+      application_id: 'app_2',
+      repository: 'prosights/internal',
+      clone_url: 'https://github.com/prosights/internal.git',
+    },
+  ],
+  githubCommits: {
+    abc123456789: {
+      sha: 'abc123456789',
+      message: 'Merge billing notifications\n\nIncludes invoice webhooks.',
+      author_name: 'Octo Cat',
+      author_login: 'octocat',
+      author_avatar_url: 'https://avatars.example.com/octocat.png',
+      html_url: 'https://github.com/prosights/billing/commit/abc123456789',
+    },
+  },
+  deployments: [
+    {
+      id: '11111111-1111-1111-1111-111111111111',
+      application_id: 'app_1',
+      server_id: 'server_1',
+      trigger: 'github_push',
+      strategy: 'blue_green',
+      status: 'running',
+      commit_sha: 'abc123456789',
+      commit_message: 'Add invoice webhooks',
+      image_ref: null,
+      image_digest: null,
+      actor: 'github-actions',
+      application_name: 'api',
+      server_name: 'prod-1',
+      environment_name: 'Production',
+      project_id: 'project_1',
+      project_name: 'Billing',
+      created_at: '2026-06-23T00:03:00Z',
+      started_at: '2026-06-23T00:03:01Z',
+      finished_at: null,
+    },
+    {
+      id: '22222222-2222-2222-2222-222222222222',
+      application_id: 'app_1',
+      server_id: 'server_1',
+      trigger: 'manual',
+      strategy: 'blue_green',
+      status: 'failed',
+      commit_sha: 'def567890123',
+      commit_message: 'Fix retry handling',
+      image_ref: null,
+      image_digest: null,
+      actor: 'local-user',
+      application_name: 'api',
+      server_name: 'prod-1',
+      environment_name: 'Production',
+      project_id: 'project_1',
+      project_name: 'Billing',
+      created_at: '2026-06-23T00:02:00Z',
+      started_at: '2026-06-23T00:02:01Z',
+      finished_at: '2026-06-23T00:02:02Z',
+    },
+    {
+      id: '33333333-3333-3333-3333-333333333333',
+      application_id: 'app_2',
+      server_id: 'server_2',
+      trigger: 'retry',
+      strategy: 'blue_green',
+      status: 'succeeded',
+      commit_sha: '987654321abc',
+      commit_message: 'Ship monthly digest',
+      image_ref: null,
+      image_digest: null,
+      actor: 'deploy-manager',
+      application_name: 'worker',
       server_name: 'prod-2',
       environment_name: 'Production',
-      environment_slug: 'production',
-      environment_kind: 'production',
-      environment_is_ephemeral: false,
       project_id: 'project_2',
       project_name: 'Internal',
-      project_slug: 'internal',
-      default_registry_id: null,
-      default_registry_name: null,
-      github_auto_deploy: false,
+      created_at: '2026-06-23T00:01:00Z',
+      started_at: '2026-06-23T00:01:01Z',
+      finished_at: '2026-06-23T00:01:02Z',
     },
-  ],
-  deploymentSlots: [
-    {
-      id: 'slot_blue',
-      application_id: 'app_1',
-      server_id: 'server_1',
-      color: 'blue',
-      deployment_id: 'deployment_1',
-      image_ref: 'registry.example.com/api:v1',
+    ...Array.from({ length: 10 }, (_, index) => ({
+      id: `${String(index + 4).padStart(8, '0')}-3333-3333-3333-333333333333`,
+      application_id: 'app_2',
+      server_id: 'server_2',
+      trigger: 'github_push' as const,
+      strategy: 'blue_green' as const,
+      status: 'succeeded' as const,
+      commit_sha: `987654321${String(index).padStart(3, '0')}`,
+      commit_message: `Worker release ${index + 4}`,
+      image_ref: null,
       image_digest: null,
-      status: 'active',
-      promoted_at: '2026-06-23T00:00:00Z',
-      created_at: '2026-06-23T00:00:00Z',
-      updated_at: '2026-06-23T00:00:00Z',
-    },
-    {
-      id: 'slot_green',
-      application_id: 'app_1',
-      server_id: 'server_1',
-      color: 'green',
-      deployment_id: 'deployment_2',
-      image_ref: 'registry.example.com/api:v0',
-      image_digest: null,
-      status: 'standby',
-      promoted_at: '2026-06-22T00:00:00Z',
-      created_at: '2026-06-22T00:00:00Z',
-      updated_at: '2026-06-22T00:00:00Z',
-    },
+      actor: 'deploy-manager',
+      application_name: 'worker',
+      server_name: 'prod-2',
+      environment_name: 'Production',
+      project_id: 'project_2',
+      project_name: 'Internal',
+      created_at: `2026-06-22T23:${String(59 - index).padStart(2, '0')}:00Z`,
+      started_at: `2026-06-22T23:${String(59 - index).padStart(2, '0')}:01Z`,
+      finished_at: `2026-06-22T23:${String(59 - index).padStart(2, '0')}:02Z`,
+    })),
   ],
-  registries: [],
 }))
 
-class MockEventSource {
-  static instances: MockEventSource[] = []
-
-  private listeners = new Map<string, Array<(event: MessageEvent) => void>>()
-  close = vi.fn()
-
-  constructor(readonly url: string) {
-    MockEventSource.instances.push(this)
-  }
-
-  addEventListener(type: string, listener: (event: MessageEvent) => void) {
-    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener])
-  }
-
-  emit(type: string, event = new MessageEvent(type)) {
-    for (const listener of this.listeners.get(type) ?? []) {
-      listener(event)
-    }
-  }
-}
-
-vi.mock('../lib/api', async () => {
-  const actual = await vi.importActual<typeof import('../lib/api')>('../lib/api')
-  return {
-    ...actual,
-    cancelDeployment: vi.fn(async (deploymentID: string) => ({ id: deploymentID, status: 'cancelled' })),
-    createDeployment: vi.fn(),
-    retryDeployment: vi.fn(async (deploymentID: string) => ({ id: deploymentID, status: 'queued' })),
-    rollbackApplication: vi.fn(async (applicationID: string) => ({ id: 'rollback_1', application_id: applicationID, status: 'queued' })),
-    updateApplication: vi.fn(async (_applicationID: string, input: object) => ({ ...queryData.applications[0], ...input })),
-  }
-})
-
 vi.mock('../lib/queries', () => ({
-  applicationsQuery: {
-    queryKey: ['applications'],
-    queryFn: async () => queryData.applications,
-  },
   projectsQuery: {
     queryKey: ['projects'],
     queryFn: async () => queryData.projects,
   },
+  applicationsQuery: {
+    queryKey: ['applications'],
+    queryFn: async () => queryData.applications,
+  },
   deploymentsQuery: {
     queryKey: ['deployments'],
-    queryFn: async () => [
-      {
-        id: 'deployment_1',
-        application_id: 'app_1',
-        server_id: 'server_1',
-        trigger: 'manual',
-        strategy: 'rolling',
-        status: 'queued',
-        commit_sha: null,
-        actor: 'local-user',
-        application_name: 'api',
-        server_name: 'prod-1',
-        environment_name: 'Production',
-        environment_slug: 'production',
-        environment_kind: 'production',
-        environment_is_ephemeral: false,
-        project_id: 'project_1',
-        project_name: 'Billing',
-        project_slug: 'billing',
-        created_at: '2026-06-23T00:00:00Z',
-        started_at: null,
-        finished_at: null,
-      },
-      {
-        id: 'deployment_2',
-        application_id: 'app_1',
-        server_id: 'server_1',
-        trigger: 'manual',
-        strategy: 'blue_green',
-        status: 'failed',
-        commit_sha: 'abc1234',
-        actor: 'local-user',
-        application_name: 'api',
-        server_name: 'prod-1',
-        environment_name: 'Production',
-        environment_slug: 'production',
-        environment_kind: 'production',
-        environment_is_ephemeral: false,
-        project_id: 'project_1',
-        project_name: 'Billing',
-        project_slug: 'billing',
-        created_at: '2026-06-23T00:00:00Z',
-        started_at: '2026-06-23T00:00:01Z',
-        finished_at: '2026-06-23T00:00:02Z',
-      },
-      {
-        id: 'deployment_3',
-        application_id: 'app_2',
-        server_id: 'server_2',
-        trigger: 'manual',
-        strategy: 'blue_green',
-        status: 'succeeded',
-        commit_sha: 'def5678',
-        actor: 'local-user',
-        application_name: 'worker',
-        server_name: 'prod-2',
-        environment_name: 'Production',
-        environment_slug: 'production',
-        environment_kind: 'production',
-        environment_is_ephemeral: false,
-        project_id: 'project_2',
-        project_name: 'Internal',
-        project_slug: 'internal',
-        created_at: '2026-06-23T00:00:00Z',
-        started_at: '2026-06-23T00:00:01Z',
-        finished_at: '2026-06-23T00:00:02Z',
-      },
-    ],
+    queryFn: async () => queryData.deployments,
   },
-  containerRegistriesQuery: {
-    queryKey: ['container-registries'],
-    queryFn: async () => queryData.registries,
+  githubRepositoriesQuery: {
+    queryKey: ['github-repositories'],
+    queryFn: async () => queryData.githubRepositories,
   },
-  deploymentSlotsQuery: () => ({
-    queryKey: ['applications', 'app_1', 'deployment-slots'],
-    queryFn: async () => queryData.deploymentSlots,
+  githubCommitQuery: (connectorID: string, repository: string, sha: string) => ({
+    queryKey: ['github-commit', connectorID, repository, sha],
+    queryFn: async () => queryData.githubCommits[sha as keyof typeof queryData.githubCommits] ?? {
+      sha,
+      message: '',
+      author_name: '',
+      author_login: '',
+      author_avatar_url: '',
+      html_url: '',
+    },
+    enabled: Boolean(connectorID && repository && sha),
   }),
-  deploymentLogsQuery: () => ({
-    queryKey: ['deployments', 'deployment_1', 'logs'],
+  buildRunsQuery: {
+    queryKey: ['build-runs'],
+    queryFn: async () => [],
+  },
+  proxyRoutesQuery: {
+    queryKey: ['proxy-routes'],
+    queryFn: async () => [],
+  },
+  deploymentSlotsQuery: (applicationID: string) => ({
+    queryKey: ['applications', applicationID, 'deployment-slots'],
     queryFn: async () => [],
   }),
 }))
 
+vi.mock('../features/deployments/logs', () => ({
+  useDeploymentLogs: () => ({ logs: [], live: false }),
+  DeploymentLogStream: () => null,
+}))
+
+function renderRoute() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={client}>
+      <DeploymentsRoute />
+    </QueryClientProvider>,
+  )
+}
+
 describe('DeploymentsRoute', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    MockEventSource.instances = []
     window.history.pushState(null, '', '/deployments')
-    queryData.applications[0].health_check_url = 'http://127.0.0.1:{port}/healthz?color={color}'
-    useDeploymentSelection.setState({ selectedDeploymentID: '' })
-    useUiStore.setState({ searchQuery: '', sidebarCollapsed: false })
   })
 
   afterEach(() => {
-    vi.unstubAllGlobals()
     cleanup()
   })
 
-  it('queues deployments by application target only', async () => {
-    const client = new QueryClient()
+  it('shows commit messages and GitHub attribution without the old history heading', async () => {
+    renderRoute()
 
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    fireEvent.change(await screen.findByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
-    fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
-
-    await waitFor(() => {
-      expect(createDeployment).toHaveBeenCalledWith(
-        expect.not.objectContaining({
-          server_id: expect.any(String),
-        }),
-      )
-      expect(createDeployment).toHaveBeenCalledWith(
-        expect.objectContaining({
-          application_id: 'app_1',
-          strategy: 'blue_green',
-        }),
-      )
-    })
+    expect(await screen.findByRole('combobox', { name: 'Project' })).toBeInTheDocument()
+    expect(screen.getByRole('table')).toBeInTheDocument()
+    for (const heading of ['Status', 'Commit', 'Service / Project', 'Strategy', 'Trigger', 'Deployed', 'SHA']) {
+      expect(screen.getByRole('columnheader', { name: heading })).toBeInTheDocument()
+    }
+    expect(screen.getAllByText('Billing').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('api').length).toBeGreaterThan(0)
+    expect(await screen.findByText('Merge billing notifications')).toBeInTheDocument()
+    expect((await screen.findByTitle('octocat')).querySelector('img')).toHaveAttribute('src', 'https://avatars.example.com/octocat.png')
+    expect(screen.getAllByText('via GitHub').length).toBeGreaterThan(0)
+    expect(screen.queryByText('History')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Past deployments/i)).not.toBeInTheDocument()
   })
 
-  it('omits blank optional deployment fields before queueing', async () => {
-    const client = new QueryClient()
+  it('opens a deployment directly with a link to its project', async () => {
+    renderRoute()
 
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Open deployment 22222222' }))
 
-    fireEvent.change(await screen.findByLabelText('Commit SHA'), { target: { value: ' ' } })
-    fireEvent.change(screen.getByLabelText('Actor'), { target: { value: ' ' } })
-    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
-    fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Go to project' })).toHaveAttribute('href', '/projects/project_1?service=app_1')
+    expect(window.location.search).toBe('?deployment=22222222-2222-2222-2222-222222222222')
 
-    await waitFor(() => {
-      expect(createDeployment).toHaveBeenCalledWith({
-        application_id: 'app_1',
-        trigger: 'manual',
-        strategy: 'blue_green',
-        commit_sha: undefined,
-        image_ref: 'ghcr.io/acme/api:1.0.0',
-        image_digest: undefined,
-        actor: undefined,
-      })
-    })
+    fireEvent.click(screen.getByRole('button', { name: 'Close deployment' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(window.location.search).toBe('')
   })
 
-  it('queues manual deployments with an optional pinned commit', async () => {
-    const client = new QueryClient()
+  it('searches deployment messages and metadata', async () => {
+    renderRoute()
 
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search deployments' }), { target: { value: 'monthly digest' } })
 
-    fireEvent.change(await screen.findByLabelText('Commit SHA'), { target: { value: 'abc1234' } })
-    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
-    fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
-
-    await waitFor(() => {
-      expect(createDeployment).toHaveBeenCalledWith(
-        expect.objectContaining({
-          application_id: 'app_1',
-          commit_sha: 'abc1234',
-        }),
-      )
-    })
+    expect(screen.getByText('Ship monthly digest')).toBeInTheDocument()
+    expect(screen.queryByText('Merge billing notifications')).not.toBeInTheDocument()
   })
 
-  it('rejects invalid pinned commits before queueing deployments', async () => {
-    const client = new QueryClient()
+  it('filters deployments by service', async () => {
+    renderRoute()
 
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Service' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'worker' }))
 
-    fireEvent.change(await screen.findByLabelText('Commit SHA'), { target: { value: 'not-a-sha' } })
-    fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
-
-    expect(await screen.findByText('Commit SHA must be 7 to 40 hexadecimal characters.')).toBeInTheDocument()
-    expect(createDeployment).not.toHaveBeenCalled()
+    expect(screen.getByText('Ship monthly digest')).toBeInTheDocument()
+    expect(screen.queryByText('Merge billing notifications')).not.toBeInTheDocument()
+    expect(screen.queryByText('Fix retry handling')).not.toBeInTheDocument()
   })
 
-  it('queues manual deployments with the entered actor', async () => {
-    const client = new QueryClient()
+  it('paginates the filtered deployment list', async () => {
+    renderRoute()
 
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
+    expect(await screen.findByText('Merge billing notifications')).toBeInTheDocument()
+    expect(screen.getByText('Showing 1–10 of 13')).toBeInTheDocument()
+    expect(screen.queryByText('Worker release 13')).not.toBeInTheDocument()
 
-    fireEvent.change(await screen.findByLabelText('Actor'), { target: { value: ' ali ' } })
-    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
-    fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
 
-    await waitFor(() => {
-      expect(createDeployment).toHaveBeenCalledWith(
-        expect.objectContaining({
-          actor: 'ali',
-        }),
-      )
-    })
+    expect(screen.getByText('Worker release 13')).toBeInTheDocument()
+    expect(screen.queryByText('Merge billing notifications')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled()
   })
 
-  it('rejects actor control characters before queueing deployments', async () => {
-    const client = new QueryClient()
+  it('filters the activity feed by project and keeps the filter in the URL', async () => {
+    renderRoute()
 
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    fireEvent.change(await screen.findByLabelText('Actor'), { target: { value: 'ali\troot' } })
-    fireEvent.change(screen.getByLabelText('Manual image ref'), { target: { value: 'ghcr.io/acme/api:1.0.0' } })
-    fireEvent.click(screen.getByRole('button', { name: /queue deploy/i }))
-
-    expect(await screen.findByText('Actor cannot contain control characters.')).toBeInTheDocument()
-    expect(createDeployment).not.toHaveBeenCalled()
-  })
-
-  it('requires a color-aware health check before queueing blue-green deployments', async () => {
-    queryData.applications[0].health_check_url = null
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    await screen.findByRole('button', { name: /queue deploy/i })
-
-    expect(screen.getByRole('button', { name: /queue deploy/i })).toBeDisabled()
-    expect(screen.getByText(/Configure a health check URL with/)).toBeInTheDocument()
-    expect(createDeployment).not.toHaveBeenCalled()
-  })
-
-  it('rejects unsafe blue-green health check URLs before queueing deployments', async () => {
-    queryData.applications[0].health_check_url = 'https://user:pass@example.com/{color}/health'
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    await screen.findByRole('button', { name: /queue deploy/i })
-
-    expect(screen.getByRole('button', { name: /queue deploy/i })).toBeDisabled()
-    expect(screen.getByText('Health check URL cannot include credentials.')).toBeInTheDocument()
-    expect(createDeployment).not.toHaveBeenCalled()
-  })
-
-  it('cancels queued deployments only through the cancel endpoint', async () => {
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    fireEvent.click(await screen.findByRole('button', { name: /cancel/i }))
-
-    await waitFor(() => {
-      expect(cancelDeployment).toHaveBeenCalledWith('deployment_1')
-    })
-    expect(createDeployment).not.toHaveBeenCalled()
-  })
-
-  it('retries failed deployments through the retry endpoint', async () => {
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    fireEvent.click(await screen.findByRole('button', { name: /retry/i }))
-
-    await waitFor(() => {
-      expect(retryDeployment).toHaveBeenCalledWith('deployment_2')
-    })
-    expect(createDeployment).not.toHaveBeenCalled()
-  })
-
-  it('scopes deployment history and queue targets to the selected project application', async () => {
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    expect(await screen.findByText('api deployments')).toBeInTheDocument()
-    expect(screen.getByText('Deployments are scoped to one application at a time.')).toBeInTheDocument()
-    expect(screen.getAllByText('api / prod-1')).not.toHaveLength(0)
-    expect(screen.queryByText('worker')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('combobox', { name: 'Project' }))
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Project' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Internal' }))
 
-    expect(await screen.findByText('worker deployments')).toBeInTheDocument()
-    expect(screen.getAllByText('worker')).not.toHaveLength(0)
+    await waitFor(() => {
+      expect(screen.queryByText('Merge billing notifications')).not.toBeInTheDocument()
+      expect(screen.getByText('Ship monthly digest')).toBeInTheDocument()
+    })
+    expect(window.location.search).toBe('?project=project_2')
   })
 
-  it('rolls back blue-green targets without changing the strategy dropdown first', async () => {
-    queryData.applications[0].health_check_url = 'http://127.0.0.1:{port}/healthz?color={color}'
-    const client = new QueryClient()
+  it('restores a project filter from the URL', async () => {
+    window.history.replaceState(null, '', '/deployments?project=project_1')
+    renderRoute()
 
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    fireEvent.click(await screen.findByRole('button', { name: /rollback to green/i }))
-
-    await waitFor(() => {
-      expect(rollbackApplication).toHaveBeenCalledWith('app_1')
-    })
-    expect(createDeployment).not.toHaveBeenCalled()
-  })
-
-  it('realigns the selected deployment when search filters it out', async () => {
-    useDeploymentSelection.setState({ selectedDeploymentID: 'deployment_2' })
-    useUiStore.setState({ searchQuery: 'queued' })
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    await waitFor(() => {
-      expect(useDeploymentSelection.getState().selectedDeploymentID).toBe('')
-    })
-  })
-
-  it('keeps the deployment log stream open across transient SSE errors', async () => {
-    vi.stubGlobal('EventSource', MockEventSource)
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    fireEvent.click(await screen.findAllByRole('button', { name: /inspect/i }).then((buttons) => buttons[0]))
-    await screen.findByText('live stream')
-    await waitFor(() => {
-      expect(MockEventSource.instances).toHaveLength(1)
-    })
-
-    expect(MockEventSource.instances[0].url).toBe('/api/deployments/deployment_1/events')
-    MockEventSource.instances[0].emit('error')
-    expect(MockEventSource.instances[0].close).not.toHaveBeenCalled()
-  })
-
-  it('deduplicates repeated live log events by id', async () => {
-    vi.stubGlobal('EventSource', MockEventSource)
-    const client = new QueryClient()
-
-    render(
-      <QueryClientProvider client={client}>
-        <DeploymentsRoute />
-      </QueryClientProvider>,
-    )
-
-    fireEvent.click(await screen.findAllByRole('button', { name: /inspect/i }).then((buttons) => buttons[0]))
-    await waitFor(() => {
-      expect(MockEventSource.instances).toHaveLength(1)
-    })
-
-    const event = new MessageEvent('log', {
-      data: JSON.stringify({
-        id: 42,
-        deployment_id: 'deployment_1',
-        stream: 'system',
-        message: 'Pulling compose images',
-        created_at: '2026-06-23T00:00:00Z',
-      }),
-    })
-    MockEventSource.instances[0].emit('log', event)
-    MockEventSource.instances[0].emit('log', event)
-
-    await waitFor(() => {
-      expect(screen.getAllByText('Pulling compose images')).toHaveLength(1)
-    })
+    expect(await screen.findByText('Merge billing notifications')).toBeInTheDocument()
+    expect(screen.getByText('Fix retry handling')).toBeInTheDocument()
+    expect(screen.queryByText('Ship monthly digest')).not.toBeInTheDocument()
   })
 })

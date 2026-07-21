@@ -1,23 +1,35 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"deploy-manager/internal/db"
 	deploymentpkg "deploy-manager/internal/deployments"
 	proxypkg "deploy-manager/internal/proxy"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var (
 	githubSSHRepositoryURL   = regexp.MustCompile(`^git@github\.com:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$`)
 	githubHTTPSRepositoryURL = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$`)
 )
+
+const applicationCleanupTimeout = 2 * time.Minute
+
+type applicationDeletionPlan struct {
+	application    db.Application
+	routes         []db.ListProxyRouteTargetsForApplicationRow
+	hasDeployments bool
+}
 
 func (s Server) listApplications(w http.ResponseWriter, r *http.Request) {
 	applications, err := s.queries.ListApplications(r.Context())
@@ -67,9 +79,18 @@ func (s Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	existing, err := s.queries.GetApplication(r.Context(), applicationID)
+	if err != nil {
+		writeError(w, applicationLookupError(err, "application not found"))
+		return
+	}
 	input.ID = applicationID
 	input, err = normalizeUpdateApplication(input)
 	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := validateApplicationServer(existing.ServerID, input.ServerID); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -101,12 +122,99 @@ func (s Server) deleteApplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, applicationLookupError(err, "application not found"))
 		return
 	}
-	if err := s.queries.DeleteApplication(r.Context(), applicationID); err != nil {
+	plan, err := s.prepareApplicationDeletion(r.Context(), application)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.cleanupApplication(r.Context(), plan); err != nil {
+		writeError(w, err)
+		return
+	}
+	tx, err := s.tx.Begin(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	if err := deleteApplicationRecords(r.Context(), s.queries.WithTx(tx), plan); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, err)
 		return
 	}
 	s.audit(r, "application.delete", "application", uuidString(application.ID), application.Name, map[string]any{"environment_id": uuidString(application.EnvironmentID), "server_id": uuidString(application.ServerID)})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s Server) prepareApplicationDeletion(ctx context.Context, application db.Application) (applicationDeletionPlan, error) {
+	state, err := s.queries.GetApplicationDeletionState(ctx, application.ID)
+	if err != nil {
+		return applicationDeletionPlan{}, err
+	}
+	if state.DeploymentInProgress {
+		return applicationDeletionPlan{}, validationError("wait for or cancel the active deployment before deleting the service")
+	}
+	routes, err := s.queries.ListProxyRouteTargetsForApplication(ctx, db.ListProxyRouteTargetsForApplicationParams{
+		ApplicationID: application.ID,
+		ServerID:      application.ServerID,
+	})
+	if err != nil {
+		return applicationDeletionPlan{}, err
+	}
+	return applicationDeletionPlan{application: application, routes: routes, hasDeployments: state.HasDeployments}, nil
+}
+
+func (s Server) cleanupApplication(ctx context.Context, plan applicationDeletionPlan) error {
+	removeRoute := false
+	for _, route := range plan.routes {
+		removeRoute = removeRoute || route.Status != "pending"
+	}
+	if !plan.hasDeployments && !removeRoute {
+		return nil
+	}
+
+	server, err := s.queries.GetServer(ctx, plan.application.ServerID)
+	if err != nil {
+		return fmt.Errorf("load server for service %q: %w", plan.application.Name, err)
+	}
+	cleanupCtx, cancel := context.WithTimeout(ctx, applicationCleanupTimeout)
+	defer cancel()
+	runner := s.remoteCommandRunner()
+
+	if plan.hasDeployments {
+		command, err := deploymentpkg.BuildComposeDownCommand(plan.application, plan.routes)
+		if err != nil {
+			return fmt.Errorf("prepare cleanup for service %q: %w", plan.application.Name, err)
+		}
+		if _, err := runner.Run(cleanupCtx, server, command); err != nil {
+			return fmt.Errorf("stop service %q on server %q: %w", plan.application.Name, server.Name, err)
+		}
+	}
+	for _, route := range plan.routes {
+		if route.Status == "pending" {
+			continue
+		}
+		command, err := proxypkg.BuildRemoveCommand(route.Domain, route.ProxyType)
+		if err != nil {
+			return fmt.Errorf("prepare domain cleanup for %q: %w", route.Domain, err)
+		}
+		if _, err := runner.Run(cleanupCtx, server, command); err != nil {
+			return fmt.Errorf("remove domain %q from server %q: %w", route.Domain, server.Name, err)
+		}
+	}
+	return nil
+}
+
+func deleteApplicationRecords(ctx context.Context, queries *db.Queries, plan applicationDeletionPlan) error {
+	for _, route := range plan.routes {
+		if err := queries.DeleteProxyRoute(ctx, route.ID); err != nil {
+			return err
+		}
+	}
+	return queries.DeleteApplication(ctx, plan.application.ID)
 }
 
 func normalizeCreateApplication(input db.CreateApplicationParams) (db.CreateApplicationParams, error) {
@@ -203,6 +311,13 @@ func normalizeUpdateApplication(input db.UpdateApplicationParams) (db.UpdateAppl
 	input.DopplerConfig = createInput.DopplerConfig
 	input.GithubAutoDeploy = createInput.GithubAutoDeploy
 	return input, nil
+}
+
+func validateApplicationServer(existing, requested pgtype.UUID) error {
+	if existing != requested {
+		return validationError("server_id cannot be changed; recreate the service on another server")
+	}
+	return nil
 }
 
 func applicationLookupError(err error, message string) error {

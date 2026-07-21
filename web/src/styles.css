@@ -50,6 +50,7 @@
   --radius-prosights-sm: var(--prosights-radius-sm);
   --radius-prosights-md: var(--prosights-radius-md);
   --radius-prosights-lg: var(--prosights-radius-lg);
+  --radius-prosights-xl: var(--prosights-radius-xl);
 }
 
 :root,
@@ -66,6 +67,7 @@ html.light {
   --prosights-radius-sm: 6px;
   --prosights-radius-md: 8px;
   --prosights-radius-lg: 10px;
+  --prosights-radius-xl: 12px;
 }
 
 html.dark {
@@ -122,6 +124,15 @@ select {
   font: inherit;
 }
 
+button,
+[role="button"] {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 :where(
   button,
   [role="button"],
@@ -156,6 +167,12 @@ select {
   border-radius: 4px;
   padding: 2px;
   background: rgba(255, 255, 255, 0.95);
+}
+
+.architecture-grid {
+  background-color: var(--prosights-canvas);
+  background-image: radial-gradient(color-mix(in srgb, var(--prosights-subtle) 42%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
 }
 
 html.light .logo-mark {

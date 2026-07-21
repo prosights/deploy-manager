@@ -15,6 +15,9 @@ services:
       SSH_KNOWN_HOSTS_PATH: /app/known_hosts
       DOPPLER_CLI_PATH: ${DOPPLER_CLI_PATH:-doppler}
       DOPPLER_CONFIG_DIR: /tmp/.doppler
+      # The stable control instance owns the deployment queue. Blue/green
+      # serving instances must never start competing workers.
+      DEPLOYMENT_WORKER_ENABLED: "false"
     ports:
       - "127.0.0.1:${DEPLOY_PORT:-3101}:8080"
     group_add:

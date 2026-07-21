@@ -1,391 +1,374 @@
-import { useMutation, useQuery, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PageHeader } from '../components/page-header'
-import { BlockError } from '../components/ui/error-message'
+import { useQuery, useSuspenseQueries } from '@tanstack/react-query'
+import { ArrowRight, GitCommitHorizontal, Github, Rocket, Search } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Panel } from '../components/ui/panel'
 import { SelectInput } from '../components/ui/select-input'
-import { cn } from '../lib/cn'
-import { blueGreenHealthCheckError, DeploymentList, DeploymentQueuePanel } from '../features/deployments/components'
-import { useDeploymentLogs } from '../features/deployments/logs'
-import { cancelDeployment, createDeployment, retryDeployment, rollbackApplication, updateApplication, type Application, type ContainerRegistry, type CreateDeploymentInput, type Deployment } from '../lib/api'
-import { applicationsQuery, containerRegistriesQuery, deploymentsQuery, deploymentSlotsQuery, projectsQuery } from '../lib/queries'
-import { matchesSearch } from '../lib/search'
-import { useDeploymentSelection } from '../store/deployments'
-import { useUiStore } from '../store/ui'
+import { statusTone } from '../features/status'
+import type { Deployment, GitHubCommitMetadata, GitHubRepository } from '../lib/api'
+import { applicationsQuery, buildRunsQuery, deploymentsQuery, githubCommitQuery, githubRepositoriesQuery, projectsQuery, proxyRoutesQuery } from '../lib/queries'
+import { ApplicationDrawer } from './project-detail'
 
-const manualRegistryID = '__manual__'
+const PAGE_SIZE = 10
 
-type DeploymentsRouteProps = {
-  projectId?: string
-  embedded?: boolean
-}
-
-export function DeploymentsRoute({ projectId, embedded = false }: DeploymentsRouteProps = {}) {
-  const queryClient = useQueryClient()
-  const [{ data: deployments }, { data: applications }, { data: registries }, { data: projects }] = useSuspenseQueries({
-    queries: [deploymentsQuery, applicationsQuery, containerRegistriesQuery, projectsQuery],
+export function DeploymentsRoute() {
+  const [{ data: deployments }, { data: applications }, { data: projects }, { data: githubRepositories }] = useSuspenseQueries({
+    queries: [deploymentsQuery, applicationsQuery, projectsQuery, githubRepositoriesQuery],
   })
-  const searchQuery = useUiStore((state) => state.searchQuery)
-  const selectedDeploymentID = useDeploymentSelection((state) => state.selectedDeploymentID)
-  const setSelectedDeploymentID = useDeploymentSelection((state) => state.setSelectedDeploymentID)
-  const [commitSha, setCommitSha] = useState('')
-  const [imageRef, setImageRef] = useState('')
-  const [registryOverrideID, setRegistryOverrideID] = useState<string | null>(null)
-  const [imageName, setImageName] = useState('')
-  const [imageTag, setImageTag] = useState('')
-  const [imageDigest, setImageDigest] = useState('')
-  const [healthCheckDraft, setHealthCheckDraft] = useState({ applicationID: '', value: '' })
-  const [actor, setActor] = useState('')
-  const [formError, setFormError] = useState<string>()
   const [scopeSearch, setScopeSearch] = useState(window.location.search)
-  const [embeddedApplicationID, setEmbeddedApplicationID] = useState('')
-  const projectIDFromURL = deploymentProjectIDFromSearch(scopeSearch)
-  const applicationIDFromURL = deploymentApplicationIDFromSearch(scopeSearch)
-  const selectedProjectID = validDeploymentProjectID(projectId ?? projectIDFromURL, projects)
-  const selectedProject = projects.find((project) => project.id === selectedProjectID)
+  const [query, setQuery] = useState('')
+  const [selectedServiceID, setSelectedServiceID] = useState('')
+  const [page, setPage] = useState(1)
+  const selectedDeploymentID = validDeploymentID(deploymentIDFromSearch(scopeSearch), deployments)
+  const selectedDeployment = deployments.find((deployment) => deployment.id === selectedDeploymentID)
+  const selectedApplication = applications.find((application) => application.id === selectedDeployment?.application_id)
+  const selectedProjectID = validProjectID(projectIDFromSearch(scopeSearch, selectedDeploymentID), projects)
   const applicationProjectIDs = useMemo(
     () => new Map(applications.map((application) => [application.id, application.project_id])),
     [applications],
   )
-  const scopedApplications = useMemo(
-    () => selectedProject
-      ? applications.filter((application) => application.project_id === selectedProject.id)
-      : [],
-    [applications, selectedProject],
+  const applicationsByID = useMemo(
+    () => new Map(applications.map((application) => [application.id, application])),
+    [applications],
   )
-  const selectedApplicationID = validDeploymentApplicationID(projectId ? embeddedApplicationID : applicationIDFromURL, scopedApplications)
-  const selectedApplication = useMemo(
-    () => scopedApplications.find((application) => application.id === selectedApplicationID),
-    [scopedApplications, selectedApplicationID],
+  const projectNamesByID = useMemo(
+    () => new Map(projects.map((project) => [project.id, project.name])),
+    [projects],
   )
-  const scopedProjectDeployments = useMemo(
-    () => selectedProject
-      ? deployments.filter((deployment) => deploymentProjectID(deployment, applicationProjectIDs) === selectedProject.id)
-      : [],
-    [applicationProjectIDs, deployments, selectedProject],
+  const githubRepositoriesByApplicationID = useMemo(
+    () => new Map(applications.flatMap((application) => {
+      const repository = githubRepositoryForApplication(application, githubRepositories)
+      return repository ? [[application.id, repository] as const] : []
+    })),
+    [applications, githubRepositories],
   )
-  const scopedDeployments = useMemo(
-    () => selectedApplicationID
-      ? scopedProjectDeployments.filter((deployment) => deployment.application_id === selectedApplicationID)
-      : scopedProjectDeployments,
-    [scopedProjectDeployments, selectedApplicationID],
+  const deploymentsInProject = useMemo(
+    () => deployments.filter((deployment) => {
+      if (!selectedProjectID) return true
+      return deploymentProjectID(deployment, applicationProjectIDs) === selectedProjectID
+    }),
+    [applicationProjectIDs, deployments, selectedProjectID],
   )
-  const applicationDeploymentCounts = useMemo(
-    () => deploymentCountsByApplication(scopedProjectDeployments),
-    [scopedProjectDeployments],
+  const serviceOptions = useMemo(
+    () => deploymentServiceOptions(deploymentsInProject, applications, projects),
+    [applications, deploymentsInProject, projects],
   )
-  const target = useMemo(
-    () => selectedApplication ?? scopedApplications[0],
-    [scopedApplications, selectedApplication],
+  const visibleDeployments = useMemo(
+    () => newestFirst(deploymentsInProject.filter((deployment) => {
+      return (!selectedServiceID || deployment.application_id === selectedServiceID)
+        && matchesDeploymentSearch(deployment, query)
+    })),
+    [deploymentsInProject, query, selectedServiceID],
   )
-  const visibleDeployments = scopedDeployments.filter((deployment) => matchesSearch(searchQuery, [
-    deployment.id,
-    deployment.application_name,
-    deployment.server_name,
-    deployment.project_name,
-    deployment.trigger,
-    deployment.strategy,
-    deployment.status,
-    deployment.commit_sha,
-    deployment.actor,
-  ]))
-  const selectedDeployment = useMemo(
-    () => visibleDeployments.find((deployment) => deployment.id === selectedDeploymentID),
-    [visibleDeployments, selectedDeploymentID],
-  )
-  const selectedDeploymentIDForLogs = selectedDeployment?.id
-  const effectiveRegistryID = registryOverrideID ?? target?.default_registry_id ?? manualRegistryID
-  const selectedRegistry = useMemo(
-    () => {
-      if (effectiveRegistryID === manualRegistryID) {
-        return undefined
-      }
-      return registries.find((registry) => registry.id === effectiveRegistryID)
-    },
-    [effectiveRegistryID, registries],
-  )
-  const { logs, live } = useDeploymentLogs(selectedDeploymentIDForLogs)
-  const { data: deploymentSlots = [] } = useQuery({
-    ...deploymentSlotsQuery(target?.id ?? ''),
-    enabled: Boolean(target?.id),
-  })
-  const healthCheckDraftValue = target && healthCheckDraft.applicationID === target.id ? healthCheckDraft.value : target?.health_check_url ?? ''
-  const applyDeploymentScope = useCallback((nextProjectID: string, applicationID?: string) => {
-    if (projectId) {
-      setEmbeddedApplicationID(applicationID ?? '')
-      return
-    }
-    setScopeSearch(replaceDeploymentScopeURL(nextProjectID, applicationID))
-  }, [projectId])
-  const deploy = useMutation({
-    mutationFn: () => {
-      if (!target) {
-        throw new Error('No application target is available')
-      }
-      return createDeployment(deploymentInput(target.id, commitSha, imageRef, selectedRegistry, imageName, imageTag, imageDigest, actor))
-    },
-    onSuccess: async () => {
-      setFormError(undefined)
-      await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
-      if (target) {
-        await queryClient.invalidateQueries({ queryKey: deploymentSlotsQuery(target.id).queryKey })
-      }
-    },
-  })
-  const cancel = useMutation({
-    mutationFn: (deploymentID: string) => cancelDeployment(deploymentID),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
-    },
-  })
-  const retry = useMutation({
-    mutationFn: (deploymentID: string) => retryDeployment(deploymentID),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
-    },
-  })
-  const saveHealthCheck = useMutation({
-    mutationFn: () => {
-      if (!target) {
-        throw new Error('No application target is available')
-      }
-      const error = blueGreenHealthCheckError(healthCheckDraftValue)
-      if (error) {
-        throw new Error(error)
-      }
-      return updateApplication(target.id, applicationUpdateInput(target, healthCheckDraftValue))
-    },
-    onSuccess: async (application) => {
-      setFormError(undefined)
-      setHealthCheckDraft({ applicationID: application.id, value: application.health_check_url ?? '' })
-      await queryClient.invalidateQueries({ queryKey: applicationsQuery.queryKey })
-    },
-  })
-  const rollback = useMutation({
-    mutationFn: () => {
-      if (!target) {
-        throw new Error('No application target is available')
-      }
-      return rollbackApplication(target.id)
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: deploymentsQuery.queryKey })
-      if (target) {
-        await queryClient.invalidateQueries({ queryKey: deploymentSlotsQuery(target.id).queryKey })
-      }
-    },
-  })
+  const pageCount = Math.max(1, Math.ceil(visibleDeployments.length / PAGE_SIZE))
+  const currentPage = Math.min(page, pageCount)
+  const pageDeployments = visibleDeployments.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const drawerProjectID = selectedDeployment ? deploymentProjectID(selectedDeployment, applicationProjectIDs) : undefined
+  const drawerProject = projects.find((project) => project.id === drawerProjectID)
+  const { data: buildRuns = [] } = useQuery({ ...buildRunsQuery, enabled: Boolean(selectedDeployment) })
+  const { data: proxyRoutes = [] } = useQuery({ ...proxyRoutesQuery, enabled: Boolean(selectedDeployment) })
 
-  useEffect(() => {
-    if (!visibleDeployments.length && selectedDeploymentID) {
-      setSelectedDeploymentID('')
-      return
-    }
-    if (selectedDeploymentID && !visibleDeployments.some((deployment) => deployment.id === selectedDeploymentID)) {
-      setSelectedDeploymentID('')
-    }
-  }, [selectedDeploymentID, setSelectedDeploymentID, visibleDeployments])
+  function closeDeployment() {
+    setScopeSearch(replaceDeploymentURL())
+  }
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title={selectedApplication ? `${selectedApplication.name} deployments` : selectedProject ? `${selectedProject.name} deployments` : 'Deployments'}
-        description={selectedApplication
-          ? `Deploy, inspect logs, and rollback ${selectedApplication.name} inside ${selectedProject?.name}.`
-          : 'Pick a project application to view its deploy queue, history, rollback slots, and logs.'}
-        actionNode={embedded
-          ? undefined
-          : (
-              <div className="w-full max-w-xs">
-                <SelectInput
-                  label="Project"
-                  value={selectedProjectID}
-                  onChange={(nextProjectID) => {
-                    applyDeploymentScope(nextProjectID)
-                    setRegistryOverrideID(null)
-                    setSelectedDeploymentID('')
-                  }}
-                >
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>{project.name}</option>
-                  ))}
-                </SelectInput>
-              </div>
-            )}
-      />
-      {selectedProject && (
-        <DeploymentApplicationScope
-          applications={scopedApplications}
-          selectedApplicationID={selectedApplicationID}
-          deploymentCounts={applicationDeploymentCounts}
-          onApplicationChange={(applicationID) => {
-            applyDeploymentScope(selectedProject.id, applicationID)
-            setRegistryOverrideID(null)
-            setSelectedDeploymentID('')
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex h-9 min-w-56 flex-1 items-center gap-2 rounded-prosights-md border border-prosights-border bg-prosights-surface px-3 text-prosights-muted focus-within:ring-2 focus-within:ring-prosights-ring sm:max-w-sm">
+          <Search className="size-4 shrink-0" aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Search deployments"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-prosights-text outline-none placeholder:text-prosights-subtle"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setPage(1)
+            }}
+            placeholder="Search deployments"
+          />
+        </label>
+        <SelectInput
+          label="Service"
+          labelHidden
+          className="w-full sm:w-56"
+          value={selectedServiceID}
+          onChange={(serviceID) => {
+            setSelectedServiceID(serviceID)
+            setPage(1)
           }}
+        >
+          <option value="">All services</option>
+          {serviceOptions.map((service) => <option key={service.id} value={service.id}>{service.label}</option>)}
+        </SelectInput>
+        <SelectInput
+          label="Project"
+          labelHidden
+          className="w-full sm:w-56"
+          value={selectedProjectID}
+          onChange={(projectID) => {
+            setScopeSearch(replaceProjectScopeURL(projectID))
+            setSelectedServiceID('')
+            setPage(1)
+          }}
+        >
+          <option value="">All projects</option>
+          {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+        </SelectInput>
+      </div>
+
+      <DeploymentList
+        deployments={pageDeployments}
+        githubRepositoriesByApplicationID={githubRepositoriesByApplicationID}
+        applicationsByID={applicationsByID}
+        projectNamesByID={projectNamesByID}
+        emptyMessage={query || selectedServiceID ? 'No deployments match these filters.' : 'No deployments yet. Open a service inside a project to deploy it.'}
+        onOpen={(deploymentID) => setScopeSearch(replaceDeploymentURL(deploymentID))}
+      />
+
+      {visibleDeployments.length > 0 && (
+        <Pagination
+          page={currentPage}
+          pageCount={pageCount}
+          total={visibleDeployments.length}
+          onPageChange={setPage}
         />
       )}
-      <DeploymentQueuePanel
-        applications={scopedApplications}
-        target={target}
-        deploymentSlots={deploymentSlots}
-        healthCheckDraft={healthCheckDraftValue}
-        commitSha={commitSha}
-        imageRef={imageRef}
-        imageName={imageName}
-        imageTag={imageTag}
-        selectedRegistry={selectedRegistry}
-        registries={registries}
-        imageDigest={imageDigest}
-        actor={actor}
-        isQueueing={deploy.isPending}
-        isRollingBack={rollback.isPending}
-        isSavingHealthCheck={saveHealthCheck.isPending}
-        onApplicationChange={(nextApplicationID) => {
-          if (selectedProject) {
-            applyDeploymentScope(selectedProject.id, nextApplicationID)
-          }
-          setRegistryOverrideID(null)
-          setSelectedDeploymentID('')
-        }}
-        onHealthCheckDraftChange={(value) => {
-          setHealthCheckDraft({ applicationID: target?.id ?? '', value })
-        }}
-        onSaveHealthCheck={() => saveHealthCheck.mutate()}
-        onCommitShaChange={setCommitSha}
-        onImageRefChange={setImageRef}
-        onRegistryChange={(value) => setRegistryOverrideID(value || manualRegistryID)}
-        onImageNameChange={setImageName}
-        onImageTagChange={setImageTag}
-        onImageDigestChange={setImageDigest}
-        onActorChange={setActor}
-        onQueue={() => {
-          setFormError(undefined)
-          try {
-            validateCommitSha(commitSha)
-            validateRegistryImage(selectedRegistry, imageName, imageTag, imageRef, target)
-            validateImageDigest(imageDigest)
-            validateDeploymentActor(actor)
-          } catch (error) {
-            setFormError(error instanceof Error ? error.message : 'Deployment request is invalid.')
-            return
-          }
-          deploy.mutate()
-        }}
-        onRollback={() => rollback.mutate()}
-      />
-      {!target && (
-        <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
-          {selectedProject ? `Create an application in ${selectedProject.name} before queueing a deployment.` : 'Create an application target before queueing a deployment.'}
-        </div>
+
+      {selectedDeployment && selectedApplication && drawerProjectID && (
+        <ApplicationDrawer
+          key={selectedDeployment.id}
+          application={selectedApplication}
+          deployment={selectedDeployment}
+          deployments={deployments.filter((deployment) => deployment.application_id === selectedApplication.id)}
+          buildRuns={buildRuns.filter((build) => build.application_id === selectedApplication.id)}
+          repository={githubRepositoriesByApplicationID.get(selectedApplication.id)}
+          routes={proxyRoutes.filter((route) => route.application_id === selectedApplication.id)}
+          projectConfigurationRevision={drawerProject?.configuration_revision ?? 0}
+          environments={[]}
+          servers={[]}
+          open
+          onSelectDeployment={(deploymentID) => setScopeSearch(replaceDeploymentURL(deploymentID))}
+          onBackToApplication={closeDeployment}
+          onOpenChange={(open) => {
+            if (!open) closeDeployment()
+          }}
+          projectHref={`/projects/${encodeURIComponent(drawerProjectID)}?service=${encodeURIComponent(selectedApplication.id)}`}
+        />
       )}
-      {(formError || deploy.error) && <BlockError message={formError ?? deploy.error?.message ?? 'Deployment could not be queued.'} />}
-      {saveHealthCheck.error && <BlockError message={saveHealthCheck.error.message} />}
-      <DeploymentList
-        deployments={visibleDeployments}
-        selectedDeployment={selectedDeployment}
-        selectedDeploymentLogs={logs}
-        selectedDeploymentLive={live}
-        isCancelling={cancel.isPending}
-        isRetrying={retry.isPending}
-        onInspect={(deploymentID) => setSelectedDeploymentID(selectedDeploymentID === deploymentID ? '' : deploymentID)}
-        onCancel={(deploymentID) => cancel.mutate(deploymentID)}
-        onRetry={(deploymentID) => retry.mutate(deploymentID)}
-      />
-      {cancel.error && <BlockError message={cancel.error.message} />}
-      {retry.error && <BlockError message={retry.error.message} />}
-      {rollback.error && <BlockError message={rollback.error.message} />}
     </div>
   )
 }
 
-function DeploymentApplicationScope({
-  applications,
-  selectedApplicationID,
-  deploymentCounts,
-  onApplicationChange,
+function DeploymentList({
+  deployments,
+  githubRepositoriesByApplicationID,
+  applicationsByID,
+  projectNamesByID,
+  emptyMessage,
+  onOpen,
 }: {
-  applications: Application[]
-  selectedApplicationID: string
-  deploymentCounts: Map<string, number>
-  onApplicationChange: (applicationID: string) => void
+  deployments: Deployment[]
+  githubRepositoriesByApplicationID: Map<string, GitHubRepository>
+  applicationsByID: Map<string, { name: string, project_id: string }>
+  projectNamesByID: Map<string, string>
+  emptyMessage: string
+  onOpen: (deploymentID: string) => void
 }) {
-  if (applications.length === 0) {
-    return (
-      <div className="rounded-md border bg-panel px-4 py-3 text-sm text-muted">
-        No applications exist in this project yet.
-      </div>
-    )
-  }
-
   return (
-    <section className="rounded-lg border bg-surface">
-      <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold text-ink">Project applications</h2>
-        <p className="mt-1 text-xs text-muted">Deployments are scoped to one application at a time.</p>
+    <Panel className="overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1180px] table-fixed text-left text-[12px]">
+          <colgroup>
+            <col className="w-[110px]" />
+            <col className="w-[320px]" />
+            <col className="w-[180px]" />
+            <col className="w-[125px]" />
+            <col className="w-[135px]" />
+            <col className="w-[145px]" />
+            <col className="w-[130px]" />
+            <col className="w-[48px]" />
+          </colgroup>
+          <thead className="text-[11px] text-prosights-muted">
+            <tr>
+              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium">Commit</th>
+              <th className="px-4 py-3 font-medium">Service / Project</th>
+              <th className="px-4 py-3 font-medium">Strategy</th>
+              <th className="px-4 py-3 font-medium">Trigger</th>
+              <th className="px-4 py-3 font-medium">Deployed</th>
+              <th className="px-4 py-3 font-medium">SHA</th>
+              <th className="px-2 py-3"><span className="sr-only">Action</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {deployments.map((deployment) => {
+              const application = applicationsByID.get(deployment.application_id)
+              const projectID = deployment.project_id ?? application?.project_id
+              return (
+                <DeploymentRow
+                  key={deployment.id}
+                  deployment={deployment}
+                  repository={githubRepositoriesByApplicationID.get(deployment.application_id)}
+                  projectName={deployment.project_name ?? (projectID ? projectNamesByID.get(projectID) : undefined) ?? '—'}
+                  serviceName={deployment.application_name ?? application?.name ?? '—'}
+                  onOpen={() => onOpen(deployment.id)}
+                />
+              )
+            })}
+          </tbody>
+        </table>
       </div>
-      <div className="flex gap-2 overflow-x-auto p-3">
-        {applications.map((application) => {
-          const active = application.id === selectedApplicationID
-          const deploymentCount = deploymentCounts.get(application.id) ?? 0
-          return (
-            <button
-              key={application.id}
-              type="button"
-              aria-pressed={active}
-              className={cn(
-                'min-w-56 rounded-md border px-3 py-2 text-left transition-colors hover:bg-panel',
-                active ? 'border-accent bg-accent/10 text-accent-text' : 'bg-background text-muted',
-              )}
-              onClick={() => onApplicationChange(application.id)}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-ink">{application.name}</div>
-                  <div className="mt-1 truncate text-xs">{application.environment_name} / {application.server_name}</div>
-                </div>
-                <div className="shrink-0 rounded-full bg-panel px-2 py-0.5 text-xs text-muted">{deploymentCount}</div>
-              </div>
-            </button>
-          )
-        })}
-      </div>
-    </section>
+      {deployments.length === 0 && <div className="border-t border-prosights-border px-4 py-8 text-center text-[12px] text-prosights-muted">{emptyMessage}</div>}
+    </Panel>
   )
 }
 
-function deploymentProjectIDFromSearch(search: string): string {
-  return new URLSearchParams(search).get('project') ?? ''
+function DeploymentRow({
+  deployment,
+  repository,
+  projectName,
+  serviceName,
+  onOpen,
+}: {
+  deployment: Deployment
+  repository?: GitHubRepository
+  projectName: string
+  serviceName: string
+  onOpen: () => void
+}) {
+  const { data: commitMetadata } = useQuery(githubCommitQuery(repository?.connector_id ?? '', repository?.repository ?? '', deployment.commit_sha ?? ''))
+  const title = deploymentTitle(deployment, commitMetadata?.message)
+  const deployedAt = deployment.finished_at ?? deployment.created_at
+
+  return (
+    <tr className="group cursor-pointer border-t border-prosights-border transition-colors hover:bg-prosights-surface-muted/60" onClick={onOpen}>
+      <td className="px-4 py-3">
+        <Badge tone={statusTone(deployment.status)} className="w-fit text-[10px] uppercase tracking-[0.06em]">{deployment.status}</Badge>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <SourceIdentity deployment={deployment} metadata={commitMetadata} />
+          <p className="truncate text-[13px] font-semibold text-prosights-text" title={title}>{title}</p>
+        </div>
+      </td>
+      <td className="px-4 py-3">
+        <div className="truncate font-medium text-prosights-text">{serviceName}</div>
+        <div className="mt-0.5 truncate text-[11px] text-prosights-muted">{projectName}</div>
+      </td>
+      <td className="px-4 py-3 capitalize text-prosights-muted">{deployment.strategy.replaceAll('_', '-')}</td>
+      <td className="px-4 py-3 text-prosights-muted">{triggerLabel(deployment.trigger)}</td>
+      <td className="px-4 py-3 text-prosights-muted">
+        <time dateTime={deployedAt} title={formatFullTime(deployedAt)}>{formatRelativeTime(deployedAt)}</time>
+      </td>
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-1.5 text-[12px] text-prosights-text">
+          <GitCommitHorizontal className="size-3.5 shrink-0 text-prosights-subtle" aria-hidden="true" />
+          <span className="truncate font-mono">{deployment.commit_sha?.slice(0, 10) ?? shortImageRef(deployment.image_ref) ?? deployment.id.slice(0, 8)}</span>
+        </div>
+      </td>
+      <td className="px-2 py-3 text-right">
+        <button
+          type="button"
+          aria-label={`Open deployment ${deployment.id.slice(0, 8)}`}
+          className="inline-flex size-8 items-center justify-center rounded-prosights-md text-prosights-subtle outline-none transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text focus-visible:ring-2 focus-visible:ring-prosights-ring"
+          onClick={(event) => {
+            event.stopPropagation()
+            onOpen()
+          }}
+        >
+          <ArrowRight className="size-4 transition-transform duration-150 group-hover:translate-x-0.5" aria-hidden="true" />
+        </button>
+      </td>
+    </tr>
+  )
 }
 
-function deploymentApplicationIDFromSearch(search: string): string {
-  return new URLSearchParams(search).get('service') ?? ''
+function SourceIdentity({ deployment, metadata }: { deployment: Deployment, metadata?: GitHubCommitMetadata }) {
+  const identity = metadata?.author_login || metadata?.author_name || triggerLabel(deployment.trigger)
+  const githubSource = deployment.trigger === 'github_push' || Boolean(deployment.commit_sha)
+
+  return (
+    <div className="relative flex size-9 shrink-0 items-center justify-center rounded-full border border-prosights-border bg-prosights-surface-muted text-[11px] font-semibold uppercase text-prosights-muted" title={identity}>
+      {metadata?.author_avatar_url
+        ? <img src={metadata.author_avatar_url} alt="" className="size-full rounded-full object-cover" />
+        : githubSource
+          ? <Github className="size-4" aria-hidden="true" />
+          : <Rocket className="size-4" aria-hidden="true" />}
+      {metadata?.author_avatar_url && deployment.trigger === 'github_push' && (
+        <span className="absolute -bottom-1 -right-1 flex size-4 items-center justify-center rounded-full bg-prosights-text text-prosights-surface ring-2 ring-prosights-surface">
+          <Github className="size-3" aria-hidden="true" />
+        </span>
+      )}
+    </div>
+  )
 }
 
-function validDeploymentProjectID(projectID: string, projects: Array<{ id: string }>): string {
-  if (projects.some((project) => project.id === projectID)) {
-    return projectID
-  }
-  return projects[0]?.id ?? ''
+function Pagination({
+  page,
+  pageCount,
+  total,
+  onPageChange,
+}: {
+  page: number
+  pageCount: number
+  total: number
+  onPageChange: (page: number) => void
+}) {
+  const first = (page - 1) * PAGE_SIZE + 1
+  const last = Math.min(page * PAGE_SIZE, total)
+
+  return (
+    <nav aria-label="Deployment pages" className="flex flex-wrap items-center justify-between gap-3 border-t border-prosights-border pt-4">
+      <p className="text-[11px] tabular-nums text-prosights-muted">Showing {first}–{last} of {total}</p>
+      <div className="flex items-center gap-2">
+        <Button type="button" disabled={page === 1} onClick={() => onPageChange(page - 1)}>Previous</Button>
+        <span className="min-w-16 text-center text-[11px] tabular-nums text-prosights-muted">{page} of {pageCount}</span>
+        <Button type="button" disabled={page === pageCount} onClick={() => onPageChange(page + 1)}>Next</Button>
+      </div>
+    </nav>
+  )
 }
 
-function validDeploymentApplicationID(applicationID: string, applications: Application[]): string {
-  if (applications.some((application) => application.id === applicationID)) {
-    return applicationID
-  }
-  return applications[0]?.id ?? ''
+function deploymentIDFromSearch(search: string): string {
+  return new URLSearchParams(search).get('deployment') ?? ''
 }
 
-function replaceDeploymentScopeURL(projectID: string, serviceID?: string): string {
-  const params = new URLSearchParams()
-  if (projectID) {
-    params.set('project', projectID)
-  }
-  if (serviceID) {
-    params.set('service', serviceID)
-  }
-  const suffix = params.toString()
-  const url = suffix ? `/deployments?${suffix}` : '/deployments'
-  window.history.replaceState(null, '', url)
+function validDeploymentID(deploymentID: string, deployments: Array<{ id: string }>): string {
+  return deployments.some((deployment) => deployment.id === deploymentID) ? deploymentID : ''
+}
+
+function projectIDFromSearch(search: string, selectedDeploymentID: string): string {
+  const params = new URLSearchParams(search)
+  return params.get('project') ?? (selectedDeploymentID ? '' : params.get('deployment')) ?? ''
+}
+
+function validProjectID(projectID: string, projects: Array<{ id: string }>): string {
+  return projects.some((project) => project.id === projectID) ? projectID : ''
+}
+
+function replaceProjectScopeURL(projectID: string): string {
+  const params = new URLSearchParams(window.location.search)
+  params.delete('deployment')
+  params.delete('service')
+  params.delete('view')
+  if (projectID) params.set('project', projectID)
+  else params.delete('project')
+  const search = params.toString()
+  window.history.replaceState(null, '', search ? `/deployments?${search}` : '/deployments')
+  return window.location.search
+}
+
+function replaceDeploymentURL(deploymentID?: string): string {
+  const params = new URLSearchParams(window.location.search)
+  params.delete('service')
+  params.delete('view')
+  if (deploymentID) params.set('deployment', deploymentID)
+  else params.delete('deployment')
+  const search = params.toString()
+  window.history.replaceState(null, '', search ? `/deployments?${search}` : '/deployments')
   return window.location.search
 }
 
@@ -393,135 +376,106 @@ function deploymentProjectID(deployment: Deployment, applicationProjectIDs: Map<
   return deployment.project_id ?? applicationProjectIDs.get(deployment.application_id)
 }
 
-function deploymentCountsByApplication(deployments: Deployment[]): Map<string, number> {
-  const counts = new Map<string, number>()
-  for (const deployment of deployments) {
-    counts.set(deployment.application_id, (counts.get(deployment.application_id) ?? 0) + 1)
-  }
-  return counts
+function newestFirst(deployments: Deployment[]): Deployment[] {
+  return [...deployments].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
 }
 
-function applicationUpdateInput(application: Application, healthCheckURL: string) {
-  return {
-    environment_id: application.environment_id,
-    server_id: application.server_id,
-    name: application.name,
-    repository_url: application.repository_url ?? undefined,
-    branch: application.branch,
-    compose_path: application.compose_path,
-    remote_directory: application.remote_directory,
-    domain: application.domain ?? undefined,
-    health_check_url: healthCheckURL.trim(),
-    doppler_project: application.doppler_project ?? undefined,
-    doppler_config: application.doppler_config ?? undefined,
-    github_auto_deploy: application.github_auto_deploy,
-  }
+function deploymentServiceOptions(
+  deployments: Deployment[],
+  applications: Array<{ id: string, name: string, project_id: string }>,
+  projects: Array<{ id: string, name: string }>,
+): Array<{ id: string, label: string }> {
+  const applicationByID = new Map(applications.map((application) => [application.id, application]))
+  const projectByID = new Map(projects.map((project) => [project.id, project.name]))
+  const deploymentByApplicationID = new Map(deployments.map((deployment) => [deployment.application_id, deployment]))
+  const services = [...deploymentByApplicationID.entries()].map(([id, deployment]) => {
+    const application = applicationByID.get(id)
+    const name = application?.name ?? deployment.application_name ?? 'Service'
+    const projectID = deployment.project_id ?? application?.project_id
+    return { id, name, projectName: projectID ? projectByID.get(projectID) : undefined }
+  })
+  const nameCounts = new Map<string, number>()
+  services.forEach((service) => nameCounts.set(service.name, (nameCounts.get(service.name) ?? 0) + 1))
+
+  return services
+    .map((service) => ({
+      id: service.id,
+      label: (nameCounts.get(service.name) ?? 0) > 1 && service.projectName
+        ? `${service.name} · ${service.projectName}`
+        : service.name,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label))
 }
 
-function deploymentInput(
-  applicationID: string,
-  commitSha: string,
-  imageRef: string,
-  registry: ContainerRegistry | undefined,
-  imageName: string,
-  imageTag: string,
-  imageDigest: string,
-  actor: string,
-): CreateDeploymentInput {
-  return {
-    application_id: applicationID,
-    trigger: 'manual',
-    strategy: 'blue_green',
-    commit_sha: optionalTrimmed(commitSha),
-    image_ref: registry ? resolvedImageRef(registry, imageName, imageTag) : optionalTrimmed(imageRef),
-    image_digest: optionalTrimmed(imageDigest),
-    actor: optionalTrimmed(actor),
-  }
+function matchesDeploymentSearch(deployment: Deployment, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase()
+  if (!normalizedQuery) return true
+
+  return [
+    deploymentTitle(deployment),
+    deployment.id,
+    deployment.commit_sha,
+    deployment.image_ref,
+    deployment.actor,
+    deployment.application_name,
+    deployment.project_name,
+    deployment.environment_name,
+    deployment.server_name,
+    deployment.status,
+    triggerLabel(deployment.trigger),
+  ].some((value) => value?.toLowerCase().includes(normalizedQuery))
 }
 
-function optionalTrimmed(value: string): string | undefined {
-  const trimmed = value.trim()
-  return trimmed ? trimmed : undefined
+function deploymentTitle(deployment: Deployment, fetchedMessage?: string): string {
+  const fetchedSubject = commitSubject(fetchedMessage)
+  if (fetchedSubject) return fetchedSubject
+  const commitMessage = deployment.commit_message?.trim()
+  if (commitMessage) return commitMessage
+  if (deployment.commit_sha) return `Commit ${deployment.commit_sha.slice(0, 10)}`
+  const imageRef = shortImageRef(deployment.image_ref)
+  if (imageRef) return `Deploy ${imageRef}`
+  return `Deployment ${deployment.id.slice(0, 8)}`
 }
 
-function validateCommitSha(value: string): void {
-  const commitSha = value.trim()
-  if (!commitSha) {
-    return
-  }
-  if (!/^[0-9A-Fa-f]{7,40}$/.test(commitSha)) {
-    throw new Error('Commit SHA must be 7 to 40 hexadecimal characters.')
-  }
+function commitSubject(message?: string): string {
+  return message?.split(/\r?\n/, 1)[0]?.trim() ?? ''
 }
 
-function validateRegistryImage(
-  registry: ContainerRegistry | undefined,
-  imageName: string,
-  imageTag: string,
-  manualRef: string,
-  target: Application | undefined,
-): void {
-  if (!registry) {
-    if (!manualRef.trim()) {
-      if (canBuildFromSource(target)) {
-        return
-      }
-      throw new Error('Provide an image ref, or configure the application with a repository and compose file to build from.')
-    }
-    validateImageRef(manualRef)
-    return
-  }
-  const image = cleanImagePath(imageName || registry.default_image)
-  if (!image || !imageTag.trim()) {
-    throw new Error('Image and tag are required when using a registry.')
-  }
-  validateImageRef(resolvedImageRef(registry, imageName, imageTag))
+function githubRepositoryForApplication(
+  application: { id: string, repository_url: string | null },
+  repositories: GitHubRepository[],
+): GitHubRepository | undefined {
+  return repositories.find((repository) => repository.application_id === application.id)
+    ?? repositories.find((repository) => !repository.application_id && repository.clone_url === application.repository_url)
 }
 
-// canBuildFromSource mirrors the backend rule: an application with a repository
-// and compose file can be built on the target VM, so no pinned image ref is
-// required for a deployment.
-function canBuildFromSource(target: Application | undefined): boolean {
-  return Boolean(target?.repository_url?.trim() && target?.compose_path?.trim())
+function shortImageRef(imageRef: string | null): string | undefined {
+  if (!imageRef) return undefined
+  const image = imageRef.split('/').at(-1)
+  return image && image.length > 28 ? `…${image.slice(-27)}` : image
 }
 
-function validateImageRef(value: string | undefined): void {
-  if (!value) {
-    return
-  }
-  const imageRef = value.trim()
-  if (!imageRef) {
-    return
-  }
-  if (imageRef.length > 512 || /\s/.test(imageRef)) {
-    throw new Error('Image ref must be 512 characters or fewer and cannot contain whitespace.')
-  }
+function triggerLabel(trigger: Deployment['trigger']): string {
+  if (trigger === 'github_push') return 'via GitHub'
+  if (trigger === 'connector_sync') return 'via connector'
+  return trigger.replaceAll('_', ' ')
 }
 
-function resolvedImageRef(registry: ContainerRegistry, imageName: string, imageTag: string): string {
-  return `${registryBasePath(registry)}/${cleanImagePath(imageName || registry.default_image)}:${imageTag.trim()}`
+function formatRelativeTime(value: string): string {
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp)) return 'Recently'
+  const seconds = Math.round((timestamp - Date.now()) / 1000)
+  const absoluteSeconds = Math.abs(seconds)
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+  if (absoluteSeconds < 60) return 'just now'
+  if (absoluteSeconds < 3600) return formatter.format(Math.round(seconds / 60), 'minute')
+  if (absoluteSeconds < 86_400) return formatter.format(Math.round(seconds / 3600), 'hour')
+  if (absoluteSeconds < 604_800) return formatter.format(Math.round(seconds / 86_400), 'day')
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp)
 }
 
-function registryBasePath(registry: ContainerRegistry): string {
-  return [registry.registry_host, registry.namespace, registry.repository].map(cleanImagePath).filter(Boolean).join('/')
-}
-
-function cleanImagePath(value: string): string {
-  return value.trim().replace(/^\/+|\/+$/g, '')
-}
-
-function validateImageDigest(value: string): void {
-  const imageDigest = value.trim()
-  if (!imageDigest) {
-    return
-  }
-  if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest)) {
-    throw new Error('Image digest must be a sha256 digest.')
-  }
-}
-
-function validateDeploymentActor(value: string): void {
-  if (value.includes('\n') || value.includes('\r') || value.includes('\t')) {
-    throw new Error('Actor cannot contain control characters.')
-  }
+function formatFullTime(value: string): string {
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp)) return value
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
 }

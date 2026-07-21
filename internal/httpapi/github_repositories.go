@@ -3,16 +3,21 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"path"
+	"sort"
 	"strconv"
 	"strings"
 
 	"deploy-manager/internal/db"
+	"deploy-manager/internal/deployments"
 	"deploy-manager/internal/githubconnector"
 	"deploy-manager/internal/stringutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"gopkg.in/yaml.v3"
 )
 
 type githubRepositoryResponse struct {
@@ -81,18 +86,27 @@ type githubRepositorySyncResponse struct {
 }
 
 type githubDetectedService struct {
-	Name        string                `json:"name"`
-	Root        string                `json:"root"`
-	ComposePath string                `json:"compose_path"`
-	PathFilters []string              `json:"path_filters"`
-	Images      []githubDetectedImage `json:"images"`
+	Name            string                 `json:"name"`
+	Root            string                 `json:"root"`
+	ComposePath     string                 `json:"compose_path"`
+	PathFilters     []string               `json:"path_filters"`
+	ComposeServices []githubComposeService `json:"compose_services"`
 }
 
-type githubDetectedImage struct {
-	Name         string `json:"name"`
-	ImageRef     string `json:"image_ref"`
-	BuildContext string `json:"build_context"`
-	Dockerfile   string `json:"dockerfile"`
+type githubComposeService struct {
+	Name         string              `json:"name"`
+	Image        string              `json:"image,omitempty"`
+	BuildContext string              `json:"build_context,omitempty"`
+	Dockerfile   string              `json:"dockerfile,omitempty"`
+	Ports        []githubComposePort `json:"ports"`
+	DependsOn    []string            `json:"depends_on"`
+}
+
+type githubComposePort struct {
+	ContainerPort int    `json:"container_port"`
+	PublishedPort int    `json:"published_port,omitempty"`
+	Protocol      string `json:"protocol,omitempty"`
+	Variable      string `json:"variable,omitempty"`
 }
 
 type githubDetectServicesResponse struct {
@@ -102,12 +116,14 @@ type githubDetectServicesResponse struct {
 }
 
 type githubImportServicesRequest struct {
-	ConnectorID   string   `json:"connector_id"`
-	Repository    string   `json:"repository"`
-	Branch        string   `json:"branch"`
-	EnvironmentID string   `json:"environment_id"`
-	ServerID      string   `json:"server_id"`
-	Services      []string `json:"services"`
+	ConnectorID   string                  `json:"connector_id"`
+	Repository    string                  `json:"repository"`
+	Branch        string                  `json:"branch"`
+	Root          string                  `json:"root"`
+	EnvironmentID string                  `json:"environment_id"`
+	ServerID      string                  `json:"server_id"`
+	Services      []string                `json:"services"`
+	Detected      []githubDetectedService `json:"detected_services"`
 }
 
 type githubImportServicesResponse struct {
@@ -246,6 +262,11 @@ func (s Server) detectGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 	connectorID := strings.TrimSpace(r.URL.Query().Get("connector_id"))
 	repositoryName := strings.TrimSpace(r.URL.Query().Get("repository"))
 	branch := strings.TrimSpace(r.URL.Query().Get("branch"))
+	root, err := normalizeRepositoryRoot(r.URL.Query().Get("root"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	if branch == "" {
 		branch = "main"
 	}
@@ -276,7 +297,7 @@ func (s Server) detectGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 		writeError(w, validationError("repository has no github installation"))
 		return
 	}
-	services, err := s.detectRepositoryServices(r, repository)
+	services, err := s.detectRepositoryServices(r, repository, root)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -338,6 +359,57 @@ func (s Server) listGitHubRepositoryBranches(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+func (s Server) getGitHubRepositoryCommit(w http.ResponseWriter, r *http.Request) {
+	if s.github.App == nil {
+		writeError(w, validationError("github app is not configured"))
+		return
+	}
+	connectorID := strings.TrimSpace(r.URL.Query().Get("connector_id"))
+	repositoryName := strings.TrimSpace(r.URL.Query().Get("repository"))
+	sha := strings.TrimSpace(r.URL.Query().Get("sha"))
+	if connectorID == "" || repositoryName == "" || sha == "" {
+		writeError(w, validationError("connector_id, repository, and sha are required"))
+		return
+	}
+	if !deployments.ValidCommitSHA(sha) {
+		writeError(w, validationError("sha must be a 7 to 40 character hexadecimal commit"))
+		return
+	}
+	id, err := stringutil.PgUUID(connectorID)
+	if err != nil {
+		writeError(w, validationError("connector_id must be a uuid"))
+		return
+	}
+	account, err := s.queries.GetConnectorAccount(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, notFoundError("connector not found"))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	if account.Provider != "github" || !account.Enabled {
+		writeError(w, validationError("connector must be an enabled github connector"))
+		return
+	}
+	repository, err := githubConnectorRepositoryAnyBranch(account.Config, repositoryName)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if repository.InstallationID == "" {
+		writeError(w, validationError("repository has no github installation"))
+		return
+	}
+	commit, err := s.github.App.GetRepositoryCommit(r.Context(), repository.InstallationID, repository.Repository, sha)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, commit)
+}
+
 func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Request) {
 	projectID, err := parseUUIDParam(r, "projectID")
 	if err != nil {
@@ -352,6 +424,11 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 	request.Branch = strings.TrimSpace(request.Branch)
 	if request.Branch == "" {
 		request.Branch = "main"
+	}
+	request.Root, err = normalizeRepositoryRoot(request.Root)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 	connectorID, err := stringutil.PgUUID(request.ConnectorID)
 	if err != nil {
@@ -386,15 +463,6 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 		writeError(w, applicationLookupError(err, "project not found"))
 		return
 	}
-	if !project.DefaultRegistryID.Valid {
-		writeError(w, validationError("configure the project registry before importing GitHub services"))
-		return
-	}
-	registry, err := s.queries.GetContainerRegistry(r.Context(), project.DefaultRegistryID)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
 	account, err := s.queries.GetConnectorAccount(r.Context(), connectorID)
 	if err != nil {
 		writeError(w, applicationLookupError(err, "connector not found"))
@@ -405,14 +473,24 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 		writeError(w, err)
 		return
 	}
-	services, err := s.detectRepositoryServices(r, repository)
-	if err != nil {
-		writeError(w, err)
+	services := request.Detected
+	if len(services) == 0 {
+		writeError(w, validationError("scan repository before importing services"))
 		return
 	}
 	selected := selectedServiceNames(request.Services)
 	applications := make([]db.Application, 0, len(services))
-	targets := make([]githubconnector.Repository, 0, len(services))
+	if s.tx == nil {
+		writeError(w, errors.New("database transactions are unavailable"))
+		return
+	}
+	tx, err := s.tx.Begin(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+	queries := s.queries.WithTx(tx)
 	for _, service := range services {
 		if len(selected) > 0 && !selected[service.Name] {
 			continue
@@ -424,55 +502,57 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 			RepositoryUrl:    blankStringAsText("https://github.com/" + repository.Repository + ".git"),
 			Branch:           repository.Branch,
 			ComposePath:      service.ComposePath,
-			RemoteDirectory:  "/srv/deploy-manager/apps/" + environment.Slug + "/" + service.Name,
-			HealthCheckUrl:   blankStringAsText("http://127.0.0.1:{port}/healthz"),
+			RemoteDirectory:  "/srv/deploy-manager/apps/" + project.Slug + "/" + environment.Slug + "/" + service.Name,
+			HealthCheckUrl:   blankStringAsText("http://127.0.0.1:{port}/?color={color}"),
 			GithubAutoDeploy: true,
 		})
 		if err != nil {
 			writeError(w, err)
 			return
 		}
-		app, err := s.queries.CreateApplication(r.Context(), input)
+		app, err := queries.CreateApplication(r.Context(), input)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
+		if len(service.ComposeServices) > 0 {
+			metadata, err := json.Marshal(service.ComposeServices)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			app, err = queries.UpdateApplicationComposeServices(r.Context(), db.UpdateApplicationComposeServicesParams{
+				ID:              app.ID,
+				ComposeServices: metadata,
+			})
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+		}
 		applications = append(applications, app)
-		targets = append(targets, githubBuildTargetForService(repository, app, service, registry))
 	}
 	if len(applications) == 0 {
 		writeError(w, validationError("no detected services selected"))
 		return
 	}
-	config, err := githubConfigWithBuildTargets(account.Config, targets)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	input, err := normalizeConnectorAccount(db.UpsertConnectorAccountParams{
-		Provider: account.Provider,
-		Name:     account.Name,
-		Enabled:  account.Enabled,
-		Config:   config,
-	})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	updated, err := s.queries.UpsertConnectorAccount(r.Context(), input)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	updated := account
 	// First import wires the project to its source repository so the project
 	// page shows one repo/branch of record.
 	if !project.RepositoryFullName.Valid {
-		_, _ = s.queries.UpdateProjectRepository(r.Context(), db.UpdateProjectRepositoryParams{
+		if _, err := queries.UpdateProjectRepository(r.Context(), db.UpdateProjectRepositoryParams{
 			ID:                    projectID,
 			RepositoryConnectorID: account.ID,
 			RepositoryFullName:    blankStringAsText(repository.Repository),
 			RepositoryBranch:      blankStringAsText(repository.Branch),
-		})
+		}); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, err)
+		return
 	}
 	s.audit(r, "github.services_import", "project", uuidString(project.ID), project.Name, map[string]any{
 		"repository": repository.Repository,
@@ -492,77 +572,29 @@ func selectedServiceNames(values []string) map[string]bool {
 	return selected
 }
 
-func githubBuildTargetForService(repository githubconnector.Repository, app db.Application, service githubDetectedService, registry db.ContainerRegistry) githubconnector.Repository {
-	images := service.Images
-	for index := range images {
-		images[index].ImageRef = registryImageRef(registry, images[index].Name)
-	}
-	matrix, _ := json.Marshal(images)
-	target := repository
-	target.ApplicationID = uuidString(app.ID)
-	target.ApplicationName = app.Name
-	target.WorkflowID = "deploy-manager-monorepo-gar.yml"
-	target.PathFilters = service.PathFilters
-	target.BuildMatrix = string(matrix)
-	target.BuildContext = service.Root
-	target.Dockerfile = service.Images[0].Dockerfile
-	target.ImageRef = images[0].ImageRef
-	if target.Runner == "" || target.Runner == "ubuntu-latest" {
-		target.Runner = "linux_32_core"
-	}
-	return target
-}
-
-func registryImageRef(registry db.ContainerRegistry, imageName string) string {
-	parts := []string{registry.RegistryHost, registry.Namespace, registry.Repository, imageName}
-	cleaned := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.Trim(strings.TrimSpace(part), "/")
-		if part != "" {
-			cleaned = append(cleaned, part)
-		}
-	}
-	return strings.Join(cleaned, "/") + ":sha-${SHORT_SHA}"
-}
-
-func githubConfigWithBuildTargets(raw []byte, targets []githubconnector.Repository) ([]byte, error) {
-	cfg, err := githubconnector.ParseConfig(raw)
-	if err != nil {
-		return nil, validationError("github connector config " + err.Error())
-	}
-	repositories := make([]githubconnector.Repository, 0, len(cfg.Repositories)+len(targets))
-	for _, existing := range cfg.Repositories {
-		replace := false
-		for _, target := range targets {
-			if strings.EqualFold(existing.Repository, target.Repository) && existing.Branch == target.Branch {
-				if existing.ApplicationID == "" && existing.ApplicationName == "" {
-					replace = true
-					break
-				}
-				if existing.ApplicationID == target.ApplicationID || (existing.ApplicationName != "" && strings.EqualFold(existing.ApplicationName, target.ApplicationName)) {
-					replace = true
-					break
-				}
-			}
-		}
-		if !replace {
-			repositories = append(repositories, existing)
-		}
-	}
-	repositories = append(repositories, targets...)
-	config := struct {
-		InstallationID string                       `json:"installation_id,omitempty"`
-		Repositories   []githubconnector.Repository `json:"repositories"`
-	}{InstallationID: cfg.InstallationID, Repositories: repositories}
-	return json.Marshal(config)
-}
-
-func (s Server) detectRepositoryServices(r *http.Request, repository githubconnector.Repository) ([]githubDetectedService, error) {
-	root, err := s.github.App.ListRepositoryContents(r.Context(), repository.InstallationID, repository.Repository, "", repository.Branch)
+func (s Server) detectRepositoryServices(r *http.Request, repository githubconnector.Repository, rootDirectory string) ([]githubDetectedService, error) {
+	root, err := s.github.App.ListRepositoryContents(r.Context(), repository.InstallationID, repository.Repository, rootDirectory, repository.Branch)
 	if err != nil {
 		return nil, err
 	}
 	services := make([]githubDetectedService, 0)
+	if composePath := detectedComposePath(root); composePath != "" {
+		composeServices, err := s.detectComposeServices(r, repository, composePath)
+		if err != nil {
+			return nil, err
+		}
+		serviceName := repositoryServiceName(repository.Repository)
+		if rootDirectory != "" {
+			serviceName = path.Base(rootDirectory)
+		}
+		services = append(services, githubDetectedService{
+			Name:            serviceName,
+			Root:            displayRepositoryRoot(rootDirectory),
+			ComposePath:     composePath,
+			PathFilters:     repositoryPathFilters(rootDirectory),
+			ComposeServices: composeServices,
+		})
+	}
 	for _, item := range root {
 		if item.Type != "dir" || item.Name == "" {
 			continue
@@ -572,49 +604,266 @@ func (s Server) detectRepositoryServices(r *http.Request, repository githubconne
 			continue
 		}
 		if composePath := detectedComposePath(children); composePath != "" {
+			composeServices, err := s.detectComposeServices(r, repository, composePath)
+			if err != nil {
+				return nil, err
+			}
 			services = append(services, githubDetectedService{
-				Name:        item.Name,
-				Root:        item.Path,
-				ComposePath: composePath,
-				PathFilters: []string{item.Path + "/**"},
-				Images:      s.detectServiceImages(r, repository, item.Path, children, ""),
+				Name:            item.Name,
+				Root:            item.Path,
+				ComposePath:     composePath,
+				PathFilters:     []string{item.Path + "/**"},
+				ComposeServices: composeServices,
 			})
 		}
 	}
 	return services, nil
 }
 
-func (s Server) detectServiceImages(r *http.Request, repository githubconnector.Repository, root string, contents []githubconnector.RepositoryContent, imageBase string) []githubDetectedImage {
-	images := make([]githubDetectedImage, 0)
-	for _, item := range contents {
-		if item.Type == "file" && item.Name == "Dockerfile" {
-			name := strings.Trim(strings.ReplaceAll(root, "/", "-"), "-")
-			if imageBase != "" {
-				name = imageBase
+func normalizeRepositoryRoot(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "." {
+		return "", nil
+	}
+	if strings.HasPrefix(value, "/") || strings.Contains(value, "\\") || strings.ContainsAny(value, "\r\n\t") {
+		return "", validationError("root must be a relative repository directory")
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == ".." {
+			return "", validationError("root must not contain '..'")
+		}
+	}
+	value = strings.Trim(path.Clean(value), "/")
+	if value == "." {
+		return "", nil
+	}
+	return value, nil
+}
+
+func displayRepositoryRoot(root string) string {
+	if root == "" {
+		return "."
+	}
+	return root
+}
+
+func repositoryPathFilters(root string) []string {
+	if root == "" {
+		return []string{"**"}
+	}
+	return []string{root + "/**"}
+}
+
+type composeDocument struct {
+	Services map[string]composeService `yaml:"services"`
+}
+
+type composeService struct {
+	Image     string      `yaml:"image"`
+	Build     yaml.Node   `yaml:"build"`
+	Ports     []yaml.Node `yaml:"ports"`
+	Expose    []yaml.Node `yaml:"expose"`
+	DependsOn yaml.Node   `yaml:"depends_on"`
+}
+
+func (s Server) detectComposeServices(r *http.Request, repository githubconnector.Repository, composePath string) ([]githubComposeService, error) {
+	contents, err := s.github.App.GetRepositoryFile(r.Context(), repository.InstallationID, repository.Repository, composePath, repository.Branch)
+	if err != nil {
+		return nil, err
+	}
+	var document composeDocument
+	if err := yaml.Unmarshal(contents, &document); err != nil {
+		return nil, validationError("invalid compose file " + composePath + ": " + err.Error())
+	}
+	services := make([]githubComposeService, 0, len(document.Services))
+	for name, service := range document.Services {
+		buildContext, dockerfile := composeBuild(service.Build)
+		ports := make([]githubComposePort, 0, len(service.Ports)+len(service.Expose))
+		seenPorts := make(map[string]bool)
+		for _, port := range append(service.Ports, service.Expose...) {
+			if value, ok := composePort(port); ok {
+				key := fmt.Sprintf("%d/%s", value.ContainerPort, value.Protocol)
+				if seenPorts[key] {
+					continue
+				}
+				seenPorts[key] = true
+				ports = append(ports, value)
 			}
-			images = append(images, githubDetectedImage{Name: name, BuildContext: root, Dockerfile: item.Path})
-			continue
 		}
-		if item.Type != "dir" {
-			continue
+		dependsOn := composeDependencies(service.DependsOn)
+		sort.Strings(dependsOn)
+		services = append(services, githubComposeService{
+			Name:         name,
+			Image:        service.Image,
+			BuildContext: buildContext,
+			Dockerfile:   dockerfile,
+			Ports:        ports,
+			DependsOn:    dependsOn,
+		})
+	}
+	sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
+	return services, nil
+}
+
+func composeBuild(node yaml.Node) (string, string) {
+	if node.Kind == yaml.ScalarNode {
+		return node.Value, ""
+	}
+	if node.Kind == yaml.MappingNode {
+		return yamlMapValue(node, "context"), yamlMapValue(node, "dockerfile")
+	}
+	return "", ""
+}
+
+func composePort(node yaml.Node) (githubComposePort, bool) {
+	if node.Kind == yaml.ScalarNode {
+		value := node.Value
+		protocol := ""
+		if slash := strings.LastIndex(value, "/"); slash >= 0 {
+			protocol = value[slash+1:]
+			value = value[:slash]
 		}
-		children, err := s.github.App.ListRepositoryContents(r.Context(), repository.InstallationID, repository.Repository, item.Path, repository.Branch)
-		if err != nil {
-			continue
+		containerValue, publishedValue, hasPublished := splitComposePort(value)
+		containerPort, err := strconv.Atoi(containerValue)
+		if err != nil || containerPort < 1 || containerPort > 65535 {
+			return githubComposePort{}, false
 		}
-		for _, child := range children {
-			if child.Type == "file" && child.Name == "Dockerfile" {
-				name := strings.Trim(strings.ReplaceAll(item.Path, "/", "-"), "-")
-				images = append(images, githubDetectedImage{Name: name, BuildContext: root, Dockerfile: child.Path})
-				break
+		port := githubComposePort{ContainerPort: containerPort, Protocol: protocol}
+		if hasPublished {
+			publishedPort, variable, ok := composePublishedPort(publishedValue)
+			if !ok {
+				return githubComposePort{}, false
+			}
+			port.PublishedPort = publishedPort
+			port.Variable = variable
+		}
+		return port, true
+	}
+	if node.Kind != yaml.MappingNode {
+		return githubComposePort{}, false
+	}
+	target, err := strconv.Atoi(yamlMapValue(node, "target"))
+	if err != nil || target < 1 || target > 65535 {
+		return githubComposePort{}, false
+	}
+	port := githubComposePort{ContainerPort: target, Protocol: yamlMapValue(node, "protocol")}
+	if published := yamlMapValue(node, "published"); published != "" {
+		value, variable, ok := composePublishedPort(published)
+		if !ok {
+			return githubComposePort{}, false
+		}
+		port.PublishedPort = value
+		port.Variable = variable
+	}
+	return port, true
+}
+
+func splitComposePort(value string) (container string, published string, hasPublished bool) {
+	separator := lastComposePortSeparator(value)
+	if separator < 0 {
+		return value, "", false
+	}
+	container = value[separator+1:]
+	prefix := value[:separator]
+	if separator = lastComposePortSeparator(prefix); separator >= 0 {
+		prefix = prefix[separator+1:]
+	}
+	return container, prefix, true
+}
+
+func lastComposePortSeparator(value string) int {
+	curly, square := 0, 0
+	for index := len(value) - 1; index >= 0; index-- {
+		switch value[index] {
+		case '}':
+			curly++
+		case '{':
+			curly--
+		case ']':
+			square++
+		case '[':
+			square--
+		case ':':
+			if curly == 0 && square == 0 {
+				return index
 			}
 		}
 	}
-	if len(images) == 0 {
-		name := strings.Trim(strings.ReplaceAll(root, "/", "-"), "-")
-		images = append(images, githubDetectedImage{Name: name, BuildContext: root, Dockerfile: root + "/Dockerfile"})
+	return -1
+}
+
+func composePublishedPort(value string) (int, string, bool) {
+	value = strings.TrimSpace(value)
+	variable := ""
+	fallback := ""
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		contents := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+		variable, fallback, _ = strings.Cut(contents, ":-")
+	} else if strings.HasPrefix(value, "$") {
+		variable = strings.TrimPrefix(value, "$")
+	} else {
+		fallback = value
 	}
-	return images
+	if variable != "" && !validComposeVariable(variable) {
+		return 0, "", false
+	}
+	if fallback == "" {
+		return 0, variable, variable != ""
+	}
+	port, err := strconv.Atoi(fallback)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, "", false
+	}
+	return port, variable, true
+}
+
+func validComposeVariable(value string) bool {
+	for index, char := range value {
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || char == '_' || (index > 0 && char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return value != ""
+}
+
+func composeDependencies(node yaml.Node) []string {
+	values := make([]string, 0)
+	switch node.Kind {
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			if child.Value != "" {
+				values = append(values, child.Value)
+			}
+		}
+	case yaml.MappingNode:
+		for index := 0; index+1 < len(node.Content); index += 2 {
+			if node.Content[index].Value != "" {
+				values = append(values, node.Content[index].Value)
+			}
+		}
+	}
+	return values
+}
+
+func yamlMapValue(node yaml.Node, key string) string {
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == key {
+			return node.Content[index+1].Value
+		}
+	}
+	return ""
+}
+
+func repositoryServiceName(repository string) string {
+	repository = strings.Trim(strings.TrimSpace(repository), "/")
+	if index := strings.LastIndex(repository, "/"); index >= 0 {
+		repository = repository[index+1:]
+	}
+	if repository == "" {
+		return "service"
+	}
+	return repository
 }
 
 func detectedComposePath(contents []githubconnector.RepositoryContent) string {
@@ -929,7 +1178,6 @@ func githubConfigFromInstallationRepositoriesWithDefaults(installationID string,
 		InstallationID string             `json:"installation_id"`
 		Repositories   []repositoryConfig `json:"repositories"`
 	}{InstallationID: installationID}
-	defaults := githubRepositoryBuildDefaults(existing)
 	for _, repository := range repositories {
 		fullName := repository.FullName
 		if fullName == "" {
@@ -939,36 +1187,43 @@ func githubConfigFromInstallationRepositoriesWithDefaults(installationID string,
 		if branch == "" {
 			branch = "main"
 		}
-		item := repositoryConfig{
-			InstallationID: installationID,
-			RepositoryID:   strconv.FormatInt(repository.ID, 10),
-			Repository:     fullName,
-			Branch:         branch,
+		preserved := false
+		for _, previous := range existing {
+			if previous.Repository != fullName {
+				continue
+			}
+			previousBranch := previous.Branch
+			if previousBranch == "" {
+				previousBranch = branch
+			}
+			config.Repositories = append(config.Repositories, repositoryConfig{
+				InstallationID:  installationID,
+				RepositoryID:    strconv.FormatInt(repository.ID, 10),
+				Repository:      fullName,
+				Branch:          previousBranch,
+				WorkflowID:      previous.WorkflowID,
+				BuildContext:    previous.BuildContext,
+				Dockerfile:      previous.Dockerfile,
+				ImageRef:        previous.ImageRef,
+				BuildMatrix:     previous.BuildMatrix,
+				Runner:          previous.Runner,
+				ApplicationID:   previous.ApplicationID,
+				ApplicationName: previous.ApplicationName,
+				PathFilters:     previous.PathFilters,
+			})
+			preserved = true
 		}
-		if previous, ok := defaults[fullName+"#"+branch]; ok {
-			item.WorkflowID = previous.WorkflowID
-			item.BuildContext = previous.BuildContext
-			item.Dockerfile = previous.Dockerfile
-			item.ImageRef = previous.ImageRef
-			item.BuildMatrix = previous.BuildMatrix
-			item.Runner = previous.Runner
-			item.ApplicationID = previous.ApplicationID
-			item.ApplicationName = previous.ApplicationName
-			item.PathFilters = previous.PathFilters
+		if !preserved {
+			config.Repositories = append(config.Repositories, repositoryConfig{
+				InstallationID: installationID,
+				RepositoryID:   strconv.FormatInt(repository.ID, 10),
+				Repository:     fullName,
+				Branch:         branch,
+			})
 		}
-		config.Repositories = append(config.Repositories, item)
 	}
 	if len(config.Repositories) == 0 {
 		return nil, validationError("github installation did not return repositories")
 	}
 	return json.Marshal(config)
-}
-
-func githubRepositoryBuildDefaults(repositories []githubconnector.Repository) map[string]githubconnector.Repository {
-	defaults := make(map[string]githubconnector.Repository, len(repositories))
-	for _, repository := range repositories {
-		key := repository.Repository + "#" + repository.Branch
-		defaults[key] = repository
-	}
-	return defaults
 }

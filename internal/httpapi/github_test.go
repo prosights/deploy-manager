@@ -43,8 +43,8 @@ func TestGitHubStatusReportsMissingRuntimeConfig(t *testing.T) {
 	if !strings.Contains(body, `"app_configured":false`) || !strings.Contains(body, `"build_dispatch_enabled":false`) {
 		t.Fatalf("expected missing github app status, got %s", body)
 	}
-	if !strings.Contains(body, "GITHUB_WEBHOOK_SECRET") {
-		t.Fatalf("expected missing webhook secret evidence, got %s", body)
+	if strings.Contains(body, "GITHUB_WEBHOOK_SECRET") {
+		t.Fatalf("webhook secret should not be required for basic github setup, got %s", body)
 	}
 }
 
@@ -157,5 +157,33 @@ func TestRepositoryMatchesChangedPaths(t *testing.T) {
 	}
 	if repositoryMatchesChangedPaths(repository, nil) {
 		t.Fatal("expected path-scoped target to miss when changed paths are unavailable")
+	}
+}
+
+func TestGitHubConnectorBuildTargetScopesAccessOnlyRepositoryToApplicationPath(t *testing.T) {
+	config := []byte(`{"installation_id":"123456","repositories":[{"repository":"prosights/internal","branch":"main"}]}`)
+	application := db.ListApplicationsForGitHubPushRow{Name: "finops", ComposePath: "finops/docker-compose.yml"}
+
+	repository, owned, err := githubConnectorBuildTarget(config, "prosights/internal", "main", application, []string{"finops/api/main.go"})
+	if err != nil || !owned || repository.Repository != "prosights/internal" {
+		t.Fatalf("expected matching app source target, got %+v, owned=%v, err=%v", repository, owned, err)
+	}
+	repository, owned, err = githubConnectorBuildTarget(config, "prosights/internal", "main", application, []string{"portal/src/main.tsx"})
+	if err != nil || !owned || repository.Repository != "" {
+		t.Fatalf("expected unrelated app path to be skipped, got %+v, owned=%v, err=%v", repository, owned, err)
+	}
+}
+
+func TestGitHubConnectorBuildTargetPrefersApplicationSpecificTarget(t *testing.T) {
+	config := []byte(`{"installation_id":"123456","repositories":[{"repository":"prosights/internal","branch":"main","image_ref":"registry.example.com/generic:main"},{"application_id":"37789321-6dd4-4511-8f5f-4ffebc6d9735","repository":"prosights/internal","branch":"main","image_ref":"registry.example.com/finops:main","path_filters":["finops/**"]}]}`)
+	application := db.ListApplicationsForGitHubPushRow{
+		ID:          pgtype.UUID{Bytes: [16]byte{0x37, 0x78, 0x93, 0x21, 0x6d, 0xd4, 0x45, 0x11, 0x8f, 0x5f, 0x4f, 0xfe, 0xbc, 0x6d, 0x97, 0x35}, Valid: true},
+		Name:        "finops",
+		ComposePath: "finops/docker-compose.yml",
+	}
+
+	repository, owned, err := githubConnectorBuildTarget(config, "prosights/internal", "main", application, []string{"finops/api/main.go"})
+	if err != nil || !owned || repository.ImageRef != "registry.example.com/finops:main" {
+		t.Fatalf("expected application-specific build target, got %+v, owned=%v, err=%v", repository, owned, err)
 	}
 }

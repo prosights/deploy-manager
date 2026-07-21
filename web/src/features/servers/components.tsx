@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { Check, LogOut, Pencil, Plus, RefreshCw, Terminal as TerminalIcon, Trash2, Wifi, X } from 'lucide-react'
+import { Check, Pencil, Plus, RefreshCw, Search, Settings2, ShieldCheck, Terminal as TerminalIcon, Trash2, X } from 'lucide-react'
 import { Badge } from '../../components/ui/badge'
 import { Button } from '../../components/ui/button'
 import { PanelError } from '../../components/ui/error-message'
@@ -10,6 +10,7 @@ import { Panel } from '../../components/ui/panel'
 import { SelectInput } from '../../components/ui/select-input'
 import { TextInput } from '../../components/ui/text-input'
 import { webSocketURL, type Application, type Server, type ServerDevUsersResponse, type TailscaleDevicesResponse } from '../../lib/api'
+import { matchesSearch } from '../../lib/search'
 import { percent, statusTone } from '../status'
 
 export type ServerFormState = {
@@ -43,6 +44,7 @@ export function defaultServerForm(): ServerFormState {
 }
 
 type ServerCreatePanelProps = {
+  embedded?: boolean
   form: ServerFormState
   tailscaleDevices?: TailscaleDevicesResponse
   isSaving: boolean
@@ -52,6 +54,7 @@ type ServerCreatePanelProps = {
 }
 
 export function ServerCreatePanel({
+  embedded = false,
   form,
   tailscaleDevices,
   isSaving,
@@ -82,7 +85,7 @@ export function ServerCreatePanel({
   }
 
   return (
-    <Panel title="Register server">
+    <Panel title={embedded ? undefined : 'Register server'} className={embedded ? 'rounded-none border-0' : undefined}>
       {tailscaleDevices && (
         <div className="border-b p-4">
           <SelectInput label="Tailscale machine" value={selectedDeviceKey} onChange={importTailscaleDevice} disabled={!tailscaleDevices.available || tailscaleDevices.devices.length === 0}>
@@ -147,12 +150,12 @@ export function ServerCreatePanel({
 type ServerListProps = {
   servers: Server[]
   checkResults: ServerCheckResults
-  isChecking: boolean
-  onCheck: (serverID: string) => void
+  onOpen: (serverID: string) => void
   onOpenConsole: (serverID: string) => void
+  onConfigure: (serverID: string) => void
 }
 
-export function ServerList({ servers, checkResults, isChecking, onCheck, onOpenConsole }: ServerListProps) {
+export function ServerList({ servers, checkResults, onOpen, onOpenConsole, onConfigure }: ServerListProps) {
   return (
     <Panel>
       <div className="overflow-x-auto">
@@ -171,8 +174,10 @@ export function ServerList({ servers, checkResults, isChecking, onCheck, onOpenC
           </thead>
           <tbody>
             {servers.map((server) => (
-              <tr key={server.id} className="border-t">
-                <td className="px-4 py-3 font-medium">{server.name}</td>
+              <tr key={server.id} className="cursor-pointer border-t transition-colors hover:bg-prosights-surface-muted/60" onClick={() => onOpen(server.id)}>
+                <td className="px-4 py-3 font-medium">
+                  <button type="button" className="bg-transparent text-left hover:underline" onClick={(event) => { event.stopPropagation(); onOpen(server.id) }}>{server.name}</button>
+                </td>
                 <td className="px-4 py-3">
                   <div className="font-mono text-xs text-ink">{server.ssh_user}@{server.hostname}:{server.ssh_port}</div>
                   <div className="mt-1 text-xs text-muted">{server.connection_mode === 'tailscale_ssh' ? 'keyless via tailnet policy' : server.ssh_key_path ?? 'ssh key not configured'}</div>
@@ -180,22 +185,22 @@ export function ServerList({ servers, checkResults, isChecking, onCheck, onOpenC
                 <td className="px-4 py-3 text-muted">{connectionModeLabel(server.connection_mode)}</td>
                 <td className="px-4 py-3">
                   <Badge tone={statusTone(server.status)}>{server.status}</Badge>
+                  {checkResults[server.id] && <ServerCheckSummary result={checkResults[server.id]} />}
                 </td>
                 <td className="px-4 py-3 text-muted">CPU {percent(server.cpu_usage)} / RAM {percent(server.memory_usage)} / Disk {percent(server.disk_usage)}</td>
                 <td className="px-4 py-3 text-muted">{formatLastChecked(server.last_checked_at)}</td>
                 <td className="px-4 py-3 text-muted">{server.proxy_type}</td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-2">
-                    <Button variant="ghost" disabled={!canConnectToServer(server) || isChecking} onClick={() => onCheck(server.id)}>
-                      <Wifi className="size-4" />
-                      Check
-                    </Button>
-                    <Button variant="secondary" disabled={!canConnectToServer(server)} onClick={() => onOpenConsole(server.id)}>
+                    <Button variant="secondary" disabled={!canConnectToServer(server)} onClick={(event) => { event.stopPropagation(); onOpenConsole(server.id) }}>
                       <TerminalIcon className="size-4" />
                       Console
                     </Button>
+                    <Button variant="ghost" onClick={(event) => { event.stopPropagation(); onConfigure(server.id) }}>
+                      <Settings2 className="size-4" />
+                      Configure
+                    </Button>
                   </div>
-                  {checkResults[server.id] && <ServerCheckSummary result={checkResults[server.id]} />}
                 </td>
               </tr>
             ))}
@@ -208,37 +213,32 @@ export function ServerList({ servers, checkResults, isChecking, onCheck, onOpenC
 }
 
 type ServerDevUsersPanelProps = {
-  servers: Server[]
-  selectedServerID: string
+  server?: Server
   users?: ServerDevUsersResponse
   pending: boolean
   loading: boolean
   errorMessage?: string
-  onSelectServer: (serverID: string) => void
   onAdd: (username: string) => void
   onUpdate: (currentUsername: string, username: string) => void
   onDelete: (username: string) => void
-  onApply: () => void
 }
 
 export function ServerDevUsersPanel({
-  servers,
-  selectedServerID,
+  server,
   users,
   pending,
   loading,
   errorMessage,
-  onSelectServer,
   onAdd,
   onUpdate,
   onDelete,
-  onApply,
 }: ServerDevUsersPanelProps) {
   const [username, setUsername] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [addingUser, setAddingUser] = useState(false)
   const [editingUser, setEditingUser] = useState('')
   const [editingValue, setEditingValue] = useState('')
-  const selectedServer = servers.find((server) => server.id === selectedServerID)
-  const canSubmit = Boolean(username.trim()) && !pending && Boolean(selectedServerID)
+  const canSubmit = Boolean(username.trim()) && !pending && Boolean(server)
 
   function submit() {
     const value = username.trim()
@@ -247,6 +247,7 @@ export function ServerDevUsersPanel({
     }
     onAdd(value)
     setUsername('')
+    setAddingUser(false)
   }
 
   function startEditing(user: string) {
@@ -264,60 +265,76 @@ export function ServerDevUsersPanel({
     setEditingValue('')
   }
 
+  const configuredUsers = users?.users ?? []
+  const visibleUsers = configuredUsers.filter((user) => matchesSearch(searchQuery, [user]))
+  const accessPath = users?.path ?? '/srv/deploy-manager/ops/dev-sudo-users.txt'
+
   return (
-    <Panel
-      title="Dev sudo users"
-      action={
-        <Button variant="ghost" className="h-7 gap-1.5 px-2.5 text-xs" disabled={pending || !selectedServerID} onClick={onApply}>
-          <RefreshCw className="size-3.5" />
-          Apply
-        </Button>
-      }
-    >
-      <div className="grid gap-3 p-4 md:grid-cols-[240px_1fr_auto]">
-        <SelectInput label="Server" value={selectedServerID} onChange={onSelectServer} disabled={servers.length === 0}>
-          {servers.map((server) => (
-            <option key={server.id} value={server.id}>{server.name}</option>
-          ))}
-        </SelectInput>
-        <TextInput label="Username" value={username} onChange={setUsername} placeholder="narasaka" disabled={!selectedServerID || pending} />
-        <div className="flex items-end">
-          <Button variant="primary" disabled={!canSubmit} onClick={submit}>
-            <Plus className="size-4" />
-            Add user
-          </Button>
+    <section className="space-y-4">
+      <div className="flex gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-prosights-md bg-prosights-surface-muted text-prosights-muted">
+          <ShieldCheck className="size-4" aria-hidden="true" />
+        </div>
+        <div>
+          <h2 className="text-[14px] font-semibold text-prosights-text">Privileged access</h2>
+          <p className="mt-1 max-w-md text-[11px] leading-4 text-prosights-muted">Grants passwordless sudo plus Docker and deployer group access.</p>
         </div>
       </div>
-      <div className="border-t px-4 py-3 text-xs text-muted">
-        {selectedServer ? `${selectedServer.name} · ${users?.path ?? '/srv/deploy-manager/ops/dev-sudo-users.txt'}` : 'Select a server'}
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex h-9 min-w-56 flex-1 items-center gap-2 rounded-prosights-md border border-prosights-border bg-prosights-surface px-3 text-prosights-muted focus-within:ring-2 focus-within:ring-prosights-ring sm:max-w-sm">
+          <Search className="size-4 shrink-0" aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Search privileged users"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-prosights-text outline-none placeholder:text-prosights-subtle"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search users"
+          />
+        </label>
+        <Button type="button" variant="primary" className="ml-auto" disabled={!server || pending || addingUser} onClick={() => setAddingUser(true)}>
+          <Plus className="size-4" aria-hidden="true" />
+          Add user
+        </Button>
       </div>
+      {addingUser && (
+        <form className="grid gap-2 rounded-prosights-lg border border-prosights-border bg-prosights-surface p-4 sm:grid-cols-[minmax(0,1fr)_auto_auto]" onSubmit={(event) => { event.preventDefault(); submit() }}>
+          <TextInput label="Username" value={username} onChange={setUsername} placeholder="narasaka" disabled={!server || pending} />
+          <Button type="button" variant="ghost" className="self-end" disabled={pending} onClick={() => { setAddingUser(false); setUsername('') }}>
+            Cancel
+          </Button>
+          <Button variant="primary" className="self-end" disabled={!canSubmit}>Save user</Button>
+        </form>
+      )}
       {errorMessage && <PanelError message={errorMessage} />}
-      <div className="overflow-x-auto border-t">
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs text-muted">
-            <tr>
-              <th className="px-4 py-3 font-medium">Username</th>
-              <th className="px-4 py-3 font-medium">Access</th>
-              <th className="px-4 py-3 font-medium">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(users?.users ?? []).map((user) => (
-              <tr key={user} className="border-t">
-                <td className="px-4 py-3 font-mono text-xs text-ink">
+      <Panel>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs text-muted">
+              <tr>
+                <th className="px-4 py-3 font-medium">User</th>
+                <th className="px-4 py-3 font-medium">Access</th>
+                <th className="px-4 py-3 text-right font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleUsers.map((user) => (
+                <tr key={user} className="border-t border-prosights-border">
+                  <td className="px-4 py-3 font-mono text-xs text-ink">
                   {editingUser === user ? (
                     <input
                       aria-label={`Edit ${user}`}
-                      className="h-9 w-full max-w-60 rounded-md border bg-background px-3 text-sm text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      className="h-9 w-full max-w-60 rounded-prosights-lg border border-prosights-border bg-prosights-surface px-3 text-sm text-prosights-text outline-none focus-visible:border-prosights-text focus-visible:ring-2 focus-visible:ring-prosights-ring"
                       value={editingValue}
                       onChange={(event) => setEditingValue(event.target.value)}
                     />
                   ) : user}
-                </td>
-                <td className="px-4 py-3 text-muted">sudo / docker / deployers</td>
-                <td className="px-4 py-3">
+                  </td>
+                  <td className="px-4 py-3 text-xs text-muted">sudo / docker / deployers</td>
+                  <td className="px-4 py-3">
+                    <div className="flex justify-end gap-2">
                   {editingUser === user ? (
-                    <div className="flex flex-wrap gap-2">
+                    <>
                       <Button variant="secondary" disabled={pending || !editingValue.trim()} onClick={submitEdit}>
                         <Check className="size-4" />
                         Update
@@ -326,9 +343,9 @@ export function ServerDevUsersPanel({
                         <X className="size-4" />
                         Cancel
                       </Button>
-                    </div>
+                    </>
                   ) : (
-                    <div className="flex flex-wrap gap-2">
+                    <>
                       <Button variant="ghost" disabled={pending} onClick={() => startEditing(user)}>
                         <Pencil className="size-4" />
                         Rename
@@ -337,51 +354,76 @@ export function ServerDevUsersPanel({
                         <Trash2 className="size-4" />
                         Remove
                       </Button>
-                    </div>
+                    </>
                   )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {!loading && (users?.users.length ?? 0) === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No dev sudo users found.</div>}
-      {loading && <div className="border-t px-4 py-6 text-sm text-muted">Loading users...</div>}
-    </Panel>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {visibleUsers.length === 0 && (
+                <tr className="border-t border-prosights-border">
+                  <td colSpan={3} className="px-4 py-6 text-center text-xs text-prosights-muted">
+                    {loading ? 'Loading users...' : searchQuery ? 'No users match your search.' : 'No privileged users configured.'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="truncate border-t px-4 py-2.5 font-mono text-[10px] text-prosights-muted">
+          {server ? accessPath : 'Server unavailable'}
+        </div>
+      </Panel>
+    </section>
   )
 }
 
-type ServerTerminalPanelProps = {
-  servers: Server[]
-  applications: Application[]
-  selectedServerID: string
-  selectedApplicationID: string
-  isOpen: boolean
-  onSelectServer: (serverID: string) => void
-  onSelectApplication: (applicationID: string) => void
-  onClose: () => void
+export function ServerLogsPanel({
+  server,
+  logs,
+  loading,
+  errorMessage,
+  onRefresh,
+}: {
+  server?: Server
+  logs?: string
+  loading: boolean
+  errorMessage?: string
+  onRefresh: () => void
+}) {
+  return (
+    <section className="flex min-h-0 max-w-5xl flex-1 flex-col overflow-hidden rounded-prosights-lg border border-prosights-border bg-zinc-950">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+        <div>
+          <h2 className="text-[13px] font-semibold text-zinc-100">Server logs</h2>
+          <p className="mt-0.5 text-[11px] text-zinc-400">Latest system or container logs from {server?.name ?? 'this server'}.</p>
+        </div>
+        <Button variant="secondary" className="border-white/15 bg-white/5 text-zinc-200 hover:bg-white/10" disabled={!server || loading} onClick={onRefresh}>
+          <RefreshCw className={`size-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
+          Refresh
+        </Button>
+      </div>
+      {errorMessage
+        ? <div className="p-4"><PanelError message={errorMessage} /></div>
+        : <pre aria-label="Server logs" className="min-h-80 flex-1 overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[11px] leading-5 text-zinc-300">{logs || (loading ? 'Loading logs…' : 'No journal entries returned.')}</pre>}
+    </section>
+  )
 }
 
-export function ServerTerminalPanel({
-  servers,
-  applications,
-  selectedServerID,
-  selectedApplicationID,
-  isOpen,
-  onSelectServer,
-  onSelectApplication,
-  onClose,
-}: ServerTerminalPanelProps) {
+export function ApplicationTerminal({
+  server,
+  application,
+  active = true,
+}: {
+  server?: Server
+  application?: Application
+  active?: boolean
+}) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<'idle' | 'connecting' | 'connected' | 'closed' | 'error'>('idle')
-  const selectedServer = servers.find((server) => server.id === selectedServerID)
-  const serverApplications = applications.filter((application) => application.server_id === selectedServerID)
-  const selectedApplication = serverApplications.find((application) => application.id === selectedApplicationID)
-  const selectedServerName = selectedServer?.name ?? ''
-  const selectedApplicationDirectory = selectedApplication?.remote_directory ?? ''
 
   useEffect(() => {
-    if (!isOpen || !selectedServerName || !selectedApplicationDirectory || !terminalRef.current) {
+    if (!active || !server || !terminalRef.current) {
       setStatus('idle')
       return
     }
@@ -426,24 +468,21 @@ export function ServerTerminalPanel({
     fitAddon.fit()
     terminal.focus()
 
-    const socket = new WebSocket(webSocketURL(`/api/servers/${selectedServerID}/terminal?application_id=${encodeURIComponent(selectedApplicationID)}`))
+    const applicationQuery = application ? `?application_id=${encodeURIComponent(application.id)}` : ''
+    const socket = new WebSocket(webSocketURL(`/api/servers/${server.id}/terminal${applicationQuery}`))
     const sendResize = () => {
       fitAddon.fit()
       socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }))
     }
     const resize = () => {
-      if (socket.readyState === WebSocket.OPEN) {
-        sendResize()
-      }
+      if (socket.readyState === WebSocket.OPEN) sendResize()
     }
 
     socket.addEventListener('open', () => {
       setStatus('connected')
       sendResize()
     })
-    socket.addEventListener('message', (event) => {
-      terminal.write(String(event.data))
-    })
+    socket.addEventListener('message', (event) => terminal.write(String(event.data)))
     socket.addEventListener('close', () => {
       setStatus('closed')
       terminal.writeln('\r\nconnection closed')
@@ -453,9 +492,7 @@ export function ServerTerminalPanel({
       terminal.writeln('\r\nterminal connection failed')
     })
     const disposable = terminal.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'input', data }))
-      }
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'input', data }))
     })
     window.addEventListener('resize', resize)
 
@@ -465,60 +502,31 @@ export function ServerTerminalPanel({
       socket.close()
       terminal.dispose()
     }
-  }, [isOpen, selectedApplicationDirectory, selectedApplicationID, selectedServerID, selectedServerName])
+  }, [active, application, server])
 
-  if (!isOpen) {
-    return null
-  }
+  if (!server) return <PanelError message="This application does not have a server target." />
 
   return (
-    <Panel
-      title="Terminal console"
-      action={
-        <div className="flex items-center gap-3">
-          {selectedServer && <span className="font-mono text-xs text-muted">{terminalStatusLabel(status)} · {selectedServer.hostname}:{selectedServer.ssh_port}</span>}
-          <Button variant="ghost" onClick={onClose}>
-            <LogOut className="size-4" />
-            Leave
-          </Button>
+    <div className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-inner">
+      <div className="flex h-9 items-center justify-between border-b border-white/10 px-3">
+        <div className="flex items-center gap-2 text-xs text-zinc-400">
+          <span className="flex items-center gap-1.5">
+            <span className="size-2 rounded-full bg-red-400" />
+            <span className="size-2 rounded-full bg-yellow-300" />
+            <span className="size-2 rounded-full bg-emerald-400" />
+          </span>
+          <span className="font-mono">ssh console</span>
         </div>
-      }
-    >
-      <div className="grid gap-3 p-4 lg:grid-cols-[220px_260px_1fr]">
-        <SelectInput label="Server" value={selectedServerID} onChange={onSelectServer}>
-          {servers.map((server) => (
-            <option key={server.id} value={server.id}>{server.name}</option>
-          ))}
-        </SelectInput>
-        <SelectInput label="Application" value={selectedApplicationID} onChange={onSelectApplication}>
-          {serverApplications.map((application) => (
-            <option key={application.id} value={application.id}>{application.name}</option>
-          ))}
-        </SelectInput>
-        <div className="flex items-end">
-          <div className="flex h-9 items-center gap-2 rounded-md border bg-background px-3 text-sm text-muted">
-            <TerminalIcon className="size-4" />
-            <span className="truncate">{selectedApplication?.remote_directory ?? 'No application target selected'}</span>
-          </div>
-        </div>
+        <div className="font-mono text-xs text-zinc-400">{terminalStatusLabel(status)} · {server.hostname}:{server.ssh_port}</div>
       </div>
-      <div className="border-t p-4">
-        {!selectedServer && <PanelError message="Select a server before opening the terminal." />}
-        {selectedServer && !selectedApplication && <PanelError message="Select an application target before opening the terminal." />}
-        <div className="overflow-hidden rounded-md border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-inner">
-          <div className="flex h-9 items-center justify-between border-b border-white/10 px-3">
-            <div className="flex items-center gap-2 text-xs text-zinc-400">
-              <span className="size-2 rounded-full bg-red-400" />
-              <span className="size-2 rounded-full bg-yellow-300" />
-              <span className="size-2 rounded-full bg-emerald-400" />
-            </div>
-            <div className="font-mono text-xs text-zinc-400">ssh console</div>
-          </div>
-          <div ref={terminalRef} className="terminal-shell h-[420px] [&_.xterm]:h-full [&_.xterm-viewport]:overflow-y-auto" />
-        </div>
-      </div>
-    </Panel>
+      <div ref={terminalRef} className="terminal-shell h-[420px] [&_.xterm]:h-full [&_.xterm-viewport]:overflow-y-auto" />
+    </div>
   )
+}
+
+export function applicationTerminalDirectory(application: Pick<Application, 'remote_directory' | 'compose_path'>) {
+  const composeDirectory = application.compose_path.split('/').slice(0, -1).filter((segment) => segment && segment !== '.').join('/')
+  return composeDirectory ? `${application.remote_directory.replace(/\/+$/, '')}/${composeDirectory}` : application.remote_directory
 }
 
 function terminalStatusLabel(status: 'idle' | 'connecting' | 'connected' | 'closed' | 'error') {
@@ -547,7 +555,7 @@ function connectionModeLabel(connectionMode: Server['connection_mode']) {
   }
 }
 
-function canConnectToServer(server: Server) {
+export function canConnectToServer(server: Server) {
   return server.connection_mode === 'tailscale_ssh' || Boolean(server.ssh_key_path)
 }
 

@@ -1,17 +1,26 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
 import { Panel } from '../components/ui/panel'
 import { auditEventsQuery } from '../lib/queries'
 import { matchesSearch } from '../lib/search'
 import { useUiStore } from '../store/ui'
 
+const pageSize = 10
+
 export function AuditRoute() {
   const { data: events } = useSuspenseQuery(auditEventsQuery)
   const searchQuery = useUiStore((state) => state.searchQuery)
+  const [page, setPage] = useState(1)
   const rows = useMemo(() => events.map(auditEventRow), [events])
   const visibleRows = useMemo(() => rows.filter((row) => matchesSearch(searchQuery, row.searchValues)), [rows, searchQuery])
+  const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize))
+  const currentPage = Math.min(page, pageCount)
+  const pageRows = visibleRows.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const firstRow = (currentPage - 1) * pageSize + 1
+  const lastRow = Math.min(currentPage * pageSize, visibleRows.length)
 
   return (
     <div className="space-y-5">
@@ -29,7 +38,7 @@ export function AuditRoute() {
               </tr>
             </thead>
             <tbody>
-              {visibleRows.map((row) => (
+              {pageRows.map((row) => (
                 <tr key={row.id} className="border-t">
                   <td className="px-4 py-3 font-mono text-xs text-muted">{row.createdAt}</td>
                   <td className="px-4 py-3"><Badge tone="accent">{row.action}</Badge></td>
@@ -45,6 +54,16 @@ export function AuditRoute() {
           </table>
         </div>
         {visibleRows.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No audit events match the current search.</div>}
+        {pageCount > 1 && (
+          <nav aria-label="Audit pages" className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
+            <span className="text-xs tabular-nums text-muted">Showing {firstRow}–{lastRow} of {visibleRows.length}</span>
+            <div className="flex items-center gap-2">
+              <Button type="button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous</Button>
+              <span className="min-w-16 text-center text-xs tabular-nums text-muted">{currentPage} of {pageCount}</span>
+              <Button type="button" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Next</Button>
+            </div>
+          </nav>
+        )}
       </Panel>
     </div>
   )

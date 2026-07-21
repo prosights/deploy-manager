@@ -83,6 +83,27 @@ export type Application = {
   default_registry_id: string | null
   default_registry_name: string | null
   github_auto_deploy: boolean
+  configuration_revision: number
+  deployed_configuration_revision: number
+  deployed_project_configuration_revision: number
+  compose_services?: ComposeService[] | string | null
+  redeploy_required: boolean
+}
+
+export type ComposeServicePort = {
+  container_port: number
+  published_port?: number
+  protocol?: string
+  variable?: string
+}
+
+export type ComposeService = {
+  name: string
+  image?: string
+  build_context?: string
+  dockerfile?: string
+  ports?: ComposeServicePort[]
+  depends_on?: string[]
 }
 
 export type Deployment = {
@@ -93,9 +114,13 @@ export type Deployment = {
   strategy: 'rolling' | 'blue_green'
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
   commit_sha: string | null
+  commit_message?: string | null
   image_ref: string | null
   image_digest: string | null
   actor: string | null
+  source_repository_url?: string | null
+  source_branch?: string | null
+  configuration_snapshot?: Record<string, unknown> | string | null
   application_name?: string
   server_name?: string
   environment_name?: string
@@ -168,6 +193,9 @@ export type ProxyRoute = {
   upstream_url: string
   blue_upstream_url: string | null
   green_upstream_url: string | null
+  compose_service?: string | null
+  container_port?: number | null
+  port_variable?: string | null
   tls_enabled: boolean
   status: 'pending' | 'applied' | 'failed'
   last_applied_at: string | null
@@ -213,9 +241,11 @@ export type CreateProxyRouteInput = {
   server_id?: string
   application_id?: string
   domain: string
-  upstream_url: string
+  upstream_url?: string
   blue_upstream_url?: string
   green_upstream_url?: string
+  compose_service?: string
+  container_port?: number
   tls_enabled: boolean
 }
 
@@ -256,8 +286,33 @@ export type Project = {
   repository_connector_id: string | null
   repository_full_name: string | null
   repository_branch: string | null
+  configuration_revision: number
   created_at: string
   updated_at: string
+}
+
+export type ProjectRuntimeVariable = {
+  key: string
+  value: string
+}
+
+export type ProjectRuntimeVariablesResponse = {
+  variables: ProjectRuntimeVariable[]
+  configuration_revision: number
+  changed: boolean
+}
+
+export type ApplicationServiceRuntimeConfig = {
+  compose_service: string
+  doppler_project: string
+  doppler_config: string
+  variables: ProjectRuntimeVariable[]
+  configuration_revision: number
+  changed: boolean
+}
+
+export type ConfigurationRedeployResponse = {
+  deployments: Deployment[]
 }
 
 export type Environment = {
@@ -297,69 +352,6 @@ export type CreateEnvironmentInput = {
   pull_request_number?: number
   branch?: string
   expires_at?: string
-}
-
-export type Credential = {
-  id: string
-  name: string
-  provider: string
-  external_ref: string
-  credential_type: string
-  status: string
-  permission_count: number
-  usage_count: number
-  last_seen_at: string | null
-}
-
-export type CredentialPermission = {
-  id: string
-  credential_id: string
-  resource_type: string
-  resource_name: string
-  permission: string
-  source: string
-  created_at: string
-}
-
-export type CredentialUsage = {
-  id: string
-  credential_id: string
-  used_by_type: string
-  used_by_name: string
-  usage_context: string
-  created_at: string
-}
-
-export type CredentialDetail = {
-  credential: Credential
-  permissions: CredentialPermission[]
-  usages: CredentialUsage[]
-}
-
-export type CredentialInventoryInput = {
-  credentials: Array<{
-    name: string
-    provider: string
-    external_ref: string
-    credential_type: string
-    status?: string
-    permissions?: Array<{
-      resource_type: string
-      resource_name: string
-      permission: string
-      source?: string
-    }>
-    usages?: Array<{
-      used_by_type: string
-      used_by_name: string
-      usage_context: string
-    }>
-  }>
-}
-
-export type CredentialInventoryResponse = {
-  credentials: Credential[]
-  count: number
 }
 
 export type AuditEvent = {
@@ -445,6 +437,7 @@ export type GitHubDetectedService = {
   root: string
   compose_path: string
   path_filters: string[]
+  compose_services?: ComposeService[]
 }
 
 export type GitHubDetectedServicesResponse = {
@@ -458,6 +451,15 @@ export type GitHubRepositoryBranchesResponse = {
   branches: string[]
 }
 
+export type GitHubCommitMetadata = {
+  sha: string
+  message: string
+  author_name: string
+  author_login: string
+  author_avatar_url: string
+  html_url: string
+}
+
 export type UpdateProjectRepositoryInput = {
   connector_id?: string
   repository?: string
@@ -468,9 +470,11 @@ export type ImportGitHubServicesInput = {
   connector_id: string
   repository: string
   branch?: string
+  root?: string
   environment_id: string
   server_id: string
   services: string[]
+  detected_services: GitHubDetectedService[]
 }
 
 export type ImportGitHubServicesResponse = {
@@ -485,30 +489,10 @@ export type UpsertConnectorInput = {
   config: Record<string, unknown>
 }
 
-export type InstanceSettings = {
-  name: string
-  short_name: string
-  meta_description: string
-  logo_url: string
-  favicon_url: string
-  primary_color: string
-  docs_url: string
-}
-
 export type AppVersion = {
   version: string
   commit_sha: string
   build_time: string
-}
-
-export type UpdateSettingsInput = {
-  name: string
-  short_name: string
-  meta_description: string
-  logo_url: string
-  favicon_url: string
-  primary_color: string
-  docs_url: string
 }
 
 export class ApiError extends Error {
@@ -615,6 +599,40 @@ export function updateProjectRepository(projectID: string, input: UpdateProjectR
   return api<Project>(`/api/projects/${projectID}/repository`, {
     method: 'PATCH',
     body: JSON.stringify(input),
+  })
+}
+
+export function listProjectRuntimeVariables(projectID: string, init?: RequestInit) {
+  return api<ProjectRuntimeVariablesResponse>(`/api/projects/${projectID}/variables`, init)
+}
+
+export function replaceProjectRuntimeVariables(projectID: string, variables: ProjectRuntimeVariable[]) {
+  return api<ProjectRuntimeVariablesResponse>(`/api/projects/${projectID}/variables`, {
+    method: 'PUT',
+    body: JSON.stringify({ variables }),
+  })
+}
+
+export function listApplicationServiceRuntimeConfigs(applicationID: string, init?: RequestInit) {
+  return api<ApplicationServiceRuntimeConfig[]>(`/api/applications/${applicationID}/service-variables`, init)
+}
+
+export function replaceApplicationServiceRuntimeConfig(applicationID: string, composeService: string, input: { doppler_project: string, doppler_config: string, variables: ProjectRuntimeVariable[] }) {
+  return api<ApplicationServiceRuntimeConfig>(`/api/applications/${applicationID}/service-variables/${encodeURIComponent(composeService)}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export function redeployProjectConfiguration(projectID: string) {
+  return api<ConfigurationRedeployResponse>(`/api/projects/${projectID}/redeploy-configuration`, {
+    method: 'POST',
+  })
+}
+
+export function redeployApplicationConfiguration(applicationID: string) {
+  return api<ConfigurationRedeployResponse>(`/api/applications/${applicationID}/redeploy-configuration`, {
+    method: 'POST',
   })
 }
 
@@ -748,12 +766,18 @@ export function listGitHubRepositoryBranches(input: { connector_id: string, repo
   return api<GitHubRepositoryBranchesResponse>(`/api/github/repositories/branches?${params}`)
 }
 
-export function detectGitHubRepositoryServices(input: { connector_id: string, repository: string, branch?: string }) {
+export function getGitHubRepositoryCommit(input: { connector_id: string, repository: string, sha: string }, init?: RequestInit) {
+  const params = new URLSearchParams(input)
+  return api<GitHubCommitMetadata>(`/api/github/repositories/commit?${params}`, init)
+}
+
+export function detectGitHubRepositoryServices(input: { connector_id: string, repository: string, branch?: string, root?: string }) {
   const params = new URLSearchParams({
     connector_id: input.connector_id,
     repository: input.repository,
     branch: input.branch || 'main',
   })
+  if (input.root) params.set('root', input.root)
   return api<GitHubDetectedServicesResponse>(`/api/github/repositories/detect?${params}`)
 }
 
@@ -770,6 +794,14 @@ export function getGitHubStatus(init?: RequestInit) {
 
 export function getDopplerStatus(init?: RequestInit) {
   return api<DopplerIntegrationStatus>('/api/doppler/status', init)
+}
+
+export function listDopplerProjects(init?: RequestInit) {
+  return api<string[]>('/api/doppler/projects', init)
+}
+
+export function listDopplerConfigs(project: string, init?: RequestInit) {
+  return api<string[]>(`/api/doppler/configs?project=${encodeURIComponent(project)}`, init)
 }
 
 export function createProxyRoute(input: CreateProxyRouteInput) {
@@ -813,20 +845,6 @@ export function syncGitHubConnectorRepositories(connectorID: string) {
 export function dispatchGitHubBuild(connectorID: string, input: GitHubBuildDispatchInput) {
   return api<GitHubBuildDispatchResponse>(`/api/connectors/${connectorID}/github/builds/dispatch`, {
     method: 'POST',
-    body: JSON.stringify(input),
-  })
-}
-
-export function syncCredentialInventory(input: CredentialInventoryInput) {
-  return api<CredentialInventoryResponse>('/api/credentials/inventory', {
-    method: 'POST',
-    body: JSON.stringify(input),
-  })
-}
-
-export function updateSettings(input: UpdateSettingsInput) {
-  return api<InstanceSettings>('/api/settings', {
-    method: 'PATCH',
     body: JSON.stringify(input),
   })
 }

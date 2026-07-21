@@ -2,6 +2,8 @@ package migrations
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -73,12 +75,6 @@ func TestInitialMigrationCarriesDeploymentGuardrails(t *testing.T) {
 	}
 	sql := string(migration)
 	for _, expected := range []string{
-		"CHECK (btrim(name) <> '')",
-		"CHECK (btrim(short_name) <> '')",
-		"CHECK (primary_color ~ '^#[0-9A-Fa-f]{6}$')",
-		"CHECK (logo_url = '' OR logo_url ~ '^data:image/' OR logo_url ~* '[.](svg|png|jpg|jpeg|webp|gif)([?#].*)?$')",
-		"CHECK (favicon_url = '' OR favicon_url ~ '^data:image/' OR favicon_url ~* '[.](ico|png|svg)([?#].*)?$')",
-		"CHECK (name !~ '[[:cntrl:]]' AND short_name !~ '[[:cntrl:]]' AND meta_description !~ '[[:cntrl:]]' AND logo_url !~ '[[:cntrl:]]' AND favicon_url !~ '[[:cntrl:]]' AND primary_color !~ '[[:cntrl:]]' AND docs_url !~ '[[:cntrl:]]')",
 		"CHECK (ssh_key_path IS NOT NULL AND btrim(ssh_key_path) <> '')",
 		"CHECK (left(btrim(ssh_key_path), 1) = '/' OR left(btrim(ssh_key_path), 2) = '~/')",
 		"CHECK (btrim(ssh_key_path) !~ '//')",
@@ -434,78 +430,6 @@ func TestAuditIdentityControlCharacterRequirementHasForwardMigration(t *testing.
 	}
 }
 
-func TestInstanceSettingsBrandingRequirementsHaveForwardMigration(t *testing.T) {
-	migration, err := files.ReadFile("sql/010_restrict_instance_settings_branding.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := string(migration)
-	for _, expected := range []string{
-		"instance_settings_brand_identity_required",
-		"instance_settings_primary_color_hex",
-		"instance_settings_branding_no_control_characters",
-		"CHECK (btrim(name) <> '' AND btrim(short_name) <> '') NOT VALID",
-		"CHECK (primary_color ~ '^#[0-9A-Fa-f]{6}$') NOT VALID",
-		"CHECK (name !~ '[[:cntrl:]]' AND short_name !~ '[[:cntrl:]]' AND meta_description !~ '[[:cntrl:]]' AND logo_url !~ '[[:cntrl:]]' AND favicon_url !~ '[[:cntrl:]]' AND primary_color !~ '[[:cntrl:]]' AND docs_url !~ '[[:cntrl:]]') NOT VALID",
-	} {
-		if !strings.Contains(sql, expected) {
-			t.Fatalf("expected instance settings guardrail %q, got %s", expected, sql)
-		}
-	}
-}
-
-func TestInstanceSettingsBrandAssetRequirementsHaveForwardMigration(t *testing.T) {
-	migration, err := files.ReadFile("sql/016_restrict_branding_asset_urls.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := string(migration)
-	for _, expected := range []string{
-		"instance_settings_logo_url_image_asset",
-		"instance_settings_favicon_url_image_asset",
-		"CHECK (logo_url = '' OR logo_url ~* '[.](svg|png|jpg|jpeg|webp|gif)([?#].*)?$') NOT VALID",
-		"CHECK (favicon_url = '' OR favicon_url ~* '[.](ico|png|svg)([?#].*)?$') NOT VALID",
-	} {
-		if !strings.Contains(sql, expected) {
-			t.Fatalf("expected instance settings asset guardrail %q, got %s", expected, sql)
-		}
-	}
-}
-
-func TestInstanceSettingsDataURLBrandAssetRequirementsHaveForwardMigration(t *testing.T) {
-	migration, err := files.ReadFile("sql/021_allow_data_url_branding_assets.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := string(migration)
-	for _, expected := range []string{
-		"DROP CONSTRAINT IF EXISTS instance_settings_logo_url_check",
-		"DROP CONSTRAINT IF EXISTS instance_settings_favicon_url_check",
-		"CHECK (logo_url = '' OR logo_url ~ '^data:image/' OR logo_url ~* '[.](svg|png|jpg|jpeg|webp|gif)([?#].*)?$') NOT VALID",
-		"CHECK (favicon_url = '' OR favicon_url ~ '^data:image/' OR favicon_url ~* '[.](ico|png|svg)([?#].*)?$') NOT VALID",
-	} {
-		if !strings.Contains(sql, expected) {
-			t.Fatalf("expected data URL branding asset migration %q, got %s", expected, sql)
-		}
-	}
-}
-
-func TestLegacyInstanceSettingsBrandAssetConstraintsAreDropped(t *testing.T) {
-	migration, err := files.ReadFile("sql/022_drop_legacy_branding_asset_constraints.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := string(migration)
-	for _, expected := range []string{
-		"DROP CONSTRAINT IF EXISTS instance_settings_logo_url_check",
-		"DROP CONSTRAINT IF EXISTS instance_settings_favicon_url_check",
-	} {
-		if !strings.Contains(sql, expected) {
-			t.Fatalf("expected legacy branding asset constraint cleanup %q, got %s", expected, sql)
-		}
-	}
-}
-
 func TestConnectorSyncStateRequirementsHaveForwardMigration(t *testing.T) {
 	migration, err := files.ReadFile("sql/019_restrict_connector_sync_state.sql")
 	if err != nil {
@@ -522,6 +446,81 @@ func TestConnectorSyncStateRequirementsHaveForwardMigration(t *testing.T) {
 	} {
 		if !strings.Contains(sql, expected) {
 			t.Fatalf("expected connector sync state guardrail %q, got %s", expected, sql)
+		}
+	}
+}
+
+func TestReleasedMigrationsRemainImmutable(t *testing.T) {
+	names, err := migrationNames()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	for _, name := range names {
+		if name > "033_project_repository.sql" {
+			continue
+		}
+		migration, err := files.ReadFile("sql/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hash.Write([]byte(name))
+		hash.Write([]byte{0})
+		hash.Write(migration)
+	}
+	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != "948165f69338fbbf49a3b90ea96e8a51006dc918fb457e79e7b56c474f7e8b1f" {
+		t.Fatalf("released migrations changed: %s", got)
+	}
+}
+
+func TestServiceConfigurationMigrationIsAdditive(t *testing.T) {
+	migration, err := files.ReadFile("sql/034_service_configuration.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(migration)
+	for _, expected := range []string{
+		"ADD COLUMN IF NOT EXISTS configuration_revision",
+		"ADD COLUMN IF NOT EXISTS compose_services jsonb",
+		"ADD COLUMN IF NOT EXISTS commit_message text",
+		"ADD COLUMN IF NOT EXISTS configuration_snapshot jsonb",
+		"CREATE TABLE IF NOT EXISTS project_runtime_variables",
+		"CREATE OR REPLACE FUNCTION application_configuration_state",
+		"ADD COLUMN IF NOT EXISTS compose_service text",
+		"ADD COLUMN IF NOT EXISTS container_port integer",
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("expected additive service configuration %q", expected)
+		}
+	}
+	for _, forbidden := range []string{
+		"DROP TABLE",
+		"UPDATE proxy_routes",
+		"CREATE TRIGGER",
+		"application_port_base",
+		"proxy_routes_one_per_application",
+		"host.docker.internal",
+		".localhost",
+	} {
+		if strings.Contains(sql, forbidden) {
+			t.Fatalf("service configuration migration must not contain %q", forbidden)
+		}
+	}
+}
+
+func TestOneActiveDeploymentMigrationUsesDatabaseInvariant(t *testing.T) {
+	migration, err := files.ReadFile("sql/035_one_active_deployment.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(migration)
+	for _, expected := range []string{
+		"deployments_one_in_progress_per_application",
+		"ON deployments (application_id)",
+		"WHERE status IN ('queued', 'running')",
+	} {
+		if !strings.Contains(sql, expected) {
+			t.Fatalf("expected active deployment guard %q", expected)
 		}
 	}
 }
