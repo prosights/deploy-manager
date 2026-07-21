@@ -80,21 +80,15 @@ tags for every dispatched `main` build:
 
 - `main-<short-sha>`: immutable tag Deploy Manager deploys.
 - `sha-<short-sha>`: immutable tag for audit/debugging.
-- `sha-<full-sha>`: exact image used by the protected release workflow.
+- `sha-<full-sha>`: immutable tag for audit and recovery.
 - `main`: moving convenience tag for humans.
 
 Pushing a Git tag such as `v1.2.3` also publishes `v1.2.3` when the GitHub repo
 variable `DEPLOY_MANAGER_IMAGE` is set to the image name without a tag, for
 example `us-east1-docker.pkg.dev/prosights-platform/deploy-manager/deploy-manager`.
 Keep GitHub auto deploy disabled on the Deploy Manager application so its
-generic webhook path cannot start a second build or bypass the release workflow.
-
-## Production release
-
-A successful `main` image build calls **Release Deploy Manager** automatically
-with the exact commit SHA. The release workflow remains manually runnable as a
-recovery fallback and rejects branch names, abbreviated SHAs, commits outside
-`main`, and commits whose immutable image has not finished building.
+generic webhook path cannot start a second build. The repository's `main` image
+workflow deploys Deploy Manager directly.
 
 ## Runtime env
 
@@ -121,13 +115,10 @@ Redis service names.
 ## Rollout behavior
 
 1. A push to `main` builds and publishes `main-<short-sha>`.
-2. The successful build calls the release workflow, which resolves the full-SHA
-   tag to an immutable image digest.
-3. The existing stable worker starts and checks the inactive public color.
-4. Deploy Manager flips Caddy only after the new color is ready.
-5. The workflow backs up and updates the stable control compose file, then
-   waits for the control API to become ready.
-6. If the control update fails, the workflow restores the compose backup and
-   queues a public rollback to the previous color.
+2. The workflow updates only the stable control app image over IAP.
+3. After the stable API is ready, the workflow queues the public blue/green
+   deployment through Deploy Manager.
+4. Deploy Manager starts and checks the inactive public color.
+5. Deploy Manager flips Caddy only after the new color is ready.
 
 Rollback only flips Caddy back to the standby color; it does not rebuild.

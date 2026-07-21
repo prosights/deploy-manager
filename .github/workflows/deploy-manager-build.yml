@@ -230,6 +230,65 @@ jobs:
             -H "Content-Type: application/json" \
             --data "{\"status\":\"succeeded\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"external_url\":\"$RUN_URL\"}"
 
+      - name: Queue deploy-manager deployment over IAP
+        if: ${{ success() && github.event_name == 'push' }}
+        env:
+          DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}
+          DEPLOY_MANAGER_APPLICATION_ID: ${{ vars.DEPLOY_MANAGER_APPLICATION_ID }}
+          GCE_PROJECT: ${{ vars.DEPLOY_MANAGER_GCE_PROJECT }}
+          GCE_ZONE: ${{ vars.DEPLOY_MANAGER_GCE_ZONE }}
+          GCE_INSTANCE: ${{ vars.DEPLOY_MANAGER_GCE_INSTANCE }}
+          IMAGE_REF: ${{ steps.image.outputs.deploy_image_ref }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+          COMMIT_SHA: ${{ steps.image.outputs.commit_sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$DEPLOY_MANAGER_API_TOKEN" ] || [ -z "$DEPLOY_MANAGER_APPLICATION_ID" ]; then
+            echo "DEPLOY_MANAGER_API_TOKEN secret and DEPLOY_MANAGER_APPLICATION_ID repo variable are required" >&2
+            exit 1
+          fi
+          if [ -z "$GCE_PROJECT" ] || [ -z "$GCE_ZONE" ] || [ -z "$GCE_INSTANCE" ]; then
+            echo "DEPLOY_MANAGER_GCE_PROJECT, DEPLOY_MANAGER_GCE_ZONE, and DEPLOY_MANAGER_GCE_INSTANCE repo variables are required" >&2
+            exit 1
+          fi
+
+          gcloud compute ssh "$GCE_INSTANCE" \
+            --project "$GCE_PROJECT" \
+            --zone "$GCE_ZONE" \
+            --tunnel-through-iap \
+            --ssh-flag="-p 2345" \
+            --command "set -euo pipefail; image_ref='$IMAGE_REF'; compose=/srv/deploy-manager/control/docker-compose.yml; tmp=\$(mktemp); sudo awk -v image=\"\$image_ref\" 'BEGIN { in_app=0; replaced=0 } /^  app:/ { in_app=1 } in_app && /^    image:/ { print \"    image: \" image; in_app=0; replaced=1; next } { print } END { if (!replaced) exit 42 }' \"\$compose\" > \"\$tmp\"; sudo install -m 0644 \"\$tmp\" \"\$compose\"; rm -f \"\$tmp\"; sudo docker compose -f \"\$compose\" pull app; sudo docker compose -f \"\$compose\" up -d --no-deps app" \
+            --quiet
+
+          gcloud compute ssh "$GCE_INSTANCE" \
+            --project "$GCE_PROJECT" \
+            --zone "$GCE_ZONE" \
+            --tunnel-through-iap \
+            --ssh-flag="-p 2345" \
+            --ssh-flag="-N" \
+            --ssh-flag="-L 127.0.0.1:18088:127.0.0.1:8088" \
+            --quiet >iap-tunnel.log 2>&1 &
+          tunnel_pid="$!"
+          trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18088/api/readyz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18088/api/readyz >/dev/null || {
+            cat iap-tunnel.log >&2
+            exit 1
+          }
+
+          curl --fail-with-body -X POST "http://127.0.0.1:18088/api/deployments" \
+            -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data "{\"application_id\":\"$DEPLOY_MANAGER_APPLICATION_ID\",\"trigger\":\"github_push\",\"strategy\":\"blue_green\",\"commit_sha\":\"$COMMIT_SHA\",\"image_ref\":\"$IMAGE_REF\",\"image_digest\":\"$IMAGE_DIGEST\",\"actor\":\"github-actions:$RUN_ID\"}"
+
       - name: Report failure
         if: ${{ failure() && github.event_name == 'workflow_dispatch' }}
         env:
@@ -242,11 +301,3 @@ jobs:
             -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
             -H "Content-Type: application/json" \
             --data "{\"status\":\"failed\",\"external_url\":\"$RUN_URL\",\"error_message\":\"Deploy Manager image build failed\"}"
-
-  release:
-    if: ${{ github.event_name == 'push' }}
-    needs: build
-    uses: ./.github/workflows/deploy-manager-release.yml
-    with:
-      commit_sha: ${{ github.sha }}
-    secrets: inherit
