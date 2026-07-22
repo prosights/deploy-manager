@@ -530,6 +530,32 @@ func TestRemoteStepsPullForArtifactFromDeploymentOptions(t *testing.T) {
 	}
 }
 
+func TestRemoteStepsSyncRepositoryAtArtifactCommit(t *testing.T) {
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "API Service",
+		RepositoryUrl:   pgtype.Text{String: "https://github.com/acme/app.git", Valid: true},
+		Branch:          "main",
+		CommitSha:       pgtype.Text{String: commit, Valid: true},
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/app",
+	}, nil, remoteStepOptions{
+		imageRef:                  "ghcr.io/acme/app:1.0.0",
+		sourceAuthorizationHeader: "Authorization: Basic ephemeral",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "git clone") || !strings.Contains(joined, "checkout --detach '"+commit+"'") {
+		t.Fatalf("expected artifact deploy to sync the exact source commit, got %s", joined)
+	}
+	if strings.Contains(joined, "build --pull") {
+		t.Fatalf("did not expect artifact deploy to build on the target, got %s", joined)
+	}
+}
+
 func TestRemoteStepsBuildOnTargetForSourceBlueGreenDeploy(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ApplicationName: "API Service",

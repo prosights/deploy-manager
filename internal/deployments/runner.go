@@ -288,7 +288,7 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target *db
 }
 
 func (r Runner) sourceAuthorizationHeader(ctx context.Context, target db.GetDeploymentTargetRow, imageRef string) (string, error) {
-	if r.source == nil || strings.TrimSpace(imageRef) != "" || !isSourceDeploy(target) {
+	if r.source == nil || !shouldSyncRepository(target, imageRef) {
 		return "", nil
 	}
 	header, err := r.source.AuthorizationHeader(ctx, target.RepositoryConnectorID, target.RepositoryUrl.String)
