@@ -372,6 +372,14 @@ describe('ProjectDetailRoute', () => {
     expect(within(card).getByText('worker')).toBeInTheDocument()
     expect(within(card).getByText('private')).toBeInTheDocument()
 
+    fireEvent.click(screen.getByRole('button', { name: 'Service ports' }))
+    const ports = await screen.findByRole('dialog', { name: 'Service ports' })
+    expect(within(ports).getByText('worker')).toBeInTheDocument()
+    expect(within(ports).getByText(':8080/tcp')).toBeInTheDocument()
+    expect(within(ports).getByText('http://127.0.0.1:20000')).toBeInTheDocument()
+    expect(within(ports).getByText('Private')).toBeInTheDocument()
+    fireEvent.click(within(ports).getByRole('button', { name: 'Close service ports' }))
+
     fireEvent.click(card)
     const drawer = await screen.findByRole('dialog', { name: 'API' })
 

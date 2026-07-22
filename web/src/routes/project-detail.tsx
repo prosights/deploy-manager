@@ -272,6 +272,7 @@ function ProjectArchitecture({
   const [activeDeploymentID, setActiveDeploymentID] = useState(initialScope.deploymentID)
   const [drawerOpen, setDrawerOpen] = useState(Boolean(initialApplication))
   const [createOpen, setCreateOpen] = useState(false)
+  const [portsOpen, setPortsOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
   const [positions, setPositions] = useState<Record<string, NodePosition>>(() => readNodePositions(project.id))
   const selectedEnvironmentID = environments.some((environment) => environment.id === environmentID) ? environmentID : defaultEnvironmentID
@@ -353,6 +354,10 @@ function ProjectArchitecture({
           </SelectInput>
         </div>
         <div className="flex items-center gap-2">
+          <Button type="button" className="h-8" onClick={() => setPortsOpen(true)}>
+            <Server className="size-4" aria-hidden="true" />
+            Service ports
+          </Button>
           <Button type="button" size="icon" className="size-8" aria-label="Project settings" onClick={() => setProjectSettingsOpen(true)}>
             <Settings className="size-4" aria-hidden="true" />
           </Button>
@@ -405,6 +410,8 @@ function ProjectArchitecture({
           onCreated={() => setCreateOpen(false)}
         />
       </CreateApplicationDialog>
+
+      <ProjectServicePortsDialog open={portsOpen} onOpenChange={setPortsOpen} applications={visibleApplications} routes={routes} />
 
       <ProjectSettingsDialog
         open={projectSettingsOpen}
@@ -561,6 +568,77 @@ function ArchitectureRouteRows({ application, routes }: { application: Applicati
         </div>
       ))}
     </div>
+  )
+}
+
+function ProjectServicePortsDialog({
+  open,
+  onOpenChange,
+  applications,
+  routes,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  applications: Application[]
+  routes: ProxyRoute[]
+}) {
+  const rows = applications.flatMap((application) => {
+    const composeServices = applicationComposeServices(application)
+    const services: ComposeService[] = composeServices.length > 0 ? composeServices : [{ name: 'service' }]
+    const applicationRoutes = routes.filter((route) => route.application_id === application.id)
+    return services.map((service) => ({
+      application,
+      service,
+      routes: composeServices.length === 0
+        ? applicationRoutes
+        : applicationRoutes.filter((route) => route.compose_service === service.name || (!route.compose_service && composeServices.length === 1)),
+      scanned: composeServices.length > 0,
+    }))
+  })
+
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/20 backdrop-blur-[1px] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out" />
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100svh-2rem)] w-[calc(100%-2rem)] max-w-5xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[12px] border border-prosights-border bg-prosights-surface shadow-[0_24px_80px_rgba(0,0,0,0.18)] outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out">
+          <header className="flex shrink-0 items-start justify-between gap-4 border-b border-prosights-border px-5 py-4">
+            <div>
+              <DialogPrimitive.Title className="text-[15px] font-semibold text-prosights-text">Service ports</DialogPrimitive.Title>
+              <DialogPrimitive.Description className="mt-1 text-[11px] text-prosights-muted">Every Compose service in the selected environment and where it is reachable.</DialogPrimitive.Description>
+            </div>
+            <DialogPrimitive.Close aria-label="Close service ports" className="inline-flex size-8 shrink-0 items-center justify-center rounded-prosights-md text-prosights-muted hover:bg-prosights-surface-muted hover:text-prosights-text"><X className="size-4" /></DialogPrimitive.Close>
+          </header>
+          <div className="min-h-0 overflow-auto">
+            {rows.length > 0
+              ? (
+                  <table className="w-full min-w-[760px] text-left text-[12px]">
+                    <thead className="sticky top-0 z-10 border-b border-prosights-border bg-prosights-surface-muted text-[10px] uppercase tracking-wide text-prosights-subtle">
+                      <tr>
+                        <th className="px-4 py-2.5 font-medium">Application</th>
+                        <th className="px-4 py-2.5 font-medium">Compose service</th>
+                        <th className="px-4 py-2.5 font-medium">Container</th>
+                        <th className="px-4 py-2.5 font-medium">Active host</th>
+                        <th className="px-4 py-2.5 font-medium">Access</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-prosights-border">
+                      {rows.map((row) => (
+                        <tr key={`${row.application.id}:${row.service.name}`} className="align-top">
+                          <td className="px-4 py-3"><span className="font-medium text-prosights-text">{row.application.name}</span><span className="mt-0.5 block text-[10px] text-prosights-muted">{row.application.server_name}</span></td>
+                          <td className="px-4 py-3 font-mono text-prosights-text">{row.service.name}</td>
+                          <td className="px-4 py-3 font-mono text-prosights-muted">{row.scanned ? composeContainerPorts(row.service) : 'not scanned'}</td>
+                          <td className="px-4 py-3 font-mono text-prosights-muted">{activeServiceTargets(row.service, row.routes)}</td>
+                          <td className="px-4 py-3 text-prosights-muted"><ServiceRouteLinks routes={row.routes} emptyLabel="Private" showServiceLabel={false} stacked /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+              : <div className="px-5 py-10 text-center text-[12px] text-prosights-muted">No services in this environment.</div>}
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }
 
