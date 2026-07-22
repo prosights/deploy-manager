@@ -16,6 +16,7 @@ import {
   Globe2,
   Hammer,
   History,
+  MoveDiagonal2,
   Play,
   Plus,
   RefreshCw,
@@ -26,7 +27,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import {
@@ -111,6 +112,8 @@ const stackRuntimeConfigName = '__stack__'
 type ServiceTab = 'deployments' | 'variables' | 'metrics' | 'console' | 'settings'
 type DeploymentTab = 'details' | 'build-logs' | 'deploy-logs'
 type NodePosition = { x: number, y: number }
+type NodeLayout = NodePosition & { width?: number, height?: number }
+type NodeSize = { width: number, height: number }
 
 const deploymentHistoryPageSize = 10
 
@@ -153,6 +156,9 @@ type DeploymentConfigurationState = {
 }
 
 const architectureGridSize = 22
+const architectureNodeWidth = 252
+const architectureNodeMinWidth = 220
+const architectureNodeMinHeight = 148
 const serviceTabs: Array<{ id: ServiceTab, label: string }> = [
   { id: 'deployments', label: 'Deployments' },
   { id: 'variables', label: 'Variables' },
@@ -274,7 +280,12 @@ function ProjectArchitecture({
   const [createOpen, setCreateOpen] = useState(false)
   const [portsOpen, setPortsOpen] = useState(false)
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false)
-  const [positions, setPositions] = useState<Record<string, NodePosition>>(() => readNodePositions(project.id))
+  const [layouts, setLayouts] = useState<Record<string, NodeLayout>>(() => readNodeLayouts(project.id))
+  const [canvasOffset, setCanvasOffset] = useState<NodePosition>(() => readCanvasOffset(project.id))
+  const [canvasPanning, setCanvasPanning] = useState(false)
+  const canvasRef = useRef<HTMLElement>(null)
+  const worldRef = useRef<HTMLDivElement>(null)
+  const pan = useRef<{ pointerID: number, x: number, y: number, origin: NodePosition, offset: NodePosition } | undefined>(undefined)
   const selectedEnvironmentID = environments.some((environment) => environment.id === environmentID) ? environmentID : defaultEnvironmentID
   const selectedEnvironment = environments.find((environment) => environment.id === selectedEnvironmentID)
   const visibleApplications = applications.filter((application) => application.environment_id === selectedEnvironmentID)
@@ -293,11 +304,13 @@ function ProjectArchitecture({
   const activeRepository = activeApplication
     ? githubRepositoryForApplication(activeApplication, githubRepositories)
     : undefined
-  const canvasHeight = Math.max(560, Math.ceil(visibleApplications.length / 3) * 190 + 100)
+  useEffect(() => {
+    window.localStorage.setItem(nodePositionStorageKey(project.id), JSON.stringify(layouts))
+  }, [layouts, project.id])
 
   useEffect(() => {
-    window.localStorage.setItem(nodePositionStorageKey(project.id), JSON.stringify(positions))
-  }, [positions, project.id])
+    window.localStorage.setItem(canvasOffsetStorageKey(project.id), JSON.stringify(canvasOffset))
+  }, [canvasOffset, project.id])
 
   useEffect(() => {
     if (selectedEnvironmentID) window.localStorage.setItem(selectedEnvironmentStorageKey(project.id), selectedEnvironmentID)
@@ -334,6 +347,50 @@ function ProjectArchitecture({
     replaceWorkspaceQuery('')
   }
 
+  function applyCanvasOffset(offset: NodePosition) {
+    if (canvasRef.current) canvasRef.current.style.backgroundPosition = `${offset.x}px ${offset.y}px`
+    if (worldRef.current) worldRef.current.style.transform = nodeTransform(offset)
+  }
+
+  function startCanvasPan(event: ReactPointerEvent<HTMLElement>) {
+    if (event.button !== 0 || pan.current || (event.target instanceof Element && event.target.closest('button, a, input, select, textarea'))) return
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    pan.current = { pointerID: event.pointerId, x: event.clientX, y: event.clientY, origin: canvasOffset, offset: canvasOffset }
+    setCanvasPanning(true)
+  }
+
+  function moveCanvas(event: ReactPointerEvent<HTMLElement>) {
+    const current = pan.current
+    if (!current || current.pointerID !== event.pointerId) return
+    current.offset = { x: current.origin.x + event.clientX - current.x, y: current.origin.y + event.clientY - current.y }
+    applyCanvasOffset(current.offset)
+  }
+
+  function finishCanvasPan(event: ReactPointerEvent<HTMLElement>) {
+    const current = pan.current
+    if (!current || current.pointerID !== event.pointerId) return
+    pan.current = undefined
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    setCanvasOffset(current.offset)
+    setCanvasPanning(false)
+  }
+
+  function finishCanvasPanAfterCaptureLoss() {
+    const current = pan.current
+    if (!current) return
+    pan.current = undefined
+    setCanvasOffset(current.offset)
+    setCanvasPanning(false)
+  }
+
+  function cancelCanvasPan(event: ReactPointerEvent<HTMLElement>) {
+    const current = pan.current
+    if (!current || current.pointerID !== event.pointerId) return
+    applyCanvasOffset(current.origin)
+    pan.current = undefined
+    setCanvasPanning(false)
+  }
+
   return (
     <div className="flex h-full min-h-[640px] flex-col overflow-hidden bg-prosights-canvas">
       <header className="flex h-[60px] shrink-0 items-center justify-between gap-4 border-b border-prosights-border bg-prosights-surface px-4 sm:px-5">
@@ -368,35 +425,51 @@ function ProjectArchitecture({
         </div>
       </header>
 
-      <section className="relative min-h-0 flex-1 overflow-auto" aria-labelledby="architecture-heading">
+      <section
+        ref={canvasRef}
+        className={cn('architecture-grid relative min-h-0 flex-1 touch-none select-none overflow-hidden', canvasPanning ? 'cursor-grabbing' : 'cursor-grab')}
+        style={{ backgroundPosition: `${canvasOffset.x}px ${canvasOffset.y}px` }}
+        aria-labelledby="architecture-heading"
+        onPointerDown={startCanvasPan}
+        onPointerMove={moveCanvas}
+        onPointerUp={finishCanvasPan}
+        onPointerCancel={cancelCanvasPan}
+        onLostPointerCapture={finishCanvasPanAfterCaptureLoss}
+      >
         <h1 id="architecture-heading" className="sr-only">Architecture</h1>
-        <div className="architecture-grid relative min-w-[840px]" style={{ minHeight: canvasHeight }}>
-          {visibleApplications.length > 0
-            ? visibleApplications.map((application, index) => (
-                <ArchitectureNode
-                  key={application.id}
-                  application={application}
-                  routes={routes.filter((route) => route.application_id === application.id)}
-                  position={positions[application.id] ?? defaultNodePosition(index)}
-                  onMove={(position) => setPositions((current) => ({ ...current, [application.id]: position }))}
-                  onOpen={() => selectApplication(application)}
-                />
-              ))
-            : (
-                <div className="absolute inset-0 flex items-center justify-center p-6">
-                  <div className="flex max-w-md flex-col items-center rounded-prosights-lg border border-prosights-border bg-prosights-surface px-8 py-7 text-center shadow-sm">
-                    <div className="flex size-10 items-center justify-center rounded-prosights-md border border-prosights-border bg-prosights-surface-muted text-prosights-muted">
-                      <Container className="size-5" aria-hidden="true" />
-                    </div>
-                    <h2 className="mt-4 text-[15px] font-semibold text-prosights-text">No services in {selectedEnvironment?.name ?? 'this environment'}</h2>
-                    <p className="mt-1 text-[13px] leading-5 text-prosights-muted">Import from GitHub and Deploy Manager will find the compose file for you.</p>
-                    <Button type="button" variant="primary" className="mt-4" onClick={() => setCreateOpen(true)}>
-                      <Plus className="size-4" aria-hidden="true" /> Add service
-                    </Button>
+        {visibleApplications.length > 0
+          ? (
+              <div ref={worldRef} className="architecture-world absolute inset-0 will-change-transform" style={{ transform: nodeTransform(canvasOffset) }}>
+                {visibleApplications.map((application, index) => {
+                  const layout = layouts[application.id] ?? defaultNodeLayout(index)
+                  return (
+                    <ArchitectureNode
+                      key={application.id}
+                      application={application}
+                      routes={routes.filter((route) => route.application_id === application.id)}
+                      layout={layout}
+                      onChange={(next) => setLayouts((current) => ({ ...current, [application.id]: next }))}
+                      onOpen={() => selectApplication(application)}
+                    />
+                  )
+                })}
+              </div>
+            )
+          : (
+              <div className="absolute inset-0 flex items-center justify-center p-6">
+                <div className="flex max-w-md flex-col items-center rounded-prosights-lg border border-prosights-border bg-prosights-surface px-8 py-7 text-center shadow-sm">
+                  <div className="flex size-10 items-center justify-center rounded-prosights-md border border-prosights-border bg-prosights-surface-muted text-prosights-muted">
+                    <Container className="size-5" aria-hidden="true" />
                   </div>
+                  <h2 className="mt-4 text-[15px] font-semibold text-prosights-text">No services in {selectedEnvironment?.name ?? 'this environment'}</h2>
+                  <p className="mt-1 text-[13px] leading-5 text-prosights-muted">Import from GitHub and Deploy Manager will find the compose file for you.</p>
+                  <Button type="button" variant="primary" className="mt-4" onClick={() => setCreateOpen(true)}>
+                    <Plus className="size-4" aria-hidden="true" /> Add service
+                  </Button>
                 </div>
-              )}
-        </div>
+              </div>
+            )}
+        {visibleApplications.length > 0 && <div className="pointer-events-none absolute bottom-3 left-3 rounded-prosights-md border border-prosights-border bg-prosights-surface/90 px-2.5 py-1.5 text-[10px] text-prosights-muted shadow-sm backdrop-blur-sm">Drag canvas to pan · drag cards to move · drag the corner to resize</div>}
       </section>
 
       <CreateApplicationDialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -451,29 +524,48 @@ function ProjectArchitecture({
 function ArchitectureNode({
   application,
   routes,
-  position,
-  onMove,
+  layout,
+  onChange,
   onOpen,
 }: {
   application: Application
   routes: ProxyRoute[]
-  position: NodePosition
-  onMove: (position: NodePosition) => void
+  layout: NodeLayout
+  onChange: (layout: NodeLayout) => void
   onOpen: () => void
 }) {
   const drag = useRef<{ pointerID: number, x: number, y: number, origin: NodePosition, position: NodePosition, moved: boolean } | undefined>(undefined)
+  const resize = useRef<{ pointerID: number, x: number, y: number, origin: NodeSize, size: NodeSize } | undefined>(undefined)
+  const cardRef = useRef<HTMLDivElement>(null)
   const suppressClick = useRef(false)
+
+  function resizeWithKeyboard(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    event.stopPropagation()
+    const width = layout.width ?? architectureNodeWidth
+    const height = layout.height ?? cardRef.current?.offsetHeight ?? architectureNodeMinHeight
+    let next: NodeSize
+    if (event.key === 'ArrowRight') next = { width: width + architectureGridSize, height }
+    else if (event.key === 'ArrowLeft') next = { width: Math.max(architectureNodeMinWidth, width - architectureGridSize), height }
+    else if (event.key === 'ArrowDown') next = { width, height: height + architectureGridSize }
+    else if (event.key === 'ArrowUp') next = { width, height: Math.max(architectureNodeMinHeight, height - architectureGridSize) }
+    else return
+    event.preventDefault()
+    onChange({ ...layout, ...next })
+  }
 
   return (
     <div
+      ref={cardRef}
       role="button"
       tabIndex={0}
       aria-label={`Open ${application.name}`}
-      className="group absolute flex min-h-[148px] w-[252px] touch-none cursor-grab flex-col rounded-[10px] border border-prosights-border bg-prosights-surface p-4 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] duration-150 hover:border-prosights-subtle hover:shadow-[0_8px_24px_rgba(0,0,0,0.08)] active:cursor-grabbing active:shadow-[0_12px_32px_rgba(0,0,0,0.10)]"
-      style={{ transform: nodeTransform(position) }}
+      className="group absolute flex min-h-[148px] min-w-[220px] touch-none cursor-grab flex-col overflow-hidden rounded-[10px] border border-prosights-border bg-prosights-surface p-4 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] duration-150 hover:border-prosights-subtle hover:shadow-[0_8px_24px_rgba(0,0,0,0.08)] active:cursor-grabbing active:shadow-[0_12px_32px_rgba(0,0,0,0.10)]"
+      style={{ transform: nodeTransform(layout), width: layout.width ?? architectureNodeWidth, height: layout.height }}
       onPointerDown={(event) => {
-        if (event.button !== 0) return
+        event.stopPropagation()
+        if (event.button !== 0 || drag.current) return
         event.currentTarget.setPointerCapture?.(event.pointerId)
+        const position = { x: layout.x, y: layout.y }
         drag.current = { pointerID: event.pointerId, x: event.clientX, y: event.clientY, origin: position, position, moved: false }
       }}
       onPointerMove={(event) => {
@@ -482,12 +574,9 @@ function ArchitectureNode({
         const deltaX = event.clientX - current.x
         const deltaY = event.clientY - current.y
         if (Math.abs(deltaX) + Math.abs(deltaY) > 4) current.moved = true
-        const canvas = event.currentTarget.parentElement
-        const maxX = snapDown((canvas?.clientWidth || 840) - (event.currentTarget.offsetWidth || 252) - architectureGridSize)
-        const maxY = snapDown((canvas?.clientHeight || 560) - (event.currentTarget.offsetHeight || 148) - architectureGridSize)
         current.position = {
-          x: Math.min(maxX, Math.max(architectureGridSize, snapToGrid(current.origin.x + deltaX))),
-          y: Math.min(maxY, Math.max(architectureGridSize, snapToGrid(current.origin.y + deltaY))),
+          x: snapToGrid(current.origin.x + deltaX),
+          y: snapToGrid(current.origin.y + deltaY),
         }
         event.currentTarget.style.transform = nodeTransform(current.position)
       }}
@@ -496,8 +585,15 @@ function ArchitectureNode({
         if (!current || current.pointerID !== event.pointerId) return
         suppressClick.current = current.moved
         drag.current = undefined
-        event.currentTarget.releasePointerCapture?.(event.pointerId)
-        if (current.moved) onMove(current.position)
+        if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+        if (current.moved) onChange({ ...layout, ...current.position })
+      }}
+      onLostPointerCapture={() => {
+        const current = drag.current
+        if (!current) return
+        suppressClick.current = current.moved
+        drag.current = undefined
+        if (current.moved) onChange({ ...layout, ...current.position })
       }}
       onPointerCancel={(event) => {
         const current = drag.current
@@ -530,13 +626,69 @@ function ArchitectureNode({
         </div>
         <ArrowRight className="mt-1 size-4 shrink-0 text-prosights-subtle opacity-0 transition-[opacity,transform] group-hover:translate-x-0.5 group-hover:opacity-100" aria-hidden="true" />
       </div>
-      <div className="mt-auto flex items-center justify-between gap-3 border-t border-prosights-border pt-3">
+      <div className="mt-auto flex items-center justify-between gap-3 border-t border-prosights-border pt-3 pr-3">
         <span className="inline-flex items-center gap-2 text-[12px] font-medium text-prosights-muted">
           <span className={cn('size-2 rounded-full', application.status === 'healthy' ? 'bg-success' : application.status === 'failed' ? 'bg-danger' : 'bg-prosights-subtle')} />
           {application.status}
         </span>
         <span className="max-w-28 truncate text-[11px] text-prosights-subtle">{application.server_name}</span>
       </div>
+      <button
+        type="button"
+        aria-label={`Resize ${application.name}`}
+        className="absolute bottom-0.5 right-0.5 flex size-6 cursor-nwse-resize items-center justify-center rounded-prosights-sm text-prosights-subtle opacity-60 transition-[color,opacity] duration-150 hover:text-prosights-text hover:opacity-100 focus-visible:text-prosights-text focus-visible:opacity-100"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={resizeWithKeyboard}
+        onPointerDown={(event) => {
+          event.stopPropagation()
+          if (event.button !== 0 || resize.current) return
+          event.currentTarget.setPointerCapture?.(event.pointerId)
+          const origin = {
+            width: cardRef.current?.offsetWidth || layout.width || architectureNodeWidth,
+            height: cardRef.current?.offsetHeight || layout.height || architectureNodeMinHeight,
+          }
+          resize.current = { pointerID: event.pointerId, x: event.clientX, y: event.clientY, origin, size: origin }
+        }}
+        onPointerMove={(event) => {
+          event.stopPropagation()
+          const current = resize.current
+          if (!current || current.pointerID !== event.pointerId) return
+          current.size = {
+            width: Math.max(architectureNodeMinWidth, current.origin.width + event.clientX - current.x),
+            height: Math.max(architectureNodeMinHeight, current.origin.height + event.clientY - current.y),
+          }
+          if (cardRef.current) {
+            cardRef.current.style.width = `${current.size.width}px`
+            cardRef.current.style.height = `${current.size.height}px`
+          }
+        }}
+        onPointerUp={(event) => {
+          event.stopPropagation()
+          const current = resize.current
+          if (!current || current.pointerID !== event.pointerId) return
+          resize.current = undefined
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+          onChange({ ...layout, ...current.size })
+        }}
+        onLostPointerCapture={() => {
+          const current = resize.current
+          if (!current) return
+          resize.current = undefined
+          onChange({ ...layout, ...current.size })
+        }}
+        onPointerCancel={(event) => {
+          event.stopPropagation()
+          const current = resize.current
+          if (!current || current.pointerID !== event.pointerId) return
+          if (cardRef.current) {
+            cardRef.current.style.width = `${current.origin.width}px`
+            cardRef.current.style.height = `${current.origin.height}px`
+          }
+          resize.current = undefined
+        }}
+      >
+        <MoveDiagonal2 className="size-3.5" aria-hidden="true" />
+      </button>
     </div>
   )
 }
@@ -600,7 +752,7 @@ function ProjectServicePortsDialog({
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/20 backdrop-blur-[1px] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out" />
-        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100svh-2rem)] w-[calc(100%-2rem)] max-w-5xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[12px] border border-prosights-border bg-prosights-surface shadow-[0_24px_80px_rgba(0,0,0,0.18)] outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out">
+        <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100svh-2rem)] w-[calc(100%-2rem)] max-w-6xl -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[12px] border border-prosights-border bg-prosights-surface shadow-[0_24px_80px_rgba(0,0,0,0.18)] outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out">
           <header className="flex shrink-0 items-start justify-between gap-4 border-b border-prosights-border px-5 py-4">
             <div>
               <DialogPrimitive.Title className="text-[15px] font-semibold text-prosights-text">Service ports</DialogPrimitive.Title>
@@ -611,12 +763,14 @@ function ProjectServicePortsDialog({
           <div className="min-h-0 overflow-auto">
             {rows.length > 0
               ? (
-                  <table className="w-full min-w-[760px] text-left text-[12px]">
+                  <table className="w-full min-w-[1040px] text-left text-[12px]">
                     <thead className="sticky top-0 z-10 border-b border-prosights-border bg-prosights-surface-muted text-[10px] uppercase tracking-wide text-prosights-subtle">
                       <tr>
                         <th className="px-4 py-2.5 font-medium">Application</th>
                         <th className="px-4 py-2.5 font-medium">Compose service</th>
                         <th className="px-4 py-2.5 font-medium">Container</th>
+                        <th className="px-4 py-2.5 font-medium">Blue host</th>
+                        <th className="px-4 py-2.5 font-medium">Green host</th>
                         <th className="px-4 py-2.5 font-medium">Active host</th>
                         <th className="px-4 py-2.5 font-medium">Access</th>
                       </tr>
@@ -626,7 +780,9 @@ function ProjectServicePortsDialog({
                         <tr key={`${row.application.id}:${row.service.name}`} className="align-top">
                           <td className="px-4 py-3"><span className="font-medium text-prosights-text">{row.application.name}</span><span className="mt-0.5 block text-[10px] text-prosights-muted">{row.application.server_name}</span></td>
                           <td className="px-4 py-3 font-mono text-prosights-text">{row.service.name}</td>
-                          <td className="px-4 py-3 font-mono text-prosights-muted">{row.scanned ? composeContainerPorts(row.service) : 'not scanned'}</td>
+                          <td className="px-4 py-3 font-mono text-prosights-muted">{row.scanned || row.routes.some((route) => route.container_port) ? composeContainerPorts(row.service, row.routes) : 'not scanned'}</td>
+                          <td className="px-4 py-3 font-mono text-prosights-muted">{routeTargets(row.routes, 'blue_upstream_url')}</td>
+                          <td className="px-4 py-3 font-mono text-prosights-muted">{routeTargets(row.routes, 'green_upstream_url')}</td>
                           <td className="px-4 py-3 font-mono text-prosights-muted">{activeServiceTargets(row.service, row.routes)}</td>
                           <td className="px-4 py-3 text-prosights-muted"><ServiceRouteLinks routes={row.routes} emptyLabel="Private" showServiceLabel={false} stacked /></td>
                         </tr>
@@ -1876,7 +2032,7 @@ function ApplicationSettings({
                       </div>
                     </div>
                     <dl className="mt-3 grid gap-3 text-[11px] sm:grid-cols-2 lg:grid-cols-4">
-                      <DetailItem label="Container port" value={composeContainerPorts(item)} />
+                      <DetailItem label="Container port" value={composeContainerPorts(item, serviceRoutes)} />
                       <DetailItem label="Active host" value={activeServiceTargets(item, serviceRoutes)} />
                       <DetailItem label="Blue host" value={routeTargets(serviceRoutes, 'blue_upstream_url')} />
                       <DetailItem label="Green host" value={routeTargets(serviceRoutes, 'green_upstream_url')} />
@@ -2639,8 +2795,12 @@ function upstreamPortLabel(upstream: string): string {
   }
 }
 
-function composeContainerPorts(service: ComposeService): string {
-  return service.ports?.map((port) => `:${port.container_port}/${port.protocol ?? 'tcp'}`).join(', ') || 'none'
+function composeContainerPorts(service: ComposeService, routes: ProxyRoute[] = []): string {
+  const ports = [
+    ...(service.ports ?? []).map((port) => `:${port.container_port}/${port.protocol ?? 'tcp'}`),
+    ...routes.flatMap((route) => route.container_port ? [`:${route.container_port}/tcp`] : []),
+  ]
+  return [...new Set(ports)].join(', ') || 'none'
 }
 
 function composePublishedPorts(service: ComposeService): string {
@@ -2764,22 +2924,33 @@ function isDeploymentTab(value: string | null): value is DeploymentTab { return 
 function newestFirst(deployments: Deployment[]): Deployment[] { return [...deployments].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)) }
 function newestBuilds(builds: BuildRun[]): BuildRun[] { return [...builds].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)) }
 function environmentOrder(environments: Environment[]): Environment[] { const rank = { production: 0, development: 1, preview: 2 }; return [...environments].sort((a, b) => rank[a.kind] - rank[b.kind] || a.name.localeCompare(b.name)) }
-function defaultNodePosition(index: number): NodePosition { return { x: 44 + (index % 3) * 286, y: 44 + Math.floor(index / 3) * 176 } }
+function defaultNodeLayout(index: number): NodeLayout { return { x: 44 + (index % 3) * 286, y: 44 + Math.floor(index / 3) * 176 } }
 function snapToGrid(value: number): number { return Math.round(value / architectureGridSize) * architectureGridSize }
-function snapDown(value: number): number { return Math.max(architectureGridSize, Math.floor(value / architectureGridSize) * architectureGridSize) }
 function nodeTransform(position: NodePosition): string { return `translate3d(${position.x}px, ${position.y}px, 0)` }
 function nodePositionStorageKey(projectID: string): string { return `deploy-manager:architecture:${projectID}` }
+function canvasOffsetStorageKey(projectID: string): string { return `deploy-manager:architecture-camera:${projectID}` }
 function selectedEnvironmentStorageKey(projectID: string): string { return `deploy-manager:project-environment:v1:${projectID}` }
 function readSelectedEnvironmentID(projectID: string): string { return window.localStorage.getItem(selectedEnvironmentStorageKey(projectID)) ?? '' }
 
-function readNodePositions(projectID: string): Record<string, NodePosition> {
+function readCanvasOffset(projectID: string): NodePosition {
   try {
-    const stored = JSON.parse(window.localStorage.getItem(nodePositionStorageKey(projectID)) ?? '{}') as Record<string, Partial<NodePosition>>
-    return Object.fromEntries(Object.entries(stored).flatMap(([applicationID, position]) => (
-      Number.isFinite(position.x) && Number.isFinite(position.y)
-        ? [[applicationID, { x: snapToGrid(position.x as number), y: snapToGrid(position.y as number) }]]
-        : []
-    )))
+    const stored = JSON.parse(window.localStorage.getItem(canvasOffsetStorageKey(projectID)) ?? '{}') as Partial<NodePosition>
+    return Number.isFinite(stored.x) && Number.isFinite(stored.y) ? { x: stored.x as number, y: stored.y as number } : { x: 0, y: 0 }
+  } catch {
+    return { x: 0, y: 0 }
+  }
+}
+
+function readNodeLayouts(projectID: string): Record<string, NodeLayout> {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(nodePositionStorageKey(projectID)) ?? '{}') as Record<string, Partial<NodeLayout>>
+    return Object.fromEntries(Object.entries(stored).flatMap(([applicationID, layout]) => {
+      if (!Number.isFinite(layout.x) || !Number.isFinite(layout.y)) return []
+      const value: NodeLayout = { x: snapToGrid(layout.x as number), y: snapToGrid(layout.y as number) }
+      if (Number.isFinite(layout.width)) value.width = Math.max(architectureNodeMinWidth, layout.width as number)
+      if (Number.isFinite(layout.height)) value.height = Math.max(architectureNodeMinHeight, layout.height as number)
+      return [[applicationID, value]]
+    }))
   } catch {
     return {}
   }
