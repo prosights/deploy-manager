@@ -117,6 +117,13 @@ type githubDetectServicesResponse struct {
 	Services   []githubDetectedService `json:"services"`
 }
 
+type githubRepositoryComposeResponse struct {
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+	Path       string `json:"path"`
+	Content    string `json:"content"`
+}
+
 type githubImportServicesRequest struct {
 	ConnectorID   string                  `json:"connector_id"`
 	Repository    string                  `json:"repository"`
@@ -308,6 +315,70 @@ func (s Server) detectGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 		Repository: repository.Repository,
 		Branch:     repository.Branch,
 		Services:   services,
+	})
+}
+
+func (s Server) getGitHubRepositoryCompose(w http.ResponseWriter, r *http.Request) {
+	if s.github.App == nil {
+		writeError(w, validationError("github app is not configured"))
+		return
+	}
+	connectorID := strings.TrimSpace(r.URL.Query().Get("connector_id"))
+	repositoryName := strings.TrimSpace(r.URL.Query().Get("repository"))
+	branch := strings.TrimSpace(r.URL.Query().Get("branch"))
+	composePath := strings.TrimSpace(r.URL.Query().Get("path"))
+	if branch == "" {
+		branch = "main"
+	}
+	if connectorID == "" || repositoryName == "" || composePath == "" {
+		writeError(w, validationError("connector_id, repository, and path are required"))
+		return
+	}
+	if err := deployments.ValidateGitRefName(branch); err != nil {
+		writeError(w, validationError(err.Error()))
+		return
+	}
+	if err := deployments.ValidateComposePath(composePath); err != nil {
+		writeError(w, validationError(err.Error()))
+		return
+	}
+	id, err := stringutil.PgUUID(connectorID)
+	if err != nil {
+		writeError(w, validationError("connector_id must be a uuid"))
+		return
+	}
+	account, err := s.queries.GetConnectorAccount(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, notFoundError("connector not found"))
+			return
+		}
+		writeError(w, err)
+		return
+	}
+	if account.Provider != "github" || !account.Enabled {
+		writeError(w, validationError("connector must be an enabled github connector"))
+		return
+	}
+	repository, err := githubConnectorRepository(account.Config, repositoryName, branch)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if repository.InstallationID == "" {
+		writeError(w, validationError("repository has no github installation"))
+		return
+	}
+	contents, err := s.github.App.GetRepositoryFile(r.Context(), repository.InstallationID, repository.Repository, composePath, branch)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, githubRepositoryComposeResponse{
+		Repository: repository.Repository,
+		Branch:     branch,
+		Path:       composePath,
+		Content:    string(contents),
 	})
 }
 
