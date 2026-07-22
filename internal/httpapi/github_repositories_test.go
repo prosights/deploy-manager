@@ -115,6 +115,27 @@ func TestNormalizeGitHubBuildDispatchRequestDefaultsWorkflowAndBranch(t *testing
 	}
 }
 
+func TestResolveGitHubBuildCommitExpandsBranchHeadImage(t *testing.T) {
+	ref := ""
+	inputs := map[string]string{"image_ref": "registry.example.com/portal:${SHORT_SHA}"}
+	source := fakeGitHubRepositorySource{
+		commit:    githubconnector.RepositoryCommit{SHA: "d9677d5e2e90216857f93538def483a786dee18e"},
+		commitRef: &ref,
+	}
+	repository := githubconnector.Repository{
+		InstallationID: "123456",
+		Repository:     "prosights/internal",
+		Branch:         "main",
+	}
+	if err := resolveGitHubBuildCommit(context.Background(), source, repository, inputs); err != nil {
+		t.Fatal(err)
+	}
+	expandGitHubBuildInputTemplates(inputs, inputs["commit_sha"])
+	if ref != "main" || inputs["commit_sha"] != source.commit.SHA || inputs["image_ref"] != "registry.example.com/portal:d9677d5e2e90" {
+		t.Fatalf("unexpected resolved build inputs: ref=%q inputs=%+v", ref, inputs)
+	}
+}
+
 func TestGitHubConnectorRepositoryRequiresConnectedRepository(t *testing.T) {
 	config := []byte(`{
 		"installation_id": "123456",
@@ -337,8 +358,10 @@ func TestDetectRepositoryServicesFindsInternalStyleApplications(t *testing.T) {
 }
 
 type fakeGitHubRepositorySource struct {
-	contents map[string][]githubconnector.RepositoryContent
-	files    map[string][]byte
+	contents  map[string][]githubconnector.RepositoryContent
+	files     map[string][]byte
+	commit    githubconnector.RepositoryCommit
+	commitRef *string
 }
 
 func (f fakeGitHubRepositorySource) ListInstallationRepositories(context.Context, string) ([]githubconnector.AppRepository, error) {
@@ -357,8 +380,11 @@ func (f fakeGitHubRepositorySource) ListRepositoryBranches(context.Context, stri
 	return nil, nil
 }
 
-func (f fakeGitHubRepositorySource) GetRepositoryCommit(context.Context, string, string, string) (githubconnector.RepositoryCommit, error) {
-	return githubconnector.RepositoryCommit{}, nil
+func (f fakeGitHubRepositorySource) GetRepositoryCommit(_ context.Context, _, _, ref string) (githubconnector.RepositoryCommit, error) {
+	if f.commitRef != nil {
+		*f.commitRef = ref
+	}
+	return f.commit, nil
 }
 
 func (f fakeGitHubRepositorySource) DispatchWorkflow(context.Context, string, string, string, string, map[string]string) error {

@@ -195,7 +195,7 @@ func TestAppClientGetsRepositoryCommitMetadata(t *testing.T) {
 		switch r.URL.Path {
 		case "/app/installations/123/access_tokens":
 			_, _ = w.Write([]byte(`{"token":"installation-token"}`))
-		case "/repos/prosights/internal/commits/3e3405ae20":
+		case "/repos/prosights/internal/commits/3e3405ae20", "/repos/prosights/internal/commits/main":
 			if r.Header.Get("Authorization") != "Bearer installation-token" {
 				t.Fatalf("expected installation token, got %q", r.Header.Get("Authorization"))
 			}
@@ -220,6 +220,9 @@ func TestAppClientGetsRepositoryCommitMetadata(t *testing.T) {
 	}
 	if commit.AuthorAvatarURL != "https://avatars.githubusercontent.com/u/42?v=4" {
 		t.Fatalf("unexpected commit avatar: %+v", commit)
+	}
+	if _, err := client.GetRepositoryCommit(context.Background(), "123", "prosights/internal", "main"); err != nil {
+		t.Fatalf("get commit by branch: %v", err)
 	}
 }
 

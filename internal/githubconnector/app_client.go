@@ -240,7 +240,7 @@ func (c *AppClient) ListRepositoryBranches(ctx context.Context, installationID s
 	return branches, nil
 }
 
-func (c *AppClient) GetRepositoryCommit(ctx context.Context, installationID string, repository string, sha string) (RepositoryCommit, error) {
+func (c *AppClient) GetRepositoryCommit(ctx context.Context, installationID string, repository string, ref string) (RepositoryCommit, error) {
 	installationID = strings.TrimSpace(installationID)
 	if !validNumericID(installationID) {
 		return RepositoryCommit{}, fmt.Errorf("installation_id must be numeric")
@@ -249,9 +249,9 @@ func (c *AppClient) GetRepositoryCommit(ctx context.Context, installationID stri
 	if !validRepository(repository) {
 		return RepositoryCommit{}, fmt.Errorf("repository must be owner/name")
 	}
-	sha = strings.TrimSpace(sha)
-	if !validCommitSHA(sha) {
-		return RepositoryCommit{}, fmt.Errorf("sha must be a 7 to 40 character hexadecimal commit")
+	ref = strings.TrimSpace(ref)
+	if !validBranch(ref) {
+		return RepositoryCommit{}, fmt.Errorf("ref contains unsupported characters")
 	}
 	token, err := c.installationToken(ctx, installationID)
 	if err != nil {
@@ -271,7 +271,7 @@ func (c *AppClient) GetRepositoryCommit(ctx context.Context, installationID stri
 			AvatarURL string `json:"avatar_url"`
 		} `json:"author"`
 	}
-	if _, err := c.getJSON(ctx, "/repos/"+repository+"/commits/"+sha, token, &response); err != nil {
+	if _, err := c.getJSON(ctx, "/repos/"+repository+"/commits/"+url.PathEscape(ref), token, &response); err != nil {
 		return RepositoryCommit{}, err
 	}
 	message := strings.TrimSpace(strings.SplitN(strings.ReplaceAll(response.Commit.Message, "\r\n", "\n"), "\n", 2)[0])
