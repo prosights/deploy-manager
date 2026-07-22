@@ -65,7 +65,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 		},
 	}
 
-	if isSourceDeployWithOptions(target, stepOptions) {
+	if shouldSyncRepository(target, stepOptions.imageRef) {
 		repository := stringutil.ShellQuote(target.RepositoryUrl.String)
 		branch := stringutil.ShellQuote(target.Branch)
 		gitCommands, err := sourceGitCommands(remoteDir, stepOptions.sourceAuthorizationHeader)
@@ -257,6 +257,13 @@ func isSourceDeploy(target db.GetDeploymentTargetRow) bool {
 
 func isSourceDeployWithOptions(target db.GetDeploymentTargetRow, options remoteStepOptions) bool {
 	return strings.TrimSpace(options.imageRef) == "" && isSourceDeploy(target)
+}
+
+func shouldSyncRepository(target db.GetDeploymentTargetRow, imageRef string) bool {
+	if !target.RepositoryUrl.Valid || strings.TrimSpace(target.RepositoryUrl.String) == "" {
+		return false
+	}
+	return strings.TrimSpace(imageRef) == "" || strings.TrimSpace(deploymentCommit(target)) != ""
 }
 
 func resolveRemoteStepOptions(target db.GetDeploymentTargetRow, options []remoteStepOptions) remoteStepOptions {

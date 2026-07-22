@@ -164,6 +164,24 @@ func TestRunnerBoundsDeploymentLogMessages(t *testing.T) {
 	}
 }
 
+func TestRunnerRequestsSourceAuthorizationForArtifactCommit(t *testing.T) {
+	source := &fakeSourceAuthenticator{header: "Authorization: Basic ephemeral"}
+	runner := NewRunner(&fakeRunnerQueries{}, NewLogBus(nil), nil, nil, source)
+	target := db.GetDeploymentTargetRow{
+		RepositoryUrl:         pgtype.Text{String: "https://github.com/acme/app.git", Valid: true},
+		RepositoryConnectorID: pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+		CommitSha:             pgtype.Text{String: "0123456789abcdef0123456789abcdef01234567", Valid: true},
+	}
+
+	header, err := runner.sourceAuthorizationHeader(context.Background(), target, "ghcr.io/acme/app:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if header != source.header || source.calls != 1 {
+		t.Fatalf("expected artifact deployment to request source authorization once, got header %q and %d calls", header, source.calls)
+	}
+}
+
 func TestRunnerRedactsDeploymentLogMessages(t *testing.T) {
 	deploymentID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
 	queries := &fakeRunnerQueries{}
@@ -712,6 +730,16 @@ type fakeRuntimeVariableSource struct {
 type scopedRuntimeVariableSource struct {
 	variables map[string][]connectors.RuntimeVariable
 	scopes    []connectors.RuntimeVariableScope
+}
+
+type fakeSourceAuthenticator struct {
+	header string
+	calls  int
+}
+
+func (source *fakeSourceAuthenticator) AuthorizationHeader(context.Context, pgtype.UUID, string) (string, error) {
+	source.calls++
+	return source.header, nil
 }
 
 func (source fakeRuntimeVariableSource) RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
