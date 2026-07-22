@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -918,13 +919,17 @@ func (s Server) dispatchGitHubBuild(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	request = fillGitHubBuildDefaults(request, repository)
-	expandGitHubBuildInputTemplates(request.Inputs, request.Inputs["commit_sha"])
-	if err := validateGitHubBuildDispatchRequest(request); err != nil {
+	if repository.InstallationID == "" {
+		writeError(w, validationError("github repository requires installation_id before builds can be dispatched"))
+		return
+	}
+	if err := resolveGitHubBuildCommit(r.Context(), s.github.App, repository, request.Inputs); err != nil {
 		writeError(w, err)
 		return
 	}
-	if repository.InstallationID == "" {
-		writeError(w, validationError("github repository requires installation_id before builds can be dispatched"))
+	expandGitHubBuildInputTemplates(request.Inputs, request.Inputs["commit_sha"])
+	if err := validateGitHubBuildDispatchRequest(request); err != nil {
+		writeError(w, err)
 		return
 	}
 	build, err := s.queries.CreateBuildRun(r.Context(), db.CreateBuildRunParams{
@@ -957,6 +962,25 @@ func (s Server) dispatchGitHubBuild(w http.ResponseWriter, r *http.Request) {
 		"provider":     "github_actions",
 	})
 	writeJSON(w, http.StatusAccepted, githubBuildDispatchResponse{Build: build})
+}
+
+func resolveGitHubBuildCommit(ctx context.Context, source GitHubAppRepositorySource, repository githubconnector.Repository, inputs map[string]string) error {
+	if sha := strings.TrimSpace(inputs["commit_sha"]); sha != "" {
+		if !deployments.ValidCommitSHA(sha) {
+			return validationError("commit_sha must be a 7 to 40 character hexadecimal SHA")
+		}
+		inputs["commit_sha"] = sha
+		return nil
+	}
+	commit, err := source.GetRepositoryCommit(ctx, repository.InstallationID, repository.Repository, repository.Branch)
+	if err != nil {
+		return fmt.Errorf("resolve github branch head: %w", err)
+	}
+	if !deployments.ValidCommitSHA(commit.SHA) {
+		return fmt.Errorf("resolve github branch head: github returned an invalid commit SHA")
+	}
+	inputs["commit_sha"] = commit.SHA
+	return nil
 }
 
 func githubRepositoryResponses(account db.ConnectorAccount, raw []byte) []githubRepositoryResponse {
