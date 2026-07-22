@@ -332,8 +332,9 @@ SET environment_id = sqlc.arg(environment_id)::uuid,
     doppler_project = sqlc.narg(doppler_project)::text,
     doppler_config = sqlc.narg(doppler_config)::text,
     github_auto_deploy = sqlc.arg(github_auto_deploy)::boolean,
+    compose_services = sqlc.arg(compose_services)::jsonb,
     configuration_revision = CASE
-        WHEN ROW(environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, health_check_url, doppler_project, doppler_config)
+        WHEN ROW(environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, health_check_url, doppler_project, doppler_config, compose_services)
             IS DISTINCT FROM ROW(
                 sqlc.arg(environment_id)::uuid,
                 sqlc.arg(server_id)::uuid,
@@ -344,7 +345,8 @@ SET environment_id = sqlc.arg(environment_id)::uuid,
                 sqlc.arg(remote_directory)::text,
                 sqlc.narg(health_check_url)::text,
                 sqlc.narg(doppler_project)::text,
-                sqlc.narg(doppler_config)::text
+                sqlc.narg(doppler_config)::text,
+                sqlc.arg(compose_services)::jsonb
             )
         THEN configuration_revision + 1
         ELSE configuration_revision

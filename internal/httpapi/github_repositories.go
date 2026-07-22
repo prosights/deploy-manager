@@ -94,12 +94,13 @@ type githubDetectedService struct {
 }
 
 type githubComposeService struct {
-	Name         string              `json:"name"`
-	Image        string              `json:"image,omitempty"`
-	BuildContext string              `json:"build_context,omitempty"`
-	Dockerfile   string              `json:"dockerfile,omitempty"`
-	Ports        []githubComposePort `json:"ports"`
-	DependsOn    []string            `json:"depends_on"`
+	Name          string              `json:"name"`
+	Image         string              `json:"image,omitempty"`
+	BuildContext  string              `json:"build_context,omitempty"`
+	Dockerfile    string              `json:"dockerfile,omitempty"`
+	Ports         []githubComposePort `json:"ports"`
+	DependsOn     []string            `json:"depends_on"`
+	ExecutionMode string              `json:"execution_mode,omitempty"`
 }
 
 type githubComposePort struct {

@@ -410,6 +410,48 @@ func TestCheckColorHealthUsesApplicationPortPair(t *testing.T) {
 	}
 }
 
+func TestSingletonComposeServiceNames(t *testing.T) {
+	names, err := singletonComposeServiceNames([]byte(`[{"name":"web"},{"name":"worker","execution_mode":"singleton"},{"name":"scheduler","execution_mode":"follow_stack"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(names, []string{"worker"}) {
+		t.Fatalf("expected only the singleton worker, got %+v", names)
+	}
+}
+
+func TestAllComposeServicesRunning(t *testing.T) {
+	if !allComposeServicesRunning("scheduler\nworker\n", []string{"worker", "scheduler"}) {
+		t.Fatal("expected all requested services to be running")
+	}
+	if allComposeServicesRunning("worker\n", []string{"worker", "scheduler"}) {
+		t.Fatal("expected a missing service to fail verification")
+	}
+}
+
+func TestSwitchSingletonServicesRestoresOldColorWhenStartFails(t *testing.T) {
+	runner := NewRunner(&fakeRunnerQueries{}, NewLogBus(nil), nil, nil)
+	remote := &fakeRemoteRunner{errors: map[int]error{1: errors.New("start failed")}}
+	target := db.GetDeploymentTargetRow{
+		ApplicationName: "AllEyes",
+		Strategy:        "blue_green",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/alleyes",
+	}
+	options := remoteStepOptions{singletonServices: []string{"worker"}}
+
+	err := runner.switchSingletonServices(context.Background(), db.Deployment{}, target, remote, "blue", "green", options)
+	if err == nil {
+		t.Fatal("expected candidate worker start to fail")
+	}
+	if len(remote.commands) != 4 {
+		t.Fatalf("expected stop blue, start green, stop green, and restore blue, got %+v", remote.commands)
+	}
+	if !strings.Contains(remote.commands[0], "'alleyes-blue'") || !strings.Contains(remote.commands[1], "'alleyes-green'") || !strings.Contains(remote.commands[3], "'alleyes-blue'") {
+		t.Fatalf("expected the old blue worker to be restored, got %+v", remote.commands)
+	}
+}
+
 func TestCheckColorHealthUsesDockerHostOnlyForPlayground(t *testing.T) {
 	runner := NewRunner(&fakeRunnerQueries{proxyRoutes: []db.ListProxyRouteTargetsForApplicationRow{{
 		BlueUpstreamUrl:  pgtype.Text{String: "http://127.0.0.1:5201", Valid: true},
@@ -720,6 +762,7 @@ type fakeRemoteRunner struct {
 	commands []string
 	output   string
 	err      error
+	errors   map[int]error
 }
 
 type fakeRuntimeVariableSource struct {
@@ -752,7 +795,11 @@ func (source *scopedRuntimeVariableSource) RuntimeVariables(_ context.Context, s
 }
 
 func (r *fakeRemoteRunner) Run(_ context.Context, command string) (string, error) {
+	index := len(r.commands)
 	r.commands = append(r.commands, command)
+	if err := r.errors[index]; err != nil {
+		return r.output, err
+	}
 	return r.output, r.err
 }
 

@@ -616,6 +616,27 @@ func TestRemoteStepsUseBlueGreenStrategy(t *testing.T) {
 	}
 }
 
+func TestRemoteStepsPrepareSingletonServicesWithoutStartingThem(t *testing.T) {
+	steps, err := remoteSteps(db.GetDeploymentTargetRow{
+		ApplicationName: "AllEyes",
+		Strategy:        "blue_green",
+		ComposePath:     "docker-compose.yml",
+		RemoteDirectory: "/srv/alleyes",
+		HealthCheckUrl:  pgtype.Text{String: "http://127.0.0.1:{port}/health?color={color}", Valid: true},
+	}, nil, remoteStepOptions{singletonServices: []string{"monitoring-worker"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(commands(steps), "\n")
+	if !strings.Contains(joined, "--scale 'monitoring-worker=0'") {
+		t.Fatalf("expected singleton worker to be scaled to zero in the standby color, got %s", joined)
+	}
+	if !strings.Contains(joined, "up --no-start --no-deps --no-build --force-recreate 'monitoring-worker'") {
+		t.Fatalf("expected a stopped worker container to be prepared for promotion, got %s", joined)
+	}
+}
+
 func TestRemoteStepsExportEachManagedRoutePort(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ApplicationName: "AllEyes",

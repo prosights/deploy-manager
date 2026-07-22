@@ -104,6 +104,7 @@ export type ComposeService = {
   dockerfile?: string
   ports?: ComposeServicePort[]
   depends_on?: string[]
+  execution_mode?: 'follow_stack' | 'singleton'
 }
 
 export type Deployment = {
@@ -274,7 +275,9 @@ export type CreateApplicationInput = {
   github_auto_deploy?: boolean
 }
 
-export type UpdateApplicationInput = CreateApplicationInput
+export type UpdateApplicationInput = CreateApplicationInput & {
+  service_execution_modes?: Record<string, 'follow_stack' | 'singleton'>
+}
 
 export type Project = {
   id: string
