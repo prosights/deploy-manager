@@ -449,6 +449,13 @@ export type GitHubDetectedServicesResponse = {
   services: GitHubDetectedService[]
 }
 
+export type GitHubRepositoryCompose = {
+  repository: string
+  branch: string
+  path: string
+  content: string
+}
+
 export type GitHubRepositoryBranchesResponse = {
   repository: string
   branches: string[]
@@ -782,6 +789,11 @@ export function detectGitHubRepositoryServices(input: { connector_id: string, re
   })
   if (input.root) params.set('root', input.root)
   return api<GitHubDetectedServicesResponse>(`/api/github/repositories/detect?${params}`)
+}
+
+export function getGitHubRepositoryCompose(input: { connector_id: string, repository: string, branch: string, path: string }, init?: RequestInit) {
+  const params = new URLSearchParams(input)
+  return api<GitHubRepositoryCompose>(`/api/github/repositories/compose?${params}`, init)
 }
 
 export function importGitHubRepositoryServices(projectID: string, input: ImportGitHubServicesInput) {

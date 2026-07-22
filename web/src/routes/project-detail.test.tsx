@@ -9,6 +9,7 @@ import {
   deleteEnvironment,
   detectGitHubRepositoryServices,
   dispatchGitHubBuild,
+  getGitHubRepositoryCompose,
   importGitHubRepositoryServices,
   redeployApplicationConfiguration,
   redeployProjectConfiguration,
@@ -63,6 +64,7 @@ vi.mock('../lib/api', () => ({
   deleteProject: vi.fn(async () => undefined),
   deleteProxyRoute: vi.fn(async () => undefined),
   dispatchGitHubBuild: vi.fn(async () => ({ build: { id: 'build_2', status: 'dispatched' }, deployments: [] })),
+  getGitHubRepositoryCompose: vi.fn(async (input) => ({ ...input, content: 'services:\n  api:\n    image: registry.example.com/api\n' })),
   importGitHubRepositoryServices: vi.fn(async () => ({ applications: [{ id: 'app_2' }], connector: { id: 'connector_github' } })),
   listGitHubRepositoryBranches: vi.fn(async () => ({ repository: 'prosights/api', branches: ['main', 'release/2026-07'] })),
   listProjectRuntimeVariables: vi.fn(async () => ({ variables: [{ key: 'PUBLIC_API_URL', value: 'https://api.internal' }], configuration_revision: 1, changed: false })),
@@ -369,6 +371,33 @@ describe('ProjectDetailRoute', () => {
     expect(within(drawer).getAllByRole('link', { name: 'https://api.example.com' }).length).toBeGreaterThan(0)
     expect(within(drawer).getAllByRole('link', { name: 'https://worker.example.com' }).length).toBeGreaterThan(0)
     expect(within(drawer).queryByText('+1')).not.toBeInTheDocument()
+  })
+
+  it('shows live service ports and the configured Compose file', async () => {
+    proxyRoutes = [{
+      id: 'route_api', server_id: 'server_1', application_id: 'app_1', domain: 'api.example.com', upstream_url: 'http://127.0.0.1:20001',
+      blue_upstream_url: 'http://127.0.0.1:20000', green_upstream_url: 'http://127.0.0.1:20001', compose_service: 'api', container_port: 8080,
+      tls_enabled: true, status: 'applied', last_applied_at: null, server_name: 'app-01', proxy_type: 'caddy', application_name: 'API',
+    }]
+    renderRoute()
+
+    expect((await screen.findAllByText(':20001')).length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Open API' }))
+    const drawer = await screen.findByRole('dialog', { name: 'API' })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Settings' }))
+
+    expect(within(drawer).getAllByText('Active host')).toHaveLength(2)
+    expect(within(drawer).getAllByText('http://127.0.0.1:20001').length).toBeGreaterThan(0)
+    expect(within(drawer).getAllByText('http://127.0.0.1:20000').length).toBeGreaterThan(0)
+
+    fireEvent.click(within(drawer).getByRole('button', { name: /Compose file/ }))
+    expect(await within(drawer).findByLabelText('Compose file contents')).toHaveTextContent('registry.example.com/api')
+    expect(getGitHubRepositoryCompose).toHaveBeenCalledWith({
+      connector_id: 'connector_github',
+      repository: 'prosights/api',
+      branch: 'main',
+      path: 'api/compose.yml',
+    }, expect.anything())
   })
 
   it('opens deployment details and separates build and deploy logs', async () => {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"deploy-manager/internal/db"
@@ -246,6 +247,18 @@ func TestNormalizeRepositoryRoot(t *testing.T) {
 		if _, err := normalizeRepositoryRoot(value); err == nil {
 			t.Fatalf("expected root %q to fail", value)
 		}
+	}
+}
+
+func TestGitHubRepositoryComposeRejectsUnsafePath(t *testing.T) {
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{App: fakeGitHubRepositorySource{}}, nil, t.TempDir(), AuthConfig{Disabled: true})
+	request := httptest.NewRequest(http.MethodGet, "/api/github/repositories/compose?connector_id=11111111-1111-4111-8111-111111111111&repository=prosights/internal&branch=main&path=../secrets.yml", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("expected unsafe compose path to be rejected, got %d", response.Code)
 	}
 }
 

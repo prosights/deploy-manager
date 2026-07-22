@@ -11,6 +11,7 @@ import {
   Container,
   Ellipsis,
   ExternalLink,
+  FileCode2,
   Github,
   Globe2,
   Hammer,
@@ -54,6 +55,7 @@ import {
   deleteProxyRoute,
   detectGitHubRepositoryServices,
   dispatchGitHubBuild,
+  getGitHubRepositoryCompose,
   importGitHubRepositoryServices,
   listGitHubRepositoryBranches,
   listProjectRuntimeVariables,
@@ -537,7 +539,7 @@ function ArchitectureRouteRows({ application, routes }: { application: Applicati
   return (
     <div className="mt-1 grid gap-0.5 text-[10px] leading-4 text-prosights-muted">
       {rows.map((row) => (
-        <div key={`${row.label}:${row.url}`} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-1.5">
+        <div key={`${row.label}:${row.url}`} className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-1.5">
           <span className="font-mono text-prosights-subtle">{row.label}</span>
           {row.url.startsWith('http') ? (
             <a
@@ -553,6 +555,7 @@ function ArchitectureRouteRows({ application, routes }: { application: Applicati
           ) : (
             <span className="truncate">{row.url}</span>
           )}
+          {row.upstream && <span title={`Active upstream ${row.upstream}`} className="font-mono text-prosights-subtle">{upstreamPortLabel(row.upstream)}</span>}
         </div>
       ))}
     </div>
@@ -739,6 +742,7 @@ export function ApplicationDrawer({
                       : (
                           <ApplicationSettings
                             application={application}
+                            repository={repository}
                             routes={routes}
                             environments={environments}
                             servers={servers}
@@ -1664,6 +1668,7 @@ function MetricBar({ label, value }: { label: string, value: number | null }) {
 
 function ApplicationSettings({
   application,
+  repository,
   routes,
   environments,
   servers,
@@ -1671,6 +1676,7 @@ function ApplicationSettings({
   onDeleted,
 }: {
   application: Application
+  repository?: GitHubRepository
   routes: ProxyRoute[]
   environments: Environment[]
   servers: ServerRecord[]
@@ -1680,7 +1686,22 @@ function ApplicationSettings({
   const queryClient = useQueryClient()
   const [form, setForm] = useState<ServiceForm>(() => applicationToServiceForm(application))
   const [error, setError] = useState<string>()
+  const [composeOpen, setComposeOpen] = useState(false)
   const composeServices = applicationComposeServices(application)
+  const composeFile = useQuery({
+    queryKey: ['github-compose', repository?.connector_id, repository?.repository, application.branch, application.compose_path],
+    queryFn: ({ signal }) => {
+      if (!repository) throw new Error('This service is not connected to a GitHub repository.')
+      return getGitHubRepositoryCompose({
+        connector_id: repository.connector_id,
+        repository: repository.repository,
+        branch: application.branch,
+        path: application.compose_path,
+      }, { signal })
+    },
+    enabled: composeOpen && Boolean(repository),
+    staleTime: 60_000,
+  })
   const save = useMutation({
     mutationFn: () => {
       validateServiceForm(form)
@@ -1725,6 +1746,24 @@ function ApplicationSettings({
               <input type="checkbox" checked={form.github_auto_deploy} onChange={(event) => setForm((current) => ({ ...current, github_auto_deploy: event.target.checked }))} className="size-4 accent-black" />
             </label>
           </div>
+          <div className="mt-4 overflow-hidden rounded-prosights-md border border-prosights-border bg-prosights-surface-muted">
+            <button type="button" aria-expanded={composeOpen} className="flex w-full items-center gap-3 px-3 py-2.5 text-left" onClick={() => setComposeOpen((open) => !open)}>
+              <FileCode2 className="size-4 shrink-0 text-prosights-muted" aria-hidden="true" />
+              <span className="min-w-0 flex-1"><span className="block text-[12px] font-medium text-prosights-text">Compose file</span><span className="block truncate font-mono text-[10px] text-prosights-muted">{application.compose_path} · {repository ? `${repository.repository}#${application.branch}` : 'GitHub not connected'}</span></span>
+              <ChevronDown className={cn('size-4 shrink-0 text-prosights-muted transition-transform', composeOpen && 'rotate-180')} aria-hidden="true" />
+            </button>
+            {composeOpen && (
+              <div className="border-t border-prosights-border">
+                {!repository
+                  ? <p className="p-3 text-[11px] text-prosights-muted">Connect this service to GitHub to view its Compose file.</p>
+                  : composeFile.isPending
+                    ? <div className="flex items-center gap-2 p-3 text-[11px] text-prosights-muted"><RefreshCw className="size-3.5 animate-spin" /> Loading Compose file…</div>
+                    : composeFile.error
+                      ? <div className="p-3"><InlineError message={composeFile.error.message} /></div>
+                      : <pre aria-label="Compose file contents" className="max-h-[480px] overflow-auto bg-zinc-950 p-4 font-mono text-[11px] leading-5 text-zinc-300">{composeFile.data?.content}</pre>}
+              </div>
+            )}
+          </div>
         </SettingsSection>
         <SettingsSection title="Deploy" description="Where the compose stack runs and how blue-green releases are checked.">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -1737,26 +1776,38 @@ function ApplicationSettings({
           </div>
         </SettingsSection>
         {composeServices.length > 0 && (
-          <SettingsSection title="Compose stack" description="Choose which containers follow both colors and which run only on the active color.">
+          <SettingsSection title="Compose stack" description="See each container's live host port and choose whether it follows both colors or only the active color.">
             <div className="divide-y divide-prosights-border overflow-hidden rounded-prosights-md border border-prosights-border">
-              {composeServices.map((item) => (
-                <div key={item.name} className="flex flex-col gap-2 bg-prosights-surface-muted px-3 py-2.5 sm:flex-row sm:items-center">
-                  <span className="min-w-32 text-[12px] font-semibold text-prosights-text">{item.name}</span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-prosights-muted">{item.image ?? item.dockerfile ?? 'compose build'}</span>
-                  <div className="flex flex-wrap gap-1">{(item.ports ?? []).map((port) => <Badge key={`${port.container_port}/${port.protocol ?? 'tcp'}`} tone="neutral">:{port.container_port}/{port.protocol ?? 'tcp'}</Badge>)}</div>
-                  {(item.depends_on ?? []).length > 0 && <span className="text-[10px] text-prosights-muted">depends on {(item.depends_on ?? []).join(', ')}</span>}
-                  <div className="w-full sm:w-48">
-                    <SelectInput
-                      label="Run mode"
-                      value={form.service_execution_modes[item.name] ?? 'follow_stack'}
-                      onChange={(mode) => setForm((current) => ({ ...current, service_execution_modes: { ...current.service_execution_modes, [item.name]: mode as 'follow_stack' | 'singleton' } }))}
-                    >
-                      <option value="follow_stack">Follow stack</option>
-                      <option value="singleton">Singleton</option>
-                    </SelectInput>
+              {composeServices.map((item) => {
+                const serviceRoutes = routes.filter((route) => route.compose_service === item.name || (!route.compose_service && composeServices.length === 1))
+                return (
+                  <div key={item.name} className="bg-prosights-surface-muted p-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                      <div className="min-w-0 flex-1"><div className="text-[12px] font-semibold text-prosights-text">{item.name}</div><div className="mt-0.5 truncate font-mono text-[10px] text-prosights-muted">{item.image ?? item.dockerfile ?? 'compose build'}</div></div>
+                      <div className="w-full shrink-0 sm:w-48">
+                        <SelectInput
+                          label="Run mode"
+                          value={form.service_execution_modes[item.name] ?? 'follow_stack'}
+                          onChange={(mode) => setForm((current) => ({ ...current, service_execution_modes: { ...current.service_execution_modes, [item.name]: mode as 'follow_stack' | 'singleton' } }))}
+                        >
+                          <option value="follow_stack">Follow stack</option>
+                          <option value="singleton">Singleton</option>
+                        </SelectInput>
+                      </div>
+                    </div>
+                    <dl className="mt-3 grid gap-3 text-[11px] sm:grid-cols-2 lg:grid-cols-4">
+                      <DetailItem label="Container port" value={composeContainerPorts(item)} />
+                      <DetailItem label="Active host" value={activeServiceTargets(item, serviceRoutes)} />
+                      <DetailItem label="Blue host" value={routeTargets(serviceRoutes, 'blue_upstream_url')} />
+                      <DetailItem label="Green host" value={routeTargets(serviceRoutes, 'green_upstream_url')} />
+                    </dl>
+                    <div className="mt-3 flex flex-col gap-1 text-[10px] text-prosights-muted sm:flex-row sm:items-center sm:justify-between">
+                      <ServiceRouteLinks routes={serviceRoutes} emptyLabel="No domain · private service" showServiceLabel={false} />
+                      {(item.depends_on ?? []).length > 0 && <span>Depends on {(item.depends_on ?? []).join(', ')}</span>}
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
             <p className="mt-2 text-[11px] text-prosights-muted">Use “Singleton” for schedulers, queue consumers, and monitoring workers that must have exactly one running copy across blue/green.</p>
           </SettingsSection>
@@ -2481,11 +2532,37 @@ function proxyRouteURL(route: ProxyRoute): string {
   return `${route.tls_enabled === false ? 'http' : 'https'}://${route.domain}`
 }
 
-function architectureRouteRows(application: Application, routes: ProxyRoute[]): Array<{ label: string, url: string }> {
+function architectureRouteRows(application: Application, routes: ProxyRoute[]): Array<{ label: string, url: string, upstream?: string }> {
   if (routes.length > 0) {
-    return routes.map((route) => ({ label: route.compose_service || 'service', url: proxyRouteURL(route) }))
+    return routes.map((route) => ({ label: route.compose_service || 'service', url: proxyRouteURL(route), upstream: route.upstream_url }))
   }
   return [{ label: 'service', url: application.domain ? `https://${application.domain}` : 'No domains yet' }]
+}
+
+function upstreamPortLabel(upstream: string): string {
+  try {
+    const url = new URL(upstream)
+    return `:${url.port || (url.protocol === 'https:' ? '443' : '80')}`
+  } catch {
+    return upstream
+  }
+}
+
+function composeContainerPorts(service: ComposeService): string {
+  return service.ports?.map((port) => `:${port.container_port}/${port.protocol ?? 'tcp'}`).join(', ') || 'none'
+}
+
+function composePublishedPorts(service: ComposeService): string {
+  return service.ports?.filter((port) => port.published_port).map((port) => `127.0.0.1:${port.published_port}`).join(', ') || ''
+}
+
+function routeTargets(routes: ProxyRoute[], field: 'upstream_url' | 'blue_upstream_url' | 'green_upstream_url'): string {
+  const values = [...new Set(routes.flatMap((route) => route[field] ? [route[field]] : []))]
+  return values.join(', ') || 'not published'
+}
+
+function activeServiceTargets(service: ComposeService, routes: ProxyRoute[]): string {
+  return routes.length > 0 ? routeTargets(routes, 'upstream_url') : composePublishedPorts(service) || 'private'
 }
 
 function decodeJSONField(value: unknown): unknown {

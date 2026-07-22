@@ -149,6 +149,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Get("/github/status", server.githubStatus)
 			r.Get("/github/repositories", server.listGitHubRepositories)
 			r.Get("/github/repositories/detect", server.detectGitHubRepositoryServices)
+			r.Get("/github/repositories/compose", server.getGitHubRepositoryCompose)
 			r.Get("/github/repositories/branches", server.listGitHubRepositoryBranches)
 			r.Get("/github/repositories/commit", server.getGitHubRepositoryCommit)
 			r.Post("/projects/{projectID}/github/import", server.importGitHubRepositoryServices)
