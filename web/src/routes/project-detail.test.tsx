@@ -359,17 +359,24 @@ describe('ProjectDetailRoute', () => {
     expect(within(drawer).getAllByRole('button', { name: /Open deployment/ })).toHaveLength(3)
   })
 
-  it('shows every routed service URL instead of collapsing them into a count', async () => {
+  it('shows routed and private compose services on the project card', async () => {
     proxyRoutes = [
       { id: 'route_api', server_id: 'server_1', application_id: 'app_1', domain: 'api.example.com', upstream_url: 'http://127.0.0.1:20000', blue_upstream_url: 'http://127.0.0.1:20000', green_upstream_url: 'http://127.0.0.1:20001', compose_service: 'api', container_port: 8080, tls_enabled: true, status: 'applied', last_applied_at: null, server_name: 'app-01', proxy_type: 'caddy', application_name: 'API' },
-      { id: 'route_worker', server_id: 'server_1', application_id: 'app_1', domain: 'worker.example.com', upstream_url: 'http://127.0.0.1:21000', blue_upstream_url: 'http://127.0.0.1:21000', green_upstream_url: 'http://127.0.0.1:21001', compose_service: 'worker', container_port: 9000, tls_enabled: true, status: 'applied', last_applied_at: null, server_name: 'app-01', proxy_type: 'caddy', application_name: 'API' },
+      { id: 'route_admin', server_id: 'server_1', application_id: 'app_1', domain: 'admin.example.com', upstream_url: 'http://127.0.0.1:20000', blue_upstream_url: 'http://127.0.0.1:20000', green_upstream_url: 'http://127.0.0.1:20001', compose_service: 'api', container_port: 8080, tls_enabled: true, status: 'applied', last_applied_at: null, server_name: 'app-01', proxy_type: 'caddy', application_name: 'API' },
     ]
     renderRoute()
-    fireEvent.click(await screen.findByRole('button', { name: 'Open API' }))
+    const card = await screen.findByRole('button', { name: 'Open API' })
+
+    expect(within(card).getByRole('link', { name: 'https://api.example.com' })).toBeInTheDocument()
+    expect(within(card).getByRole('link', { name: 'https://admin.example.com' })).toBeInTheDocument()
+    expect(within(card).getByText('worker')).toBeInTheDocument()
+    expect(within(card).getByText('private')).toBeInTheDocument()
+
+    fireEvent.click(card)
     const drawer = await screen.findByRole('dialog', { name: 'API' })
 
     expect(within(drawer).getAllByRole('link', { name: 'https://api.example.com' }).length).toBeGreaterThan(0)
-    expect(within(drawer).getAllByRole('link', { name: 'https://worker.example.com' }).length).toBeGreaterThan(0)
+    expect(within(drawer).getAllByRole('link', { name: 'https://admin.example.com' }).length).toBeGreaterThan(0)
     expect(within(drawer).queryByText('+1')).not.toBeInTheDocument()
   })
 

@@ -555,7 +555,9 @@ function ArchitectureRouteRows({ application, routes }: { application: Applicati
           ) : (
             <span className="truncate">{row.url}</span>
           )}
-          {row.upstream && <span title={`Active upstream ${row.upstream}`} className="font-mono text-prosights-subtle">{upstreamPortLabel(row.upstream)}</span>}
+          {row.upstream
+            ? <span title={`Active upstream ${row.upstream}`} className="font-mono text-prosights-subtle">{upstreamPortLabel(row.upstream)}</span>
+            : row.port && <span title="Published host port" className="font-mono text-prosights-subtle">{row.port}</span>}
         </div>
       ))}
     </div>
@@ -2532,11 +2534,22 @@ function proxyRouteURL(route: ProxyRoute): string {
   return `${route.tls_enabled === false ? 'http' : 'https'}://${route.domain}`
 }
 
-function architectureRouteRows(application: Application, routes: ProxyRoute[]): Array<{ label: string, url: string, upstream?: string }> {
-  if (routes.length > 0) {
-    return routes.map((route) => ({ label: route.compose_service || 'service', url: proxyRouteURL(route), upstream: route.upstream_url }))
+function architectureRouteRows(application: Application, routes: ProxyRoute[]): Array<{ label: string, url: string, upstream?: string, port?: string }> {
+  const services = applicationComposeServices(application)
+  if (services.length === 0) {
+    if (routes.length > 0) return routes.map((route) => ({ label: route.compose_service || 'service', url: proxyRouteURL(route), upstream: route.upstream_url }))
+    return [{ label: 'service', url: application.domain ? `https://${application.domain}` : 'No domains yet' }]
   }
-  return [{ label: 'service', url: application.domain ? `https://${application.domain}` : 'No domains yet' }]
+
+  const matchedRoutes = new Set<string>()
+  const rows = services.flatMap<{ label: string, url: string, upstream?: string, port?: string }>((service) => {
+    const serviceRoutes = routes.filter((route) => route.compose_service === service.name || (!route.compose_service && services.length === 1))
+    serviceRoutes.forEach((route) => matchedRoutes.add(route.id))
+    if (serviceRoutes.length > 0) return serviceRoutes.map((route) => ({ label: service.name, url: proxyRouteURL(route), upstream: route.upstream_url }))
+    const ports = service.ports?.flatMap((port) => port.published_port ? [`:${port.published_port}`] : []).join(', ')
+    return [{ label: service.name, url: 'private', port: ports || undefined }]
+  })
+  return [...rows, ...routes.filter((route) => !matchedRoutes.has(route.id)).map((route) => ({ label: route.compose_service || 'service', url: proxyRouteURL(route), upstream: route.upstream_url }))]
 }
 
 function upstreamPortLabel(upstream: string): string {
