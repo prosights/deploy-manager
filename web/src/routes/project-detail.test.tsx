@@ -305,6 +305,37 @@ describe('ProjectDetailRoute', () => {
     await waitFor(() => expect(window.location.hash).toBe(''))
   })
 
+  it('pans the canvas and moves and resizes service cards without bounds', async () => {
+    renderRoute()
+    const canvas = await screen.findByRole('region', { name: 'Architecture' })
+    const card = screen.getByRole('button', { name: 'Open API' })
+
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: -900, clientY: -700 })
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: -900, clientY: -700 })
+    expect(canvas).toHaveStyle({ backgroundPosition: '-1000px -800px' })
+    expect(canvas.querySelector('.architecture-world')).toHaveStyle({ transform: 'translate3d(-1000px, -800px, 0)' })
+    expect(JSON.parse(window.localStorage.getItem('deploy-manager:architecture-camera:project_1') ?? '{}')).toEqual({ x: -1000, y: -800 })
+
+    fireEvent.pointerDown(card, { button: 0, pointerId: 2, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(card, { pointerId: 2, clientX: -200, clientY: -200 })
+    fireEvent.pointerUp(card, { pointerId: 2, clientX: -200, clientY: -200 })
+    expect(card).toHaveStyle({ transform: 'translate3d(-264px, -264px, 0)' })
+
+    const resize = within(card).getByRole('button', { name: 'Resize API' })
+    fireEvent.pointerDown(resize, { button: 0, pointerId: 3, clientX: 0, clientY: 0 })
+    fireEvent.pointerMove(resize, { pointerId: 3, clientX: 100, clientY: 80 })
+    fireEvent.pointerUp(resize, { pointerId: 3, clientX: 100, clientY: 80 })
+    expect(card).toHaveStyle({ width: '352px', height: '228px' })
+
+    fireEvent.pointerDown(resize, { button: 0, pointerId: 4, clientX: 0, clientY: 0 })
+    fireEvent.pointerMove(resize, { pointerId: 4, clientX: -1000, clientY: -1000 })
+    fireEvent.pointerUp(resize, { pointerId: 4, clientX: -1000, clientY: -1000 })
+    expect(card).toHaveStyle({ width: '220px', height: '148px' })
+
+    await waitFor(() => expect(JSON.parse(window.localStorage.getItem('deploy-manager:architecture:project_1') ?? '{}').app_1).toEqual({ x: -264, y: -264, width: 220, height: 148 }))
+  })
+
   it('restores and persists the selected environment for this project', async () => {
     window.localStorage.setItem('deploy-manager:project-environment:v1:project_1', 'env_2')
     renderRoute()
@@ -362,7 +393,7 @@ describe('ProjectDetailRoute', () => {
   it('shows routed and private compose services on the project card', async () => {
     proxyRoutes = [
       { id: 'route_api', server_id: 'server_1', application_id: 'app_1', domain: 'api.example.com', upstream_url: 'http://127.0.0.1:20000', blue_upstream_url: 'http://127.0.0.1:20000', green_upstream_url: 'http://127.0.0.1:20001', compose_service: 'api', container_port: 8080, tls_enabled: true, status: 'applied', last_applied_at: null, server_name: 'app-01', proxy_type: 'caddy', application_name: 'API' },
-      { id: 'route_admin', server_id: 'server_1', application_id: 'app_1', domain: 'admin.example.com', upstream_url: 'http://127.0.0.1:20000', blue_upstream_url: 'http://127.0.0.1:20000', green_upstream_url: 'http://127.0.0.1:20001', compose_service: 'api', container_port: 8080, tls_enabled: true, status: 'applied', last_applied_at: null, server_name: 'app-01', proxy_type: 'caddy', application_name: 'API' },
+      { id: 'route_admin', server_id: 'server_1', application_id: 'app_1', domain: 'admin.example.com', upstream_url: 'http://127.0.0.1:21000', blue_upstream_url: 'http://127.0.0.1:21000', green_upstream_url: 'http://127.0.0.1:21001', compose_service: 'api', container_port: 9000, tls_enabled: true, status: 'applied', last_applied_at: null, server_name: 'app-01', proxy_type: 'caddy', application_name: 'API' },
     ]
     renderRoute()
     const card = await screen.findByRole('button', { name: 'Open API' })
@@ -374,9 +405,13 @@ describe('ProjectDetailRoute', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Service ports' }))
     const ports = await screen.findByRole('dialog', { name: 'Service ports' })
+    const apiRow = within(ports).getByText('api').closest('tr')
     expect(within(ports).getByText('worker')).toBeInTheDocument()
-    expect(within(ports).getByText(':8080/tcp')).toBeInTheDocument()
-    expect(within(ports).getByText('http://127.0.0.1:20000')).toBeInTheDocument()
+    expect(within(ports).getByRole('columnheader', { name: 'Blue host' })).toBeInTheDocument()
+    expect(within(ports).getByRole('columnheader', { name: 'Green host' })).toBeInTheDocument()
+    expect(apiRow).toHaveTextContent(':8080/tcp, :9000/tcp')
+    expect(apiRow).toHaveTextContent('http://127.0.0.1:20000, http://127.0.0.1:21000')
+    expect(apiRow).toHaveTextContent('http://127.0.0.1:20001, http://127.0.0.1:21001')
     expect(within(ports).getByText('Private')).toBeInTheDocument()
     fireEvent.click(within(ports).getByRole('button', { name: 'Close service ports' }))
 
