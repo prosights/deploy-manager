@@ -222,9 +222,16 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target *db
 		r.append(ctx, deployment, "system", fmt.Sprintf("Runtime variables synced: %d shared, %d service environments", validRuntimeVariableCount(variables), len(serviceVariables)))
 	}
 
-	targetColor, err := r.nextDeploymentColor(ctx, *target)
+	targetColor, currentColor, err := r.nextDeploymentColors(ctx, *target)
 	if err != nil {
 		return err
+	}
+	singletonServices, err := singletonComposeServiceNames(target.ComposeServices)
+	if err != nil {
+		return err
+	}
+	if target.Strategy != "blue_green" {
+		singletonServices = nil
 	}
 	ports, err := r.blueGreenPorts(ctx, *target)
 	if err != nil {
@@ -234,7 +241,7 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target *db
 	if err != nil {
 		return err
 	}
-	steps, err := remoteSteps(*target, variables, remoteStepOptions{
+	options := remoteStepOptions{
 		targetColor:               targetColor,
 		imageRef:                  deployment.ImageRef.String,
 		bluePort:                  ports.blue,
@@ -242,7 +249,9 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target *db
 		portVariables:             ports.variables,
 		serviceVariables:          serviceVariables,
 		sourceAuthorizationHeader: sourceAuthorizationHeader,
-	})
+		singletonServices:         singletonServices,
+	}
+	steps, err := remoteSteps(*target, variables, options)
 	if err != nil {
 		return err
 	}
@@ -271,7 +280,13 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target *db
 			return err
 		}
 	}
+	if err := r.switchSingletonServices(ctx, deployment, *target, client, currentColor, targetColor, options); err != nil {
+		return err
+	}
 	if err := r.applyProxyRoutes(ctx, deployment, *target, client, targetColor); err != nil {
+		if restoreErr := r.restoreSingletonServices(ctx, *target, client, targetColor, currentColor, options); restoreErr != nil {
+			return fmt.Errorf("%w; restore singleton services: %v", err, restoreErr)
+		}
 		return err
 	}
 	if target.Strategy == "blue_green" && blueGreenSlotTracked(*target) {
@@ -280,6 +295,10 @@ func (r Runner) deploy(ctx context.Context, deployment db.Deployment, target *db
 			ServerID:      target.ServerID,
 			Color:         targetColor,
 		}); err != nil {
+			if currentColor != "" {
+				_ = r.applyProxyRoutes(ctx, deployment, *target, client, currentColor)
+			}
+			_ = r.restoreSingletonServices(ctx, *target, client, targetColor, currentColor, options)
 			return fmt.Errorf("mark active deployment slot: %w", err)
 		}
 	}
@@ -407,6 +426,39 @@ func deploymentComposeServiceNames(raw []byte) []string {
 	return names
 }
 
+func singletonComposeServiceNames(raw []byte) ([]string, error) {
+	var services []struct {
+		Name          string `json:"name"`
+		ExecutionMode string `json:"execution_mode"`
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if err := json.Unmarshal(raw, &services); err != nil {
+		return nil, fmt.Errorf("decode compose service execution modes: %w", err)
+	}
+	names := make([]string, 0, len(services))
+	seen := make(map[string]bool, len(services))
+	for _, service := range services {
+		mode := strings.TrimSpace(service.ExecutionMode)
+		if mode == "" || mode == "follow_stack" {
+			continue
+		}
+		if mode != "singleton" {
+			return nil, fmt.Errorf("compose service %q has invalid execution mode %q", service.Name, mode)
+		}
+		if !composeServiceNamePattern.MatchString(service.Name) {
+			return nil, fmt.Errorf("compose service runtime target %q is invalid", service.Name)
+		}
+		if !seen[service.Name] {
+			names = append(names, service.Name)
+			seen[service.Name] = true
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 func mergeRuntimeVariables(projectVariables []connectors.RuntimeVariable, dopplerVariables []connectors.RuntimeVariable) []connectors.RuntimeVariable {
 	byKey := make(map[string]connectors.RuntimeVariable, len(projectVariables)+len(dopplerVariables))
 	for _, variable := range projectVariables {
@@ -503,7 +555,44 @@ func (r Runner) rollback(ctx context.Context, deployment db.Deployment, target d
 	if err := r.checkColorHealth(ctx, target, client, slot.Color); err != nil {
 		return err
 	}
+	singletonServices, err := singletonComposeServiceNames(target.ComposeServices)
+	if err != nil {
+		return err
+	}
+	activeColor := ""
+	options := remoteStepOptions{}
+	if len(singletonServices) > 0 {
+		activeSlot, err := r.queries.GetActiveDeploymentSlot(ctx, db.GetActiveDeploymentSlotParams{
+			ApplicationID: target.ApplicationID,
+			ServerID:      target.ServerID,
+		})
+		if err != nil {
+			return fmt.Errorf("load active deployment slot: %w", err)
+		}
+		activeColor = activeSlot.Color
+		ports, err := r.blueGreenPorts(ctx, target)
+		if err != nil {
+			return err
+		}
+		serviceVariables := make(map[string][]connectors.RuntimeVariable, len(singletonServices))
+		for _, service := range singletonServices {
+			serviceVariables[service] = nil
+		}
+		options = remoteStepOptions{
+			bluePort:          ports.blue,
+			greenPort:         ports.green,
+			portVariables:     ports.variables,
+			serviceVariables:  serviceVariables,
+			singletonServices: singletonServices,
+		}
+		if err := r.switchSingletonServices(ctx, deployment, target, client, activeColor, slot.Color, options); err != nil {
+			return err
+		}
+	}
 	if err := r.applyProxyRoutes(ctx, deployment, target, client, slot.Color); err != nil {
+		if restoreErr := r.restoreSingletonServices(ctx, target, client, slot.Color, activeColor, options); restoreErr != nil {
+			return fmt.Errorf("%w; restore singleton services: %v", err, restoreErr)
+		}
 		return err
 	}
 	if _, err := r.queries.ActivateDeploymentSlot(ctx, db.ActivateDeploymentSlotParams{
@@ -511,14 +600,18 @@ func (r Runner) rollback(ctx context.Context, deployment db.Deployment, target d
 		ServerID:      target.ServerID,
 		Color:         slot.Color,
 	}); err != nil {
+		if activeColor != "" {
+			_ = r.applyProxyRoutes(ctx, deployment, target, client, activeColor)
+		}
+		_ = r.restoreSingletonServices(ctx, target, client, slot.Color, activeColor, options)
 		return fmt.Errorf("mark rollback slot active: %w", err)
 	}
 	return nil
 }
 
-func (r Runner) nextDeploymentColor(ctx context.Context, target db.GetDeploymentTargetRow) (string, error) {
+func (r Runner) nextDeploymentColors(ctx context.Context, target db.GetDeploymentTargetRow) (string, string, error) {
 	if target.Strategy != "blue_green" {
-		return "", nil
+		return "", "", nil
 	}
 	slot, err := r.queries.GetActiveDeploymentSlot(ctx, db.GetActiveDeploymentSlotParams{
 		ApplicationID: target.ApplicationID,
@@ -526,14 +619,82 @@ func (r Runner) nextDeploymentColor(ctx context.Context, target db.GetDeployment
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "blue", nil
+			return "blue", "", nil
 		}
-		return "", fmt.Errorf("load active deployment slot: %w", err)
+		return "", "", fmt.Errorf("load active deployment slot: %w", err)
 	}
 	if slot.Color == "blue" {
-		return "green", nil
+		return "green", "blue", nil
 	}
-	return "blue", nil
+	return "blue", "green", nil
+}
+
+func (r Runner) switchSingletonServices(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow, client remoteRunner, fromColor string, toColor string, options remoteStepOptions) error {
+	if len(options.singletonServices) == 0 || target.Strategy != "blue_green" {
+		return nil
+	}
+	r.append(ctx, deployment, "system", "Switching singleton services to "+toColor)
+	// Stop the old color before starting the new one so singleton services
+	// never overlap during a normal deployment.
+	if fromColor != "" {
+		if output, err := client.Run(ctx, fixedColorComposeServiceCommand(target, options, fromColor, "stop", options.singletonServices)); err != nil {
+			_, _ = client.Run(ctx, fixedColorComposeServiceCommand(target, options, fromColor, "start", options.singletonServices))
+			return fmt.Errorf("stop singleton services for %s: %w: %s", fromColor, err, strings.TrimSpace(output))
+		}
+	}
+	if output, err := client.Run(ctx, fixedColorComposeServiceCommand(target, options, toColor, "start", options.singletonServices)); err != nil {
+		restoreErr := r.restoreSingletonServices(ctx, target, client, toColor, fromColor, options)
+		if restoreErr != nil {
+			return fmt.Errorf("start singleton services for %s: %w: %s; restore: %v", toColor, err, strings.TrimSpace(output), restoreErr)
+		}
+		return fmt.Errorf("start singleton services for %s: %w: %s", toColor, err, strings.TrimSpace(output))
+	}
+	running, err := client.Run(ctx, fixedColorComposeServiceCommand(target, options, toColor, "ps --status running --services", options.singletonServices))
+	if err != nil || !allComposeServicesRunning(running, options.singletonServices) {
+		restoreErr := r.restoreSingletonServices(ctx, target, client, toColor, fromColor, options)
+		if err == nil {
+			err = errors.New("one or more singleton services did not stay running")
+		}
+		if restoreErr != nil {
+			return fmt.Errorf("verify singleton services for %s: %w; restore: %v", toColor, err, restoreErr)
+		}
+		return fmt.Errorf("verify singleton services for %s: %w", toColor, err)
+	}
+	return nil
+}
+
+func allComposeServicesRunning(output string, services []string) bool {
+	running := make(map[string]bool, len(services))
+	for _, service := range strings.Fields(output) {
+		running[service] = true
+	}
+	for _, service := range services {
+		if !running[service] {
+			return false
+		}
+	}
+	return true
+}
+
+func (r Runner) restoreSingletonServices(ctx context.Context, target db.GetDeploymentTargetRow, client remoteRunner, fromColor string, toColor string, options remoteStepOptions) error {
+	if len(options.singletonServices) == 0 || target.Strategy != "blue_green" {
+		return nil
+	}
+	var restoreErrors []string
+	if fromColor != "" {
+		if _, err := client.Run(ctx, fixedColorComposeServiceCommand(target, options, fromColor, "stop", options.singletonServices)); err != nil {
+			restoreErrors = append(restoreErrors, "stop "+fromColor+": "+err.Error())
+		}
+	}
+	if toColor != "" {
+		if _, err := client.Run(ctx, fixedColorComposeServiceCommand(target, options, toColor, "start", options.singletonServices)); err != nil {
+			restoreErrors = append(restoreErrors, "start "+toColor+": "+err.Error())
+		}
+	}
+	if len(restoreErrors) > 0 {
+		return errors.New(strings.Join(restoreErrors, "; "))
+	}
+	return nil
 }
 
 func (r Runner) upsertSlot(ctx context.Context, deployment db.Deployment, target db.GetDeploymentTargetRow, color string, status string) error {

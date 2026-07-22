@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -9,6 +10,50 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+func TestMergeServiceExecutionModesPreservesMetadata(t *testing.T) {
+	metadata, err := mergeServiceExecutionModes(
+		[]byte(`[{"name":"api","image":"api:latest"},{"name":"worker","depends_on":["api"]}]`),
+		map[string]string{"worker": "singleton"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var services []githubComposeService
+	if err := json.Unmarshal(metadata, &services); err != nil {
+		t.Fatal(err)
+	}
+	if services[0].Image != "api:latest" || services[0].ExecutionMode != "follow_stack" {
+		t.Fatalf("expected API metadata and default mode to be preserved, got %+v", services[0])
+	}
+	if services[1].ExecutionMode != "singleton" || len(services[1].DependsOn) != 1 {
+		t.Fatalf("expected worker mode and dependencies to be preserved, got %+v", services[1])
+	}
+}
+
+func TestMergeServiceExecutionModesRejectsUnknownService(t *testing.T) {
+	_, err := mergeServiceExecutionModes([]byte(`[{"name":"api"}]`), map[string]string{"worker": "singleton"})
+	if err == nil {
+		t.Fatal("expected unknown compose service to fail")
+	}
+}
+
+func TestMergeServiceExecutionModesRejectsInvalidMode(t *testing.T) {
+	_, err := mergeServiceExecutionModes([]byte(`[{"name":"worker"}]`), map[string]string{"worker": "always"})
+	if err == nil {
+		t.Fatal("expected invalid execution mode to fail")
+	}
+}
+
+func TestUpdateApplicationRequestDecodesServiceModes(t *testing.T) {
+	var request updateApplicationRequest
+	if err := json.Unmarshal([]byte(`{"name":"api","service_execution_modes":{"worker":"singleton"}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Name != "api" || request.ServiceExecutionModes["worker"] != "singleton" {
+		t.Fatalf("unexpected update request: %+v", request)
+	}
+}
 
 func TestNormalizeCreateApplicationTrimsAndDefaults(t *testing.T) {
 	input, err := normalizeCreateApplication(db.CreateApplicationParams{

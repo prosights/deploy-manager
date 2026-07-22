@@ -71,7 +71,6 @@ import {
   type BuildRun,
   type ComposeService,
   type ContainerRegistry,
-  type CreateApplicationInput,
   type Deployment,
   type DeploymentLog,
   type Environment,
@@ -83,6 +82,7 @@ import {
   type ProjectRuntimeVariable,
   type ProxyRoute,
   type Server as ServerRecord,
+  type UpdateApplicationInput,
 } from '../lib/api'
 import { cn } from '../lib/cn'
 import {
@@ -122,6 +122,7 @@ type ServiceForm = {
   remote_directory: string
   health_check_url: string
   github_auto_deploy: boolean
+  service_execution_modes: Record<string, 'follow_stack' | 'singleton'>
 }
 
 type ConfigurationSnapshot = {
@@ -1736,17 +1737,28 @@ function ApplicationSettings({
           </div>
         </SettingsSection>
         {composeServices.length > 0 && (
-          <SettingsSection title="Compose stack" description="Containers discovered in the selected compose file.">
+          <SettingsSection title="Compose stack" description="Choose which containers follow both colors and which run only on the active color.">
             <div className="divide-y divide-prosights-border overflow-hidden rounded-prosights-md border border-prosights-border">
               {composeServices.map((item) => (
-                <div key={item.name} className="flex flex-col gap-1.5 bg-prosights-surface-muted px-3 py-2.5 sm:flex-row sm:items-center">
+                <div key={item.name} className="flex flex-col gap-2 bg-prosights-surface-muted px-3 py-2.5 sm:flex-row sm:items-center">
                   <span className="min-w-32 text-[12px] font-semibold text-prosights-text">{item.name}</span>
                   <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-prosights-muted">{item.image ?? item.dockerfile ?? 'compose build'}</span>
                   <div className="flex flex-wrap gap-1">{(item.ports ?? []).map((port) => <Badge key={`${port.container_port}/${port.protocol ?? 'tcp'}`} tone="neutral">:{port.container_port}/{port.protocol ?? 'tcp'}</Badge>)}</div>
                   {(item.depends_on ?? []).length > 0 && <span className="text-[10px] text-prosights-muted">depends on {(item.depends_on ?? []).join(', ')}</span>}
+                  <div className="w-full sm:w-48">
+                    <SelectInput
+                      label="Run mode"
+                      value={form.service_execution_modes[item.name] ?? 'follow_stack'}
+                      onChange={(mode) => setForm((current) => ({ ...current, service_execution_modes: { ...current.service_execution_modes, [item.name]: mode as 'follow_stack' | 'singleton' } }))}
+                    >
+                      <option value="follow_stack">Follow stack</option>
+                      <option value="singleton">Singleton</option>
+                    </SelectInput>
+                  </div>
                 </div>
               ))}
             </div>
+            <p className="mt-2 text-[11px] text-prosights-muted">Use “Singleton” for schedulers, queue consumers, and monitoring workers that must have exactly one running copy across blue/green.</p>
           </SettingsSection>
         )}
         {(error || save.error) && <InlineError message={error ?? save.error?.message ?? 'Settings could not be saved.'} />}
@@ -2341,11 +2353,12 @@ function ProjectDeployDefaults({ project, registries }: { project: Project, regi
 }
 
 function applicationToServiceForm(application: Application): ServiceForm {
-  return { environment_id: application.environment_id, server_id: application.server_id, name: application.name, repository_url: application.repository_url ?? '', branch: application.branch, compose_path: application.compose_path, remote_directory: application.remote_directory, health_check_url: application.health_check_url ?? '', github_auto_deploy: application.github_auto_deploy }
+  const service_execution_modes = Object.fromEntries(applicationComposeServices(application).map((service) => [service.name, service.execution_mode ?? 'follow_stack'])) as ServiceForm['service_execution_modes']
+  return { environment_id: application.environment_id, server_id: application.server_id, name: application.name, repository_url: application.repository_url ?? '', branch: application.branch, compose_path: application.compose_path, remote_directory: application.remote_directory, health_check_url: application.health_check_url ?? '', github_auto_deploy: application.github_auto_deploy, service_execution_modes }
 }
 
-function serviceInput(form: ServiceForm, current?: Application): CreateApplicationInput {
-  return { environment_id: form.environment_id, server_id: form.server_id, name: form.name.trim(), repository_url: optionalTrimmed(form.repository_url), branch: form.branch.trim() || 'main', compose_path: form.compose_path.trim() || 'docker-compose.yml', remote_directory: form.remote_directory.trim(), health_check_url: optionalTrimmed(form.health_check_url), domain: current?.domain ?? undefined, doppler_project: current?.doppler_project ?? undefined, doppler_config: current?.doppler_config ?? undefined, github_auto_deploy: form.github_auto_deploy }
+function serviceInput(form: ServiceForm, current?: Application): UpdateApplicationInput {
+  return { environment_id: form.environment_id, server_id: form.server_id, name: form.name.trim(), repository_url: optionalTrimmed(form.repository_url), branch: form.branch.trim() || 'main', compose_path: form.compose_path.trim() || 'docker-compose.yml', remote_directory: form.remote_directory.trim(), health_check_url: optionalTrimmed(form.health_check_url), domain: current?.domain ?? undefined, doppler_project: current?.doppler_project ?? undefined, doppler_config: current?.doppler_config ?? undefined, github_auto_deploy: form.github_auto_deploy, service_execution_modes: form.service_execution_modes }
 }
 
 function validateServiceForm(form: ServiceForm): void {

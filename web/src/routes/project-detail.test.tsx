@@ -14,6 +14,7 @@ import {
   redeployProjectConfiguration,
   replaceApplicationServiceRuntimeConfig,
   replaceProjectRuntimeVariables,
+  updateApplication,
   updateProject,
 } from '../lib/api'
 import { TestRouter } from '../test/router'
@@ -540,6 +541,22 @@ describe('ProjectDetailRoute', () => {
       green_upstream_url: 'http://127.0.0.1:3102',
       tls_enabled: true,
     }))
+  })
+
+  it('saves the singleton service mode', async () => {
+    renderRoute()
+    fireEvent.click(await screen.findByRole('button', { name: 'Open API' }))
+    const drawer = await screen.findByRole('dialog', { name: 'API' })
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Settings' }))
+
+    const executionSelects = within(drawer).getAllByRole('combobox', { name: 'Run mode' })
+    fireEvent.click(executionSelects[1])
+    fireEvent.click(await screen.findByRole('option', { name: 'Singleton' }))
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Save settings' }))
+
+    await waitFor(() => expect(updateApplication).toHaveBeenCalledWith('app_1', expect.objectContaining({
+      service_execution_modes: { api: 'follow_stack', worker: 'singleton' },
+    })))
   })
 
   it('deploys managed route changes instead of applying them manually', async () => {

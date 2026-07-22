@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -24,6 +25,16 @@ var (
 )
 
 const applicationCleanupTimeout = 2 * time.Minute
+
+const (
+	executionModeFollowStack = "follow_stack"
+	executionModeSingleton   = "singleton"
+)
+
+type updateApplicationRequest struct {
+	db.UpdateApplicationParams
+	ServiceExecutionModes map[string]string `json:"service_execution_modes"`
+}
 
 type applicationDeletionPlan struct {
 	application    db.Application
@@ -74,8 +85,8 @@ func (s Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	var input db.UpdateApplicationParams
-	if err := readJSON(w, r, &input); err != nil {
+	var request updateApplicationRequest
+	if err := readJSON(w, r, &request); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -84,7 +95,13 @@ func (s Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, applicationLookupError(err, "application not found"))
 		return
 	}
+	input := request.UpdateApplicationParams
 	input.ID = applicationID
+	input.ComposeServices, err = mergeServiceExecutionModes(existing.ComposeServices, request.ServiceExecutionModes)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	input, err = normalizeUpdateApplication(input)
 	if err != nil {
 		writeError(w, err)
@@ -310,7 +327,42 @@ func normalizeUpdateApplication(input db.UpdateApplicationParams) (db.UpdateAppl
 	input.DopplerProject = createInput.DopplerProject
 	input.DopplerConfig = createInput.DopplerConfig
 	input.GithubAutoDeploy = createInput.GithubAutoDeploy
+	if len(input.ComposeServices) == 0 {
+		input.ComposeServices = []byte("[]")
+	}
 	return input, nil
+}
+
+func mergeServiceExecutionModes(metadata []byte, requested map[string]string) ([]byte, error) {
+	services := []githubComposeService{}
+	if len(metadata) > 0 && json.Unmarshal(metadata, &services) != nil {
+		return nil, validationError("compose service metadata is invalid")
+	}
+	known := make(map[string]bool, len(services))
+	for index := range services {
+		known[services[index].Name] = true
+		mode := strings.TrimSpace(services[index].ExecutionMode)
+		if requestedMode, ok := requested[services[index].Name]; ok {
+			mode = strings.TrimSpace(requestedMode)
+		}
+		if mode == "" {
+			mode = executionModeFollowStack
+		}
+		if !validServiceExecutionMode(mode) {
+			return nil, validationError("service execution mode must be follow_stack or singleton")
+		}
+		services[index].ExecutionMode = mode
+	}
+	for service := range requested {
+		if !known[service] {
+			return nil, validationError("unknown compose service " + service)
+		}
+	}
+	return json.Marshal(services)
+}
+
+func validServiceExecutionMode(mode string) bool {
+	return mode == executionModeFollowStack || mode == executionModeSingleton
 }
 
 func validateApplicationServer(existing, requested pgtype.UUID) error {

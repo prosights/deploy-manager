@@ -3464,8 +3464,9 @@ SET environment_id = $1::uuid,
     doppler_project = $10::text,
     doppler_config = $11::text,
     github_auto_deploy = $12::boolean,
+    compose_services = $13::jsonb,
     configuration_revision = CASE
-        WHEN ROW(environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, health_check_url, doppler_project, doppler_config)
+        WHEN ROW(environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, health_check_url, doppler_project, doppler_config, compose_services)
             IS DISTINCT FROM ROW(
                 $1::uuid,
                 $2::uuid,
@@ -3476,13 +3477,14 @@ SET environment_id = $1::uuid,
                 $7::text,
                 $9::text,
                 $10::text,
-                $11::text
+                $11::text,
+                $13::jsonb
             )
         THEN configuration_revision + 1
         ELSE configuration_revision
     END,
     updated_at = now()
-WHERE id = $13::uuid
+WHERE id = $14::uuid
 RETURNING id, environment_id, server_id, name, repository_url, branch, compose_path, remote_directory, domain, health_check_url, doppler_project, doppler_config, status, current_version, target_version, created_at, updated_at, github_auto_deploy, configuration_revision, deployed_configuration_revision, deployed_project_configuration_revision, compose_services
 `
 
@@ -3499,6 +3501,7 @@ type UpdateApplicationParams struct {
 	DopplerProject   pgtype.Text `json:"doppler_project"`
 	DopplerConfig    pgtype.Text `json:"doppler_config"`
 	GithubAutoDeploy bool        `json:"github_auto_deploy"`
+	ComposeServices  []byte      `json:"compose_services"`
 	ID               pgtype.UUID `json:"id"`
 }
 
@@ -3516,6 +3519,7 @@ func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationPa
 		arg.DopplerProject,
 		arg.DopplerConfig,
 		arg.GithubAutoDeploy,
+		arg.ComposeServices,
 		arg.ID,
 	)
 	var i Application

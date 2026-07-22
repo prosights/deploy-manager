@@ -28,6 +28,7 @@ type remoteStepOptions struct {
 	portVariables             []composePortVariable
 	serviceVariables          map[string][]connectors.RuntimeVariable
 	sourceAuthorizationHeader string
+	singletonServices         []string
 }
 
 type composePortVariable struct {
@@ -472,15 +473,52 @@ func blueGreenSteps(target db.GetDeploymentTargetRow, options remoteStepOptions)
 			command: composeCommand("pull"),
 		})
 	}
+	startAction := "up -d --remove-orphans"
+	for _, service := range options.singletonServices {
+		startAction += " --scale " + stringutil.ShellQuote(service+"=0")
+	}
 	steps = append(steps, remoteStep{
 		label:   "Starting next color stack",
-		command: composeCommand("up -d --remove-orphans"),
+		command: composeCommand(startAction),
 	})
+	if len(options.singletonServices) > 0 {
+		// Create the new containers with current image/env settings, but leave
+		// them stopped until the candidate stack passes its health check.
+		steps = append(steps, remoteStep{
+			label:   "Preparing singleton services",
+			command: composeCommand("up --no-start --no-deps --no-build --force-recreate " + composeServiceArguments(options.singletonServices)),
+		})
+	}
 	steps = append(steps, remoteStep{
 		label:   "Checking next color health",
 		command: fmt.Sprintf("cd %s && color=$(cat .deploy-manager-next-color) && port=$(%s) && url=$(printf %%s %s | sed \"s/{color}/$color/g\" | sed \"s/{port}/$port/g\") && curl -fsS --retry 10 --retry-delay 2 --retry-all-errors \"$url\" >/dev/null", remoteDir, colorPortCommand(options), stringutil.ShellQuote(deploymentHealthCheckURL(target, target.HealthCheckUrl.String))),
 	})
 	return steps
+}
+
+func composeServiceArguments(services []string) string {
+	arguments := make([]string, 0, len(services))
+	for _, service := range services {
+		arguments = append(arguments, stringutil.ShellQuote(service))
+	}
+	return strings.Join(arguments, " ")
+}
+
+func fixedColorComposeServiceCommand(target db.GetDeploymentTargetRow, options remoteStepOptions, color string, action string, services []string) string {
+	remoteDir := stringutil.ShellQuote(target.RemoteDirectory)
+	composeFiles := composeFileArguments(target.ComposePath, options.serviceVariables, options.portVariables)
+	color = defaultTargetColor(color)
+	return fmt.Sprintf(
+		"cd %s && color=%s && port=$(%s) && COMPOSE_PROJECT_NAME=%s DEPLOY_COLOR=$color DEPLOY_PORT=$port%s docker compose %s %s %s",
+		remoteDir,
+		stringutil.ShellQuote(color),
+		colorPortCommand(options),
+		stringutil.ShellQuote(projectSlug(target.ApplicationName)+"-"+color),
+		composePortVariableAssignments(options.portVariables),
+		composeFiles,
+		action,
+		composeServiceArguments(services),
+	)
 }
 
 func composePortVariableAssignments(variables []composePortVariable) string {
