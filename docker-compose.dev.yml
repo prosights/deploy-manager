@@ -64,7 +64,7 @@ services:
       - ./data/playground/known_hosts:/app/known_hosts:ro
       - ./data/apps:/srv/deploy-manager/apps
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      - /var/run/tailscale:/var/run/tailscale
     depends_on:
       postgres:
         condition: service_healthy
