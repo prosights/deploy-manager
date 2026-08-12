@@ -57,7 +57,7 @@ services:
       - ~/.config/deploy-manager:/app/secrets:ro
       - /srv/deploy-manager/apps:/srv/deploy-manager/apps
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      - /var/run/tailscale:/var/run/tailscale
     depends_on:
       postgres:
         condition: service_healthy
