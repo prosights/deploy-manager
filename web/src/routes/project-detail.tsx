@@ -1296,7 +1296,7 @@ function ApplicationDeployments({
               <div className="flex items-center gap-2"><Badge tone="warning">BUILDING</Badge><span className="text-[13px] font-medium text-prosights-text">New deployment</span></div>
               <div className="mt-1 truncate font-mono text-[11px] text-prosights-muted">{build.repository}#{build.branch}</div>
             </div>
-            {build.external_url && <Button asChild><a href={build.external_url} target="_blank" rel="noreferrer">View build <ExternalLink className="size-4" /></a></Button>}
+            {(build.external_url || build.provider === 'github_actions') && <Button asChild><a href={build.external_url || githubActionsWorkflowURL(build)} target="_blank" rel="noreferrer">View build <ExternalLink className="size-4" /></a></Button>}
           </div>
           <div className="flex items-center gap-2 border-t border-warning/20 bg-warning/5 px-4 py-2.5 text-[11px] font-medium text-warning"><RefreshCw className="size-3.5 animate-spin" />Build {build.status}</div>
         </article>
@@ -2878,6 +2878,10 @@ function splitDeploymentLogs(logs: DeploymentLog[]): { buildLogs: DeploymentLog[
 function buildRunForDeployment(deployment: Deployment, builds: BuildRun[]): BuildRun | undefined {
   const buildID = deployment.actor?.startsWith('build:') ? deployment.actor.slice('build:'.length) : ''
   return builds.find((build) => build.id === buildID)
+}
+
+function githubActionsWorkflowURL(build: BuildRun): string {
+  return `https://github.com/${build.repository}/actions/workflows/${encodeURIComponent(build.workflow_id)}`
 }
 
 function githubRepositoryForApplication(application: Application, repositories: GitHubRepository[]): GitHubRepository | undefined {

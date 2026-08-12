@@ -15,6 +15,7 @@ import {
   redeployProjectConfiguration,
   replaceApplicationServiceRuntimeConfig,
   replaceProjectRuntimeVariables,
+  type BuildRun,
   updateApplication,
   updateProject,
 } from '../lib/api'
@@ -196,6 +197,13 @@ let serverHostname = '10.0.0.1'
 let proxyRoutes: Array<Record<string, unknown>> = []
 let deploymentResults = [deployment, failedDeployment]
 let githubRepository = repository
+const succeededBuildRun: BuildRun = {
+  id: 'build_1', provider: 'github_actions', connector_id: 'connector_github', application_id: 'app_1', repository: 'prosights/api', branch: 'main',
+  workflow_id: 'deploy-manager-build.yml', status: 'succeeded', commit_sha: 'abc1234', image_ref: 'registry.example.com/api:abc1234', image_digest: null,
+  external_url: 'https://github.com/prosights/api/actions/runs/1', error_message: null, started_at: '2026-07-16T11:58:00Z', completed_at: '2026-07-16T12:00:00Z',
+  created_at: '2026-07-16T11:58:00Z', updated_at: '2026-07-16T12:00:00Z',
+}
+let buildRunResults: BuildRun[] = [succeededBuildRun]
 
 vi.mock('../lib/queries', () => ({
   applicationServiceRuntimeConfigsQuery: (applicationID: string) => ({ queryKey: ['applications', applicationID, 'service-variables'], queryFn: async () => [] }),
@@ -246,12 +254,7 @@ vi.mock('../lib/queries', () => ({
   deploymentsQuery: { queryKey: ['deployments'], queryFn: async () => deploymentResults },
   buildRunsQuery: {
     queryKey: ['build-runs'],
-    queryFn: async () => [{
-      id: 'build_1', provider: 'github_actions', connector_id: 'connector_github', application_id: 'app_1', repository: 'prosights/api', branch: 'main',
-      workflow_id: 'deploy-manager-build.yml', status: 'succeeded', commit_sha: 'abc1234', image_ref: 'registry.example.com/api:abc1234', image_digest: null,
-      external_url: 'https://github.com/prosights/api/actions/runs/1', error_message: null, started_at: '2026-07-16T11:58:00Z', completed_at: '2026-07-16T12:00:00Z',
-      created_at: '2026-07-16T11:58:00Z', updated_at: '2026-07-16T12:00:00Z',
-    }],
+    queryFn: async () => buildRunResults,
   },
   deploymentSlotsQuery: (applicationID: string) => ({ queryKey: ['applications', applicationID, 'deployment-slots'], queryFn: async () => [] }),
   deploymentLogsQuery: (deploymentID: string) => ({
@@ -276,6 +279,7 @@ describe('ProjectDetailRoute', () => {
     proxyRoutes = []
     deploymentResults = [deployment, failedDeployment]
     githubRepository = repository
+    buildRunResults = [succeededBuildRun]
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
@@ -369,6 +373,18 @@ describe('ProjectDetailRoute', () => {
 
     fireEvent.click(within(drawer).getByRole('button', { name: 'Close service' }))
     expect(window.location.search).toBe('')
+  })
+
+  it('links a dispatched build to its GitHub Actions workflow', async () => {
+    buildRunResults = [{ ...succeededBuildRun, status: 'dispatched', external_url: null, completed_at: null }]
+    renderRoute()
+    fireEvent.click(await screen.findByRole('button', { name: 'Open API' }))
+
+    const drawer = await screen.findByRole('dialog', { name: 'API' })
+    expect(await within(drawer).findByRole('link', { name: 'View build' })).toHaveAttribute(
+      'href',
+      'https://github.com/prosights/api/actions/workflows/deploy-manager-build.yml',
+    )
   })
 
   it('paginates service deployment history at ten releases', async () => {
