@@ -273,11 +273,6 @@ func websocketUpgrader() websocket.Upgrader {
 	}
 }
 
-func sameHostOrigin(origin string, host string) bool {
-	origin = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(origin, "http://"), "https://"))
-	return strings.EqualFold(origin, host)
-}
-
 type terminalWriter struct {
 	mu   sync.Mutex
 	conn *websocket.Conn

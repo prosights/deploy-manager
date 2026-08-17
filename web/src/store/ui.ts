@@ -11,9 +11,7 @@ export function nextTheme(current: Theme): Theme {
 
 type UiState = {
   sidebarCollapsed: boolean
-  searchQuery: string
   theme: Theme
-  setSearchQuery: (searchQuery: string) => void
   toggleSidebar: () => void
   setTheme: (theme: Theme) => void
 }
@@ -55,9 +53,7 @@ applyTheme(initialTheme)
 
 export const useUiStore = create<UiState>((set) => ({
   sidebarCollapsed: false,
-  searchQuery: '',
   theme: initialTheme,
-  setSearchQuery: (searchQuery) => set({ searchQuery }),
   toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
   setTheme: (theme) => {
     applyTheme(theme, true)

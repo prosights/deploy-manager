@@ -9,8 +9,6 @@ import { Panel } from '../components/ui/panel'
 import { TextInput } from '../components/ui/text-input'
 import { upsertConnector, type ConnectorAccount, type UpsertConnectorInput } from '../lib/api'
 import { connectorsQuery } from '../lib/queries'
-import { matchesSearch } from '../lib/search'
-import { useUiStore } from '../store/ui'
 
 type NotificationProvider = 'slack' | 'resend'
 
@@ -48,19 +46,12 @@ const notificationProviders: Array<{
 export function NotificationsRoute() {
   const queryClient = useQueryClient()
   const { data: connectors } = useSuspenseQuery(connectorsQuery)
-  const searchQuery = useUiStore((state) => state.searchQuery)
   const [form, setForm] = useState<DestinationForm>(() => defaultDestinationForm())
   const [formError, setFormError] = useState<string>()
-  const destinations = useMemo(
+  const visibleDestinations = useMemo(
     () => connectors.filter((connector) => connector.provider === 'slack' || connector.provider === 'resend'),
     [connectors],
   )
-  const visibleDestinations = destinations.filter((destination) => matchesSearch(searchQuery, [
-    destination.name,
-    destination.provider,
-    destination.enabled ? 'enabled' : 'disabled',
-    destinationSummary(destination),
-  ]))
   const save = useMutation({
     mutationFn: (input: UpsertConnectorInput) => upsertConnector(input),
     onSuccess: async () => {

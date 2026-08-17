@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { Panel } from '../../components/ui/panel'
 import { cn } from '../../lib/cn'
 import type { DeploymentLog } from '../../lib/api'
-import { withAccessToken } from '../../lib/api'
 import { deploymentLogsQuery } from '../../lib/queries'
 
 type DeploymentSummary = {
@@ -36,7 +35,7 @@ export function useDeploymentLogs(deploymentID: string | undefined) {
       return
     }
 
-    const events = new EventSource(withAccessToken(`/api/deployments/${deploymentID}/events`))
+    const events = new EventSource(`/api/deployments/${deploymentID}/events`)
     events.addEventListener('open', () => setLiveDeploymentID(deploymentID))
     events.addEventListener('error', () => {
       // EventSource auto-reconnects unless the connection is permanently closed.

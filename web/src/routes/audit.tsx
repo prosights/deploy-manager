@@ -5,17 +5,13 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Panel } from '../components/ui/panel'
 import { auditEventsQuery } from '../lib/queries'
-import { matchesSearch } from '../lib/search'
-import { useUiStore } from '../store/ui'
 
 const pageSize = 10
 
 export function AuditRoute() {
   const { data: events } = useSuspenseQuery(auditEventsQuery)
-  const searchQuery = useUiStore((state) => state.searchQuery)
   const [page, setPage] = useState(1)
-  const rows = useMemo(() => events.map(auditEventRow), [events])
-  const visibleRows = useMemo(() => rows.filter((row) => matchesSearch(searchQuery, row.searchValues)), [rows, searchQuery])
+  const visibleRows = useMemo(() => events.map(auditEventRow), [events])
   const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize))
   const currentPage = Math.min(page, pageCount)
   const pageRows = visibleRows.slice((currentPage - 1) * pageSize, currentPage * pageSize)

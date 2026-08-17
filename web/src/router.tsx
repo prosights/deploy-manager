@@ -18,7 +18,9 @@ import {
   projectsQuery,
   proxyRoutesQuery,
   serversQuery,
+  sessionQuery,
 } from './lib/queries'
+import { LoginRoute } from './routes/login'
 import { ProjectsRoute } from './routes/projects'
 import { ProjectDetailRoute } from './routes/project-detail'
 import { ServersRoute } from './routes/servers'
@@ -37,24 +39,38 @@ function load(...queries: Array<{ queryKey: readonly unknown[] }>) {
 }
 
 const rootRoute = createRootRoute({
-  component: AppShell,
   errorComponent: AppError,
   notFoundComponent: AppNotFound,
+})
+
+// Everything except /login lives under this pathless layout, which renders the
+// shell and redirects unauthenticated visitors to the login page.
+const appRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'app',
+  component: AppShell,
+  beforeLoad: async () => {
+    const session = await queryClient.ensureQueryData(sessionQuery)
+    if (!session.authenticated) throw redirect({ to: '/login' })
+  },
   loader: load(projectsQuery, environmentsQuery),
 })
 
 const routeTree = rootRoute.addChildren([
-  createRoute({ getParentRoute: () => rootRoute, path: '/', beforeLoad: () => { throw redirect({ to: '/projects' }) } }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/projects', component: ProjectsRoute, loader: load(projectsQuery, environmentsQuery, applicationsQuery, deploymentsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/projects/$projectId', component: ProjectDetailRoute, loader: load(projectsQuery, environmentsQuery, applicationsQuery, deploymentsQuery, buildRunsQuery, serversQuery, containerRegistriesQuery, proxyRoutesQuery, githubRepositoriesQuery, githubStatusQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/servers', component: ServersRoute, loader: load(serversQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/applications', component: ApplicationsRoute, loader: load(applicationsQuery, serversQuery, environmentsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/deployments', component: DeploymentsRoute, loader: load(deploymentsQuery, applicationsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/notifications', component: NotificationsRoute, loader: load(connectorsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/connectors', component: ConnectorsRoute, loader: load(githubStatusQuery, dopplerStatusQuery, githubRepositoriesQuery, buildRunsQuery, containerRegistriesQuery, connectorsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/registries', component: RegistriesRoute, loader: load(containerRegistriesQuery, projectsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/proxy', component: ProxyRoute, loader: load(proxyRoutesQuery, serversQuery, applicationsQuery) }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/audit', component: AuditRoute, loader: load(auditEventsQuery) }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/login', component: LoginRoute }),
+  appRoute.addChildren([
+    createRoute({ getParentRoute: () => appRoute, path: '/', beforeLoad: () => { throw redirect({ to: '/projects' }) } }),
+    createRoute({ getParentRoute: () => appRoute, path: '/projects', component: ProjectsRoute, loader: load(projectsQuery, environmentsQuery, applicationsQuery, deploymentsQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/projects/$projectId', component: ProjectDetailRoute, loader: load(projectsQuery, environmentsQuery, applicationsQuery, deploymentsQuery, buildRunsQuery, serversQuery, containerRegistriesQuery, proxyRoutesQuery, githubRepositoriesQuery, githubStatusQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/servers', component: ServersRoute, loader: load(serversQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/applications', component: ApplicationsRoute, loader: load(applicationsQuery, serversQuery, environmentsQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/deployments', component: DeploymentsRoute, loader: load(deploymentsQuery, applicationsQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/notifications', component: NotificationsRoute, loader: load(connectorsQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/connectors', component: ConnectorsRoute, loader: load(githubStatusQuery, dopplerStatusQuery, githubRepositoriesQuery, buildRunsQuery, containerRegistriesQuery, connectorsQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/registries', component: RegistriesRoute, loader: load(containerRegistriesQuery, projectsQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/proxy', component: ProxyRoute, loader: load(proxyRoutesQuery, serversQuery, applicationsQuery) }),
+    createRoute({ getParentRoute: () => appRoute, path: '/audit', component: AuditRoute, loader: load(auditEventsQuery) }),
+  ]),
 ])
 
 export const router = createRouter({

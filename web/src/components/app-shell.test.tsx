@@ -83,14 +83,14 @@ describe('AppShell', () => {
     expect(screen.queryByRole('link', { name: 'Back to projects' })).not.toBeInTheDocument()
   })
 
-  it('opens the account menu with identity only', () => {
+  it('opens the account menu with identity and logout', () => {
     render(<AppShell />)
 
     fireEvent.pointerDown(screen.getByRole('button', { name: / account$/ }), { button: 0, ctrlKey: false })
 
     expect(screen.getByText('User')).toBeInTheDocument()
     expect(screen.getByText(/\S+@\S+\.\S+/)).toBeInTheDocument()
-    expect(screen.queryByText('Log Out')).not.toBeInTheDocument()
+    expect(screen.getByText('Log Out')).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
   })
 })

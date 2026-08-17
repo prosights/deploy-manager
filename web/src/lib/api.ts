@@ -516,25 +516,31 @@ export class ApiError extends Error {
   }
 }
 
-function authHeaders(): Record<string, string> {
-  return {}
-}
-
-export function withAccessToken(path: string): string {
-  return path
-}
-
 export function webSocketURL(path: string): string {
-  const authenticatedPath = withAccessToken(path)
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${protocol}//${window.location.host}${authenticatedPath}`
+  return `${protocol}//${window.location.host}${path}`
+}
+
+export function login(token: string) {
+  return api<void>('/api/login', { method: 'POST', body: JSON.stringify({ token }) })
+}
+
+export function logout() {
+  return api<void>('/api/logout', { method: 'POST' })
+}
+
+export function getSession(init?: RequestInit) {
+  return api<{ authenticated: boolean }>('/api/session', init)
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init?.headers },
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
   })
+  if (response.status === 401 && path !== '/api/login' && window.location.pathname !== '/login') {
+    window.location.assign('/login')
+  }
   if (!response.ok) {
     throw new ApiError(await errorMessage(response), response.status, path)
   }

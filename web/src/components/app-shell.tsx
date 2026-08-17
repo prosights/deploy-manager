@@ -1,13 +1,16 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
-import { Bell, Cable, Ellipsis, FileClock, FolderKanban, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Server, Sun } from 'lucide-react'
+import { Bell, Cable, Ellipsis, FileClock, FolderKanban, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Server, Sun } from 'lucide-react'
 import { useQuery, useSuspenseQueries } from '@tanstack/react-query'
 import { Suspense, useEffect, useState } from 'react'
 import { appVersionQuery, projectsQuery } from '../lib/queries'
 import { nextTheme, useUiStore } from '../store/ui'
 import { Button } from './ui/button'
+import { logout } from '../lib/api'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
 import {
@@ -64,8 +67,11 @@ export function AppShell() {
       }}
       className="text-prosights-text"
     >
-      <Sidebar collapsible="icon" className="border-prosights-border bg-prosights-surface">
-        <SidebarHeader className="h-[60px] justify-center border-b border-prosights-border px-3 py-0">
+      {/* No right border and no header border inside the sidebar: the surface
+          color change divides chrome from content, so the main header's
+          border-b starts at the content column and never crosses the nav. */}
+      <Sidebar collapsible="icon">
+        <SidebarHeader className="justify-center px-3 pb-1 pt-3">
           <div className="flex h-9 items-center gap-2 rounded-prosights-md px-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
             <Link to="/projects" className="flex min-w-0 flex-1 items-center gap-2 text-left group-data-[collapsible=icon]:hidden">
               <div className="flex size-7 shrink-0 items-center justify-center">
@@ -95,7 +101,7 @@ export function AppShell() {
                     asChild
                     isActive={active}
                     tooltip={item.label}
-                    className="group/sidebar-item h-8 rounded-prosights-md px-2 text-[13px] font-medium text-prosights-muted transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text data-[active=true]:bg-prosights-surface-muted data-[active=true]:text-prosights-text [&>svg]:size-4"
+                    className="group/sidebar-item h-8 rounded-prosights-md px-2 text-[13px] font-medium text-prosights-muted transition-colors hover:bg-sidebar-hover hover:text-prosights-text data-[active=true]:bg-sidebar-selected data-[active=true]:text-prosights-text [&>svg]:size-4"
                   >
                     <Link to={item.to}>
                       <Icon className={active ? 'text-prosights-text' : 'text-prosights-muted group-hover/sidebar-item:text-prosights-text'} aria-hidden="true" />
@@ -110,7 +116,7 @@ export function AppShell() {
           </SidebarGroup>
         </SidebarContent>
 
-        <SidebarFooter className="border-t border-prosights-border p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-2">
+        <SidebarFooter className="p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-2">
           <div
             className="flex min-w-0 items-center justify-between gap-2 px-1.5 text-[11px] text-prosights-muted group-data-[collapsible=icon]:hidden"
             title={`${versionLabel(appVersion?.version)} · ${appVersion?.commit_sha || 'development build'}`}
@@ -123,7 +129,7 @@ export function AppShell() {
               <DropdownMenu>
                 <DropdownMenuTrigger
                   aria-label={`${userName} account`}
-                  className="flex h-12 w-full min-w-0 items-center gap-2 overflow-hidden rounded-prosights-md px-1.5 text-left transition-colors hover:bg-prosights-surface-muted data-[state=open]:bg-prosights-surface-muted data-[state=open]:text-prosights-text group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
+                  className="flex h-12 w-full min-w-0 items-center gap-2 overflow-hidden rounded-prosights-md px-1.5 text-left transition-colors hover:bg-sidebar-hover data-[state=open]:bg-sidebar-selected data-[state=open]:text-prosights-text group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0 group-data-[collapsible=icon]:p-0"
                 >
                   <div className="flex size-8 shrink-0 items-center justify-center rounded-[10px] bg-prosights-surface-muted text-sm font-semibold text-prosights-text">
                     {(userName || userEmail || 'User').charAt(0).toUpperCase()}
@@ -146,6 +152,17 @@ export function AppShell() {
                     <span className="truncate text-[13px] font-semibold leading-5">{userName}</span>
                     <span className="truncate text-[12px] leading-4 text-prosights-muted">{userEmail}</span>
                   </div>
+                  <DropdownMenuSeparator className="my-0" />
+                  <DropdownMenuItem
+                    className="gap-2 rounded-none px-3.5 py-2.5 text-[13px]"
+                    onClick={() => {
+                      // Full reload so every cached query is dropped with the session.
+                      void logout().finally(() => window.location.assign('/login'))
+                    }}
+                  >
+                    <LogOut className="size-4 text-prosights-muted" aria-hidden="true" />
+                    <span>Log Out</span>
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </SidebarMenuItem>
