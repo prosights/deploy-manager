@@ -90,7 +90,7 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 		r.Get("/version", server.version)
 		// Tighter limit on login: it is the only credential-guessing surface.
 		r.With(rateLimit(20, 1*time.Minute)).Post("/login", login(auth))
-		r.Post("/logout", logout)
+		r.Post("/logout", logout(auth))
 		r.Get("/session", session(auth))
 		r.Post("/webhooks/github", server.githubWebhook)
 		r.Post("/github/webhook", server.githubWebhook)

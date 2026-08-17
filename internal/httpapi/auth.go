@@ -19,7 +19,7 @@ func requireAuth(token string) func(http.Handler) http.Handler {
 	expected := []byte(token)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !validBearerToken(r.Header.Get("Authorization"), expected) && !validSessionCookie(r, expected) {
+			if !validBearerToken(r.Header.Get("Authorization"), expected) && !validSessionRequest(r, expected) {
 				w.Header().Set("WWW-Authenticate", "Bearer")
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
@@ -51,14 +51,27 @@ func validSessionCookie(r *http.Request, expected []byte) bool {
 	return subtle.ConstantTimeCompare([]byte(cookie.Value), expected) == 1
 }
 
-func sessionCookie(r *http.Request, value string, maxAge int) *http.Cookie {
+func validSessionRequest(r *http.Request, expected []byte) bool {
+	if !validSessionCookie(r, expected) {
+		return false
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		return strings.HasPrefix(strings.ToLower(origin), "https://") && sameHostOrigin(origin, r.Host)
+	}
+}
+
+func sessionCookie(r *http.Request, auth AuthConfig, value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    value,
 		Path:     "/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   !auth.Disabled || r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 	}
 }
@@ -78,14 +91,16 @@ func login(auth AuthConfig) http.HandlerFunc {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 			return
 		}
-		http.SetCookie(w, sessionCookie(r, auth.Token, 30*24*60*60))
+		http.SetCookie(w, sessionCookie(r, auth, auth.Token, 30*24*60*60))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
-func logout(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, sessionCookie(r, "", -1))
-	w.WriteHeader(http.StatusNoContent)
+func logout(auth AuthConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, sessionCookie(r, auth, "", -1))
+		w.WriteHeader(http.StatusNoContent)
+	}
 }
 
 // session reports whether the request is authenticated so the SPA can decide

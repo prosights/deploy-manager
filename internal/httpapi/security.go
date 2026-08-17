@@ -1,6 +1,9 @@
 package httpapi
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -11,4 +14,9 @@ func securityHeaders(next http.Handler) http.Handler {
 		header.Set("Content-Security-Policy", "frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func sameHostOrigin(origin string, host string) bool {
+	origin = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(origin, "http://"), "https://"))
+	return strings.EqualFold(origin, host)
 }

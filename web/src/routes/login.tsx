@@ -48,11 +48,16 @@ export function LoginRoute() {
           autoFocus
           required
           value={token}
-          onChange={(event) => setToken(event.target.value)}
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? 'api-token-error' : undefined}
+          onChange={(event) => {
+            setToken(event.target.value)
+            setError('')
+          }}
           placeholder="Paste the API token"
-          className="h-9 w-full rounded-prosights-lg border border-prosights-border bg-prosights-surface px-3 text-sm text-prosights-text outline-none placeholder:text-prosights-muted/60 focus-visible:border-prosights-text focus-visible:ring-2 focus-visible:ring-prosights-ring"
+          className="h-9 w-full rounded-prosights-lg border border-prosights-border bg-prosights-surface px-3 text-sm text-prosights-text outline-none placeholder:text-prosights-muted focus-visible:border-prosights-text focus-visible:ring-2 focus-visible:ring-prosights-ring"
         />
-        {error && <p className="mt-2 text-[12px] text-danger">{error}</p>}
+        {error && <p id="api-token-error" role="alert" className="mt-2 text-[12px] text-danger">{error}</p>}
         <Button type="submit" className="mt-4 w-full" disabled={pending || !token.trim()}>
           {pending ? 'Signing in…' : 'Sign in'}
         </Button>

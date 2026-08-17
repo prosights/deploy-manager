@@ -114,12 +114,11 @@ func TestLoginLogoutSessionFlow(t *testing.T) {
 		t.Fatalf("expected 204 for valid login, got %d", response.Code)
 	}
 	cookies := response.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || !cookies[0].HttpOnly {
-		t.Fatalf("expected one HttpOnly %s cookie, got %+v", sessionCookieName, cookies)
+	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || !cookies[0].HttpOnly || !cookies[0].Secure {
+		t.Fatalf("expected one HttpOnly Secure %s cookie, got %+v", sessionCookieName, cookies)
 	}
 
-	// The cookie authenticates protected routes (401 comes from the handler's
-	// nil DB, so just assert the auth middleware let it through).
+	// The session endpoint recognizes the cookie.
 	response = httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, "/api/session", nil)
 	request.AddCookie(cookies[0])
@@ -133,7 +132,7 @@ func TestLoginLogoutSessionFlow(t *testing.T) {
 	request = httptest.NewRequest(http.MethodPost, "/api/logout", nil)
 	handler.ServeHTTP(response, request)
 	cleared := response.Result().Cookies()
-	if len(cleared) != 1 || cleared[0].Value != "" || cleared[0].MaxAge >= 0 {
+	if len(cleared) != 1 || cleared[0].Value != "" || cleared[0].MaxAge >= 0 || !cleared[0].Secure {
 		t.Fatalf("expected logout to expire the session cookie, got %+v", cleared)
 	}
 
@@ -143,6 +142,46 @@ func TestLoginLogoutSessionFlow(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"authenticated":false`) {
 		t.Fatalf("expected unauthenticated session without cookie, got %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestCookieAuthRequiresSameOriginForUnsafeMethods(t *testing.T) {
+	const token = "supersecrettoken123"
+	protected := requireAuth(token)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	tests := []struct {
+		name   string
+		method string
+		origin string
+		bearer bool
+		want   int
+	}{
+		{name: "safe cookie request", method: http.MethodGet, want: http.StatusNoContent},
+		{name: "same-origin cookie request", method: http.MethodPost, origin: "https://deploy.internal.prosights.co", want: http.StatusNoContent},
+		{name: "missing origin", method: http.MethodPost, want: http.StatusUnauthorized},
+		{name: "insecure same-host origin", method: http.MethodPost, origin: "http://deploy.internal.prosights.co", want: http.StatusUnauthorized},
+		{name: "cross-origin cookie request", method: http.MethodPost, origin: "https://other.prosights.co", want: http.StatusUnauthorized},
+		{name: "bearer automation", method: http.MethodPost, bearer: true, want: http.StatusNoContent},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, "https://deploy.internal.prosights.co/api/protected", nil)
+			if test.bearer {
+				request.Header.Set("Authorization", "Bearer "+token)
+			} else {
+				request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+			}
+			if test.origin != "" {
+				request.Header.Set("Origin", test.origin)
+			}
+			protected.ServeHTTP(response, request)
+			if response.Code != test.want {
+				t.Fatalf("expected %d, got %d", test.want, response.Code)
+			}
+		})
 	}
 }
 
