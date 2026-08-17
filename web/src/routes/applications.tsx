@@ -5,36 +5,16 @@ import { ApplicationCreatePanel, ApplicationList, defaultApplicationForm, type A
 import { createApplication, type CreateApplicationInput } from '../lib/api'
 import { validateDomain } from '../lib/domains'
 import { applicationsQuery, environmentsQuery, serversQuery } from '../lib/queries'
-import { matchesSearch } from '../lib/search'
 import { validateHealthCheckURL } from '../lib/urls'
-import { useUiStore } from '../store/ui'
 
 export function ApplicationsRoute() {
   const queryClient = useQueryClient()
   const [{ data: applications }, { data: servers }, { data: environments }] = useSuspenseQueries({
     queries: [applicationsQuery, serversQuery, environmentsQuery],
   })
-  const searchQuery = useUiStore((state) => state.searchQuery)
   const [form, setForm] = useState(defaultApplicationForm(servers[0]?.id, environments[0]?.id))
   const [formError, setFormError] = useState<string>()
-  const visibleApplications = applications.filter((application) => matchesSearch(searchQuery, [
-    application.name,
-    application.project_name,
-    application.environment_name,
-    application.environment_kind,
-    application.server_name,
-    application.repository_url,
-    application.branch,
-    application.compose_path,
-    application.remote_directory,
-    application.domain,
-    application.health_check_url,
-    application.doppler_project,
-    application.doppler_config,
-    application.status,
-    application.current_version,
-    application.target_version,
-  ]))
+  const visibleApplications = applications
   const create = useMutation({
     mutationFn: () => createApplication(applicationInput(form)),
     onSuccess: async () => {

@@ -77,7 +77,6 @@ vi.mock('../lib/api', () => ({
   updateApplication: vi.fn(async (applicationID, input) => ({ id: applicationID, ...input })),
   updateProject: vi.fn(async (projectID, input) => ({ id: projectID, ...input })),
   updateProjectRegistry: vi.fn(async (projectID, defaultRegistryID) => ({ id: projectID, default_registry_id: defaultRegistryID })),
-  withAccessToken: (path: string) => path,
 }))
 
 const project = {

@@ -10,8 +10,6 @@ import { SelectInput } from '../components/ui/select-input'
 import { TextInput } from '../components/ui/text-input'
 import { updateProjectRegistry, upsertContainerRegistry, type ContainerRegistry, type Project, type UpsertContainerRegistryInput } from '../lib/api'
 import { containerRegistriesQuery, projectsQuery } from '../lib/queries'
-import { matchesSearch } from '../lib/search'
-import { useUiStore } from '../store/ui'
 
 type RegistryForm = {
   name: string
@@ -38,19 +36,9 @@ export function RegistriesRoute() {
   const [{ data: registries }, { data: projects }] = useSuspenseQueries({
     queries: [containerRegistriesQuery, projectsQuery],
   })
-  const searchQuery = useUiStore((state) => state.searchQuery)
   const [form, setForm] = useState<RegistryForm>(defaultRegistryForm)
   const [formError, setFormError] = useState<string>()
   const [assignmentError, setAssignmentError] = useState<string>()
-  const visibleRegistries = registries.filter((registry) => matchesSearch(searchQuery, [
-    registry.name,
-    registry.provider,
-    registry.registry_host,
-    registry.namespace,
-    registry.repository,
-    registry.default_image,
-    registry.enabled ? 'enabled' : 'disabled',
-  ]))
 
   const saveRegistry = useMutation({
     mutationFn: () => upsertContainerRegistry(registryInput(form)),
@@ -102,7 +90,7 @@ export function RegistriesRoute() {
           }}
         />
       </div>
-      <RegistryList registries={visibleRegistries} />
+      <RegistryList registries={registries} />
     </div>
   )
 }

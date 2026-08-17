@@ -5,27 +5,16 @@ import { defaultProxyForm, ProxyRouteForm, ProxyRouteList } from '../features/pr
 import { applyProxyRoute, createProxyRoute } from '../lib/api'
 import { validateDomain } from '../lib/domains'
 import { applicationsQuery, proxyRoutesQuery, serversQuery } from '../lib/queries'
-import { matchesSearch } from '../lib/search'
-import { useUiStore } from '../store/ui'
 
 export function ProxyRoute() {
   const queryClient = useQueryClient()
   const [{ data: routes }, { data: servers }, { data: applications }] = useSuspenseQueries({
     queries: [proxyRoutesQuery, serversQuery, applicationsQuery],
   })
-  const searchQuery = useUiStore((state) => state.searchQuery)
   const defaultServerID = servers[0]?.id ?? ''
   const [form, setForm] = useState(defaultProxyForm(defaultServerID))
   const [formError, setFormError] = useState<string>()
-  const visibleRoutes = routes.filter((route) => matchesSearch(searchQuery, [
-    route.domain,
-    route.upstream_url,
-    route.status,
-    route.server_name,
-    route.proxy_type,
-    route.application_name,
-    route.tls_enabled ? 'tls on' : 'tls off',
-  ]))
+  const visibleRoutes = routes
   const selectedApplication = useMemo(
     () => applications.find((application) => application.id === form.application_id),
     [applications, form.application_id],

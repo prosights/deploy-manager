@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -87,6 +88,61 @@ func TestAuthRejectsQueryToken(t *testing.T) {
 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected query token to be rejected, got %d", response.Code)
+	}
+}
+
+func TestLoginLogoutSessionFlow(t *testing.T) {
+	const token = "supersecrettoken123"
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, nil, "", AuthConfig{Token: token})
+
+	// Wrong token is rejected and sets no cookie.
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"token":"wrong"}`))
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for wrong login token, got %d", response.Code)
+	}
+	if len(response.Result().Cookies()) != 0 {
+		t.Fatal("failed login must not set a cookie")
+	}
+
+	// Correct token sets the HttpOnly session cookie.
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(`{"token":"`+token+`"}`))
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for valid login, got %d", response.Code)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != sessionCookieName || !cookies[0].HttpOnly {
+		t.Fatalf("expected one HttpOnly %s cookie, got %+v", sessionCookieName, cookies)
+	}
+
+	// The cookie authenticates protected routes (401 comes from the handler's
+	// nil DB, so just assert the auth middleware let it through).
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	request.AddCookie(cookies[0])
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"authenticated":true`) {
+		t.Fatalf("expected authenticated session with cookie, got %d %s", response.Code, response.Body.String())
+	}
+
+	// Logout clears the cookie.
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/logout", nil)
+	handler.ServeHTTP(response, request)
+	cleared := response.Result().Cookies()
+	if len(cleared) != 1 || cleared[0].Value != "" || cleared[0].MaxAge >= 0 {
+		t.Fatalf("expected logout to expire the session cookie, got %+v", cleared)
+	}
+
+	// Without a cookie the session reports unauthenticated.
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"authenticated":false`) {
+		t.Fatalf("expected unauthenticated session without cookie, got %d %s", response.Code, response.Body.String())
 	}
 }
 
