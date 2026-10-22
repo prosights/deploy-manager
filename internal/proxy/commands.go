@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/stringutil"
 )
 
 type Target struct {
@@ -39,7 +39,7 @@ func BuildCommand(target Target) (string, error) {
 		path := "/etc/traefik/dynamic/deploy-manager-" + slug + ".yml"
 		return strings.Join([]string{
 			"sudo mkdir -p /etc/traefik/dynamic",
-			"printf %s " + shellQuote(config) + " | sudo tee " + shellQuote(path) + " >/dev/null",
+			"printf %s " + stringutil.ShellQuote(config) + " | sudo tee " + stringutil.ShellQuote(path) + " >/dev/null",
 		}, " && "), nil
 	default:
 		return "", fmt.Errorf("unsupported proxy type %q", target.ProxyType)
@@ -58,7 +58,7 @@ func BuildRemoveCommand(domain string, proxyType string) (string, error) {
 		return caddyRemoveCommand(domain, slug), nil
 	case "traefik":
 		path := "/etc/traefik/dynamic/deploy-manager-" + slug + ".yml"
-		return "sudo rm -f " + shellQuote(path), nil
+		return "sudo rm -f " + stringutil.ShellQuote(path), nil
 	default:
 		return "", fmt.Errorf("unsupported proxy type %q", proxyType)
 	}
@@ -221,8 +221,8 @@ PY
 else
   echo "no supported caddy runtime found" >&2
   exit 1
-fi`, shellQuote(config), shellQuote(hostPath), shellQuote(target.Domain), shellQuote(config))
-	return "bash -lc " + shellQuote(script)
+fi`, stringutil.ShellQuote(config), stringutil.ShellQuote(hostPath), stringutil.ShellQuote(target.Domain), stringutil.ShellQuote(config))
+	return "bash -lc " + stringutil.ShellQuote(script)
 }
 
 func caddyRemoveCommand(domain string, slug string) string {
@@ -271,8 +271,8 @@ PY
 else
   echo "no supported caddy runtime found" >&2
   exit 1
-fi`, shellQuote(hostPath), shellQuote(domain))
-	return "bash -lc " + shellQuote(script)
+fi`, stringutil.ShellQuote(hostPath), stringutil.ShellQuote(domain))
+	return "bash -lc " + stringutil.ShellQuote(script)
 }
 
 func traefikConfig(target Target, slug string) string {
@@ -347,8 +347,4 @@ func validateDomainLabels(domain string) error {
 		}
 	}
 	return nil
-}
-
-func shellQuote(value string) string {
-	return stringutil.ShellQuote(value)
 }

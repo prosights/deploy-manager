@@ -1,87 +1,27 @@
-import { useMutation, useQueryClient, useSuspenseQueries } from '@tanstack/react-query'
+import { useMutation, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { ArrowRight, FolderKanban, Layers3, Package, Plus, Rocket, Search, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { ArrowRight, FolderKanban, Layers3, Package, Plus, Rocket, Search } from 'lucide-react'
+import { useState } from 'react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
+import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTrigger } from '../components/ui/dialog'
 import { InlineError } from '../components/ui/error-message'
 import { Panel } from '../components/ui/panel'
 import { SelectInput } from '../components/ui/select-input'
 import { TextInput } from '../components/ui/text-input'
 import { statusTone } from '../features/status'
-import {
-  createProject,
-  type Application,
-  type CreateProjectInput,
-  type Deployment,
-  type Environment,
-  type Project,
-} from '../lib/api'
+import { createProject, type Application, type CreateProjectInput, type Deployment, type Project } from '../lib/api'
 import { applicationsQuery, deploymentsQuery, environmentsQuery, projectsQuery } from '../lib/queries'
-
-type ProjectForm = {
-  name: string
-  slug: string
-  description: string
-}
+import { slugify } from '../lib/format'
 
 type ProjectStatus = 'empty' | 'failed' | 'deploying' | 'healthy' | 'idle'
 type ProjectStatusFilter = 'all' | ProjectStatus
 
-const defaultProjectForm: ProjectForm = { name: '', slug: '', description: '' }
-
 export function ProjectsRoute() {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const [
-    { data: projects },
-    { data: environments },
-    { data: applications },
-    { data: deployments },
-  ] = useSuspenseQueries({
-    queries: [projectsQuery, environmentsQuery, applicationsQuery, deploymentsQuery],
-  })
-  const [form, setForm] = useState<ProjectForm>(defaultProjectForm)
-  const [formError, setFormError] = useState<string>()
+  const { data: projects } = useSuspenseQuery(projectsQuery)
+  const { data: applications } = useSuspenseQuery(applicationsQuery)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<ProjectStatusFilter>('all')
-  const [creating, setCreating] = useState(false)
-
-  // Legacy URLs looked like /projects?project=<id>#section. Forward them to
-  // the project page so old links and bookmarks keep working.
-  useEffect(() => {
-    const legacyProjectID = new URLSearchParams(window.location.search).get('project')
-    if (legacyProjectID) {
-      void navigate({
-        to: '/projects/$projectId',
-        params: { projectId: legacyProjectID },
-        hash: window.location.hash.replace(/^#/, '') || undefined,
-        replace: true,
-      })
-    }
-  }, [navigate])
-
-  const create = useMutation({
-    mutationFn: () => createProject(projectInput(form)),
-    onSuccess: async (project) => {
-      setForm(defaultProjectForm)
-      setFormError(undefined)
-      setCreating(false)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: projectsQuery.queryKey }),
-        queryClient.invalidateQueries({ queryKey: environmentsQuery.queryKey }),
-      ])
-      void navigate({ to: '/projects/$projectId', params: { projectId: project.id } })
-    },
-  })
-
-  const closeCreateProject = () => {
-    setCreating(false)
-    setForm(defaultProjectForm)
-    setFormError(undefined)
-    create.reset()
-  }
 
   const visibleProjects = projects.filter((project) => {
     const status = projectStatus(applications.filter((application) => application.project_id === project.id))
@@ -116,73 +56,34 @@ export function ProjectsRoute() {
           <option value="idle">Idle</option>
           <option value="empty">Empty</option>
         </SelectInput>
-        <DialogPrimitive.Root
-          open={creating}
-          onOpenChange={(open) => {
-            if (open) setCreating(true)
-            else closeCreateProject()
-          }}
-        >
-          <DialogPrimitive.Trigger asChild>
+        <Dialog>
+          <DialogTrigger asChild>
             <Button type="button" variant="primary" className="ml-auto">
               <Plus className="size-4" aria-hidden="true" />
               Create project
             </Button>
-          </DialogPrimitive.Trigger>
-          <DialogPrimitive.Portal>
-            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out" />
-            <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[28rem] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-prosights-xl border border-prosights-border bg-prosights-surface shadow-prosights-float outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:duration-100 data-[state=closed]:ease-out data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:duration-150 data-[state=open]:ease-out">
-              <div className="px-6 pb-3 pt-6 pr-14">
-                <DialogPrimitive.Title className="text-[17px] font-semibold tracking-[-0.01em] text-prosights-text">
-                  Create project
-                </DialogPrimitive.Title>
-                <DialogPrimitive.Description className="mt-1 text-[13px] leading-5 text-prosights-muted">
-                  Create the project first, then connect its repository and services.
-                </DialogPrimitive.Description>
-              </div>
-              <DialogPrimitive.Close asChild>
-                <button
-                  type="button"
-                  aria-label="Close create project"
-                  className="absolute right-5 top-5 inline-flex size-7 items-center justify-center rounded-prosights-md text-prosights-muted transition-colors hover:bg-prosights-surface-muted hover:text-prosights-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-prosights-ring"
-                >
-                  <X className="size-4" aria-hidden="true" />
-                </button>
-              </DialogPrimitive.Close>
-              <NewProjectForm
-                form={form}
-                isSaving={create.isPending}
-                errorMessage={formError ?? create.error?.message}
-                onChange={(updates) => setForm((state) => ({ ...state, ...updates }))}
-                onCancel={closeCreateProject}
-                onSubmit={() => {
-                  setFormError(undefined)
-                  try {
-                    validateProjectForm(form)
-                  } catch (error) {
-                    setFormError(error instanceof Error ? error.message : 'Project is invalid.')
-                    return
-                  }
-                  create.mutate()
-                }}
-              />
-            </DialogPrimitive.Content>
-          </DialogPrimitive.Portal>
-        </DialogPrimitive.Root>
+          </DialogTrigger>
+          <DialogContent size="sm">
+            <DialogHeader
+              title="Create project"
+              description="Create the project first, then connect its repository and services."
+              closeLabel="Close create project"
+            />
+            <NewProjectForm />
+          </DialogContent>
+        </Dialog>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {visibleProjects.map((project) => (
-          <ProjectTile key={project.id} project={project} environments={environments.filter((environment) => environment.project_id === project.id)} applications={applications.filter((application) => application.project_id === project.id)} deployments={projectDeployments(project.id, applications, deployments)} />
-        ))}
+        {visibleProjects.map((project) => <ProjectTile key={project.id} project={project} />)}
         {projects.length > 0 && visibleProjects.length === 0 && (
-          <div className="rounded-lg border border-dashed bg-surface px-4 py-10 text-center text-sm text-muted sm:col-span-2 xl:col-span-3">
+          <div className="rounded-lg border border-dashed bg-prosights-surface px-4 py-10 text-center text-sm text-prosights-muted sm:col-span-2 xl:col-span-3">
             No projects match these filters.
           </div>
         )}
       </div>
       {projects.length === 0 && (
         <Panel>
-          <div className="flex items-start gap-3 p-5 text-sm text-muted">
+          <div className="flex items-start gap-3 p-5 text-sm text-prosights-muted">
             <FolderKanban className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <p className="max-w-2xl leading-6">
               Create your first project above, then open it to connect a GitHub repository, pick the branch to deploy,
@@ -195,48 +96,48 @@ export function ProjectsRoute() {
   )
 }
 
-function ProjectTile({
-  project,
-  environments,
-  applications,
-  deployments,
-}: {
-  project: Project
-  environments: Environment[]
-  applications: Application[]
-  deployments: Deployment[]
-}) {
+function ProjectTile({ project }: { project: Project }) {
+  const { data: applications } = useSuspenseQuery({
+    ...applicationsQuery,
+    select: (applications) => applications.filter((application) => application.project_id === project.id),
+  })
+  const { data: environmentCount } = useSuspenseQuery({
+    ...environmentsQuery,
+    select: (environments) => environments.filter((environment) => environment.project_id === project.id).length,
+  })
+  const { data: deployments } = useSuspenseQuery(deploymentsQuery)
+  const applicationIDs = new Set(applications.map((application) => application.id))
   const status = projectStatus(applications)
-  const lastDeployment = newestDeployment(deployments)
+  const lastDeployment = newestDeployment(deployments.filter((deployment) => applicationIDs.has(deployment.application_id)))
   return (
     <Link
       to="/projects/$projectId"
       params={{ projectId: project.id }}
       aria-label={`Open project ${project.name}`}
-      className="group flex min-h-44 flex-col rounded-lg border bg-surface p-4 text-left transition-colors hover:border-prosights-subtle hover:bg-prosights-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="group flex min-h-44 flex-col rounded-lg border bg-prosights-surface p-4 text-left transition-colors hover:border-prosights-subtle hover:bg-prosights-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="truncate text-base font-semibold text-ink">{project.name}</h2>
+            <h2 className="truncate text-base font-semibold text-prosights-text">{project.name}</h2>
             <Badge tone={statusTone(status)}>{status}</Badge>
           </div>
-          <div className="mt-0.5 truncate text-xs text-muted">{project.slug}</div>
+          <div className="mt-0.5 truncate text-xs text-prosights-muted">{project.slug}</div>
         </div>
-        <ArrowRight className="mt-1 size-4 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-accent-text" aria-hidden="true" />
+        <ArrowRight className="mt-1 size-4 shrink-0 text-prosights-muted transition-transform group-hover:translate-x-0.5 group-hover:text-accent-text" aria-hidden="true" />
       </div>
-      <p className="mt-2 line-clamp-2 text-sm leading-5 text-muted">
+      <p className="mt-2 line-clamp-2 text-sm leading-5 text-prosights-muted">
         {project.description || 'No description yet.'}
       </p>
       <div className="mt-auto space-y-2 pt-3">
-        <div className="flex items-center gap-4 text-xs text-muted">
+        <div className="flex items-center gap-4 text-xs text-prosights-muted">
           <span className="inline-flex items-center gap-1.5">
             <Package className="size-3.5" aria-hidden="true" />
             {applications.length} service{applications.length === 1 ? '' : 's'}
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Layers3 className="size-3.5" aria-hidden="true" />
-            {environments.length} env{environments.length === 1 ? '' : 's'}
+            {environmentCount} env{environmentCount === 1 ? '' : 's'}
           </span>
           <span className="inline-flex min-w-0 items-center gap-1.5">
             <Rocket className="size-3.5 shrink-0" aria-hidden="true" />
@@ -248,41 +149,31 @@ function ProjectTile({
   )
 }
 
-function NewProjectForm({
-  form,
-  isSaving,
-  errorMessage,
-  onChange,
-  onCancel,
-  onSubmit,
-}: {
-  form: ProjectForm
-  isSaving: boolean
-  errorMessage?: string
-  onChange: (updates: Partial<ProjectForm>) => void
-  onCancel: () => void
-  onSubmit: () => void
-}) {
+// Rendered inside the dialog, so closing it discards the draft and any error.
+function NewProjectForm() {
+  const navigate = useNavigate()
+  const [name, setName] = useState('')
+  const create = useMutation({
+    mutationFn: () => createProject(projectInput(name)),
+    onSuccess: (project) => navigate({ to: '/projects/$projectId', params: { projectId: project.id } }),
+  })
+
   return (
     <form
-      className="space-y-5 px-6 pb-5 pt-3"
+      className="space-y-5 px-6 pb-5 pt-5"
       onSubmit={(event) => {
         event.preventDefault()
-        onSubmit()
+        create.mutate()
       }}
     >
-      <TextInput
-        label="Project name"
-        value={form.name}
-        onChange={(name) => onChange({ name, slug: slugify(name) })}
-        required
-        placeholder="recreate"
-      />
-      {errorMessage && <InlineError message={errorMessage} />}
+      <TextInput label="Project name" value={name} onChange={setName} required placeholder="recreate" />
+      {create.error && <InlineError message={create.error.message} />}
       <div className="flex items-center justify-end gap-2 border-t border-prosights-border pt-4">
-        <Button type="button" onClick={onCancel}>Cancel</Button>
-        <Button variant="primary" disabled={isSaving || !form.name || !form.slug}>
-          {isSaving ? 'Creating...' : 'Create'}
+        <DialogClose asChild>
+          <Button type="button">Cancel</Button>
+        </DialogClose>
+        <Button variant="primary" disabled={create.isPending || !slugify(name)}>
+          {create.isPending ? 'Creating...' : 'Create'}
         </Button>
       </div>
     </form>
@@ -304,11 +195,6 @@ function matchesProjectSearch(project: Project, query: string): boolean {
     .some((field) => field?.toLowerCase().includes(value))
 }
 
-function projectDeployments(projectID: string, applications: Application[], deployments: Deployment[]): Deployment[] {
-  const applicationIDs = new Set(applications.filter((application) => application.project_id === projectID).map((application) => application.id))
-  return deployments.filter((deployment) => applicationIDs.has(deployment.application_id))
-}
-
 function newestDeployment(deployments: Deployment[]): Deployment | undefined {
   return deployments.reduce<Deployment | undefined>((newest, deployment) => (
     !newest || Date.parse(deployment.created_at) > Date.parse(newest.created_at) ? deployment : newest
@@ -326,19 +212,13 @@ function deploymentAge(deployment: Deployment): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-function projectInput(form: ProjectForm): CreateProjectInput {
-  return { name: form.name.trim(), slug: slugify(form.slug), description: form.description.trim() }
-}
-
-function validateProjectForm(form: ProjectForm): void {
-  if (!form.name.trim() || !form.slug.trim()) {
+function projectInput(name: string): CreateProjectInput {
+  const slug = slugify(name)
+  if (!name.trim() || !slug) {
     throw new Error('Project name and slug are required.')
   }
-  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(slugify(form.slug))) {
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(slug)) {
     throw new Error('Slug must use lowercase letters, numbers, and hyphens.')
   }
-}
-
-function slugify(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').replace(/-{2,}/g, '-')
+  return { name: name.trim(), slug, description: '' }
 }

@@ -5,9 +5,8 @@ import (
 	"net/netip"
 	"strings"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/dockerx"
-	"deploy-manager/internal/sshutil"
+	"paddock/internal/db"
+	"paddock/internal/sshutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -33,7 +32,7 @@ func (s Server) createServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	server, err := s.queries.CreateServerWithSSHInventory(r.Context(), db.CreateServerWithSSHInventoryParams(input))
+	server, err := s.queries.CreateServer(r.Context(), input)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -89,7 +88,7 @@ func normalizeCreateServer(input db.CreateServerParams) (db.CreateServerParams, 
 	if input.SshPort < 1 || input.SshPort > 65535 {
 		return input, validationError("ssh_port must be between 1 and 65535")
 	}
-	if _, err := dockerx.BuildSSHHost(input.SshUser, input.Hostname, input.SshPort); err != nil {
+	if _, err := sshutil.BuildSSHHost(input.SshUser, input.Hostname, input.SshPort); err != nil {
 		return input, validationError(err.Error())
 	}
 	if !validProxyType(input.ProxyType) {
@@ -159,9 +158,9 @@ func validateSSHKeyPath(value string) error {
 
 func serverCreateAuditMetadata(hostname string, connectionMode string, proxyType string, sshKeyPath pgtype.Text) map[string]any {
 	return map[string]any{
-		"hostname":              hostname,
-		"connection_mode":       connectionMode,
-		"proxy_type":            proxyType,
-		"ssh_inventory_tracked": sshKeyPath.Valid,
+		"hostname":           hostname,
+		"connection_mode":    connectionMode,
+		"proxy_type":         proxyType,
+		"ssh_key_configured": sshKeyPath.Valid,
 	}
 }

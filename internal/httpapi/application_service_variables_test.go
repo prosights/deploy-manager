@@ -3,7 +3,7 @@ package httpapi
 import (
 	"testing"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 )
 
 func TestNormalizeApplicationServiceRuntimeConfigAllowsNonSecretOverrides(t *testing.T) {

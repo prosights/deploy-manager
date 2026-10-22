@@ -5,7 +5,7 @@ const tones = {
   success: 'bg-success/15 text-success',
   warning: 'bg-warning/15 text-warning',
   danger: 'bg-danger/15 text-danger',
-  neutral: 'bg-panel text-muted',
+  neutral: 'bg-prosights-surface-muted text-prosights-muted',
   accent: 'bg-accent/15 text-accent-text',
 }
 

@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"deploy-manager/internal/auditlog"
-	"deploy-manager/internal/db"
+	"paddock/internal/auditlog"
+	"paddock/internal/db"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )

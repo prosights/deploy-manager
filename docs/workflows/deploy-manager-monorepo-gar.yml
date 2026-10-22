@@ -1,10 +1,10 @@
-name: Deploy Manager monorepo build
+name: Paddock monorepo build
 
 on:
   workflow_dispatch:
     inputs:
       deploy_manager_build_id:
-        description: Deploy Manager build id
+        description: Paddock build id
         required: true
       repository:
         description: owner/repo
@@ -16,7 +16,7 @@ on:
         description: Commit SHA to build
         required: false
       image_ref:
-        description: Representative image ref reported back to Deploy Manager
+        description: Representative image ref reported back to Paddock
         required: true
       build_matrix:
         description: Compact JSON array of images with image_ref, build_context, and dockerfile
@@ -71,7 +71,7 @@ jobs:
     needs: build
     if: always()
     steps:
-      - name: Report to Deploy Manager
+      - name: Report to Paddock
         env:
           DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}
           DEPLOY_MANAGER_API_TOKEN: ${{ secrets.DEPLOY_MANAGER_API_TOKEN }}

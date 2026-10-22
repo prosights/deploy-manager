@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/sshutil"
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/db"
+	"paddock/internal/sshutil"
+	"paddock/internal/stringutil"
 
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"

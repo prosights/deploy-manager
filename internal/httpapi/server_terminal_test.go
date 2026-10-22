@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 )
 
 func TestApplicationTerminalDirectory(t *testing.T) {

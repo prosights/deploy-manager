@@ -1,185 +1,91 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createProject } from '../lib/api'
-import { TestRouter } from '../test/router'
-import { ProjectsRoute } from './projects'
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, expect, it } from 'vitest'
+import { application, deployment, environment, project, projectPageHandlers } from '../test/fixtures'
+import { HttpError, renderApp } from '../test/render'
 
-vi.mock('../lib/api', () => ({
-  createProject: vi.fn(async (input) => ({ id: 'project_2', ...input })),
-}))
+afterEach(cleanup)
 
-vi.mock('../lib/queries', () => ({
-  projectsQuery: {
-    queryKey: ['projects'],
-    queryFn: async () => [
-      {
-        id: 'project_1',
-        name: 'Billing',
-        slug: 'billing',
-        description: 'Billing stack',
-        default_registry_id: null,
-        default_registry_name: null,
-        repository_connector_id: 'connector_github',
-        repository_full_name: 'prosights/billing',
-        repository_branch: 'main',
-        created_at: '2026-06-25T00:00:00Z',
-        updated_at: '2026-06-25T00:00:00Z',
-      },
-      {
-        id: 'project_2',
-        name: 'Recreate',
-        slug: 'recreate',
-        description: '',
-        default_registry_id: null,
-        default_registry_name: null,
-        repository_connector_id: null,
-        repository_full_name: null,
-        repository_branch: null,
-        created_at: '2026-06-25T00:00:00Z',
-        updated_at: '2026-06-25T00:00:00Z',
-      },
-    ],
-  },
-  environmentsQuery: {
-    queryKey: ['environments'],
-    queryFn: async () => [
-      {
-        id: 'env_1',
-        project_id: 'project_1',
-        name: 'Production',
-        slug: 'production',
-        kind: 'production',
-        is_ephemeral: false,
-        pull_request_number: null,
-        branch: null,
-        expires_at: null,
-        created_at: '2026-06-25T00:00:00Z',
-        updated_at: '2026-06-25T00:00:00Z',
-      },
-    ],
-  },
-  applicationsQuery: {
-    queryKey: ['applications'],
-    queryFn: async () => [
-      {
-        id: 'app_1',
-        environment_id: 'env_1',
-        server_id: 'server_1',
-        name: 'API',
-        repository_url: 'https://github.com/prosights/billing.git',
-        branch: 'main',
-        compose_path: 'docker-compose.yml',
-        remote_directory: '/srv/api',
-        domain: 'api.example.com',
-        health_check_url: null,
-        doppler_project: null,
-        doppler_config: null,
-        status: 'healthy',
-        current_version: null,
-        target_version: null,
-        server_name: 'app-01',
-        environment_name: 'Production',
-        environment_slug: 'production',
-        environment_kind: 'production',
-        environment_is_ephemeral: false,
-        project_id: 'project_1',
-        project_name: 'Billing',
-        project_slug: 'billing',
-        default_registry_id: null,
-        default_registry_name: null,
-      },
-    ],
-  },
-  deploymentsQuery: {
-    queryKey: ['deployments'],
-    queryFn: async () => [
-      {
-        id: 'deployment_1',
-        application_id: 'app_1',
-        server_id: 'server_1',
-        trigger: 'manual',
-        strategy: 'blue_green',
-        status: 'succeeded',
-        commit_sha: 'abc1234',
-        commit_message: 'Deploy billing API',
-        image_ref: null,
-        image_digest: null,
-        actor: 'pramit@example.com',
-        created_at: '2026-07-16T12:00:00Z',
-        started_at: '2026-07-16T12:00:10Z',
-        finished_at: '2026-07-16T12:01:00Z',
-      },
-    ],
-  },
-}))
+const billing = project({ id: 'project_1', name: 'Billing', slug: 'billing', description: 'Billing stack' })
+const recreate = project({ id: 'project_2', name: 'Recreate', slug: 'recreate' })
 
-describe('ProjectsRoute', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
+function renderProjects(handlers: Record<string, unknown> = {}) {
+  return renderApp('/projects', {
+    ...projectPageHandlers({
+      projects: [billing, recreate],
+      environments: [environment({ project_id: 'project_1' })],
+      applications: [application({ project_id: 'project_1', status: 'healthy' })],
+      deployments: [deployment({ application_id: 'app_1', created_at: '2026-07-16T12:00:00Z' })],
+    }),
+    ...handlers,
+  })
+}
+
+it('renders one tile per project with service, environment and deployment facts', async () => {
+  renderProjects()
+
+  const tile = await screen.findByRole('link', { name: 'Open project Billing' })
+  expect(within(tile).getByText('1 service')).toBeInTheDocument()
+  expect(within(tile).getByText('1 env')).toBeInTheDocument()
+  expect(within(tile).getByText(/last deploy/)).toBeInTheDocument()
+  expect(within(tile).getByText('healthy')).toBeInTheDocument()
+
+  const empty = screen.getByRole('link', { name: 'Open project Recreate' })
+  expect(within(empty).getByText('0 services')).toBeInTheDocument()
+  expect(within(empty).getByText('never deployed')).toBeInTheDocument()
+})
+
+it('creates a project with a normalized slug and opens it', async () => {
+  const { requests, router } = renderProjects({
+    'POST /api/projects': ({ body }: { body: { name: string, slug: string } }) => project({ id: 'project_3', ...body }),
   })
 
-  afterEach(() => {
-    vi.restoreAllMocks()
-    cleanup()
+  fireEvent.click(await screen.findByRole('button', { name: 'Create project' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Create project' })
+  fireEvent.change(within(dialog).getByLabelText('Project name'), { target: { value: 'API Platform' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }))
+
+  await waitFor(() => expect(router.state.location.pathname).toBe('/projects/project_3'))
+  expect(requests.find((request) => request.method === 'POST')).toMatchObject({
+    path: '/api/projects',
+    body: { name: 'API Platform', slug: 'api-platform', description: '' },
+  })
+})
+
+it('shows the server error and keeps the dialog open when creation fails', async () => {
+  renderProjects({
+    'POST /api/projects': () => { throw new HttpError(409, 'slug already exists') },
   })
 
-  function renderRoute() {
-    const client = new QueryClient()
-    render(
-      <QueryClientProvider client={client}>
-        <TestRouter>
-          <ProjectsRoute />
-        </TestRouter>
-      </QueryClientProvider>,
-    )
-  }
+  fireEvent.click(await screen.findByRole('button', { name: 'Create project' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Create project' })
+  fireEvent.change(within(dialog).getByLabelText('Project name'), { target: { value: 'Billing' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create' }))
 
-  it('renders one tile per project with service and deployment facts', async () => {
-    renderRoute()
+  expect(await within(dialog).findByText('slug already exists')).toBeInTheDocument()
 
-    expect(await screen.findByText('Billing')).toBeInTheDocument()
-    expect(screen.getByText('Recreate')).toBeInTheDocument()
-    expect(screen.queryByText('prosights/billing#main')).not.toBeInTheDocument()
-    expect(screen.queryByText('no repository connected')).not.toBeInTheDocument()
-    expect(screen.getByText('1 service')).toBeInTheDocument()
-    expect(screen.getByText(/last deploy/)).toBeInTheDocument()
-    expect(screen.getByLabelText('Open project Billing')).toBeInTheDocument()
-  })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
+  const reopened = await screen.findByRole('dialog', { name: 'Create project' })
+  expect(within(reopened).getByLabelText('Project name')).toHaveValue('')
+  expect(within(reopened).queryByText('slug already exists')).not.toBeInTheDocument()
+})
 
-  it('creates projects with normalized slugs', async () => {
-    renderRoute()
+it('searches and filters projects', async () => {
+  renderProjects()
 
-    expect(screen.queryByRole('dialog', { name: 'Create project' })).not.toBeInTheDocument()
-    fireEvent.click(await screen.findByRole('button', { name: 'Create project' }))
-    expect(await screen.findByRole('dialog', { name: 'Create project' })).toBeInTheDocument()
-    fireEvent.change(await screen.findByLabelText('Project name'), { target: { value: 'API Platform' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+  fireEvent.change(await screen.findByLabelText('Search projects'), { target: { value: 'recreate' } })
+  expect(screen.queryByText('Billing')).not.toBeInTheDocument()
+  expect(screen.getByText('Recreate')).toBeInTheDocument()
 
-    await waitFor(() => {
-      expect(createProject).toHaveBeenCalledWith(expect.objectContaining({
-        name: 'API Platform',
-        slug: 'api-platform',
-      }))
-    })
-  })
+  fireEvent.change(screen.getByLabelText('Search projects'), { target: { value: '' } })
+  fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by status' }))
+  fireEvent.click(await screen.findByRole('option', { name: 'Healthy' }))
+  expect(screen.getByText('Billing')).toBeInTheDocument()
+  expect(screen.queryByText('Recreate')).not.toBeInTheDocument()
 
-  it('searches and filters projects', async () => {
-    renderRoute()
-
-    fireEvent.change(await screen.findByLabelText('Search projects'), { target: { value: 'recreate' } })
-    expect(screen.queryByText('Billing')).not.toBeInTheDocument()
-    expect(screen.getByText('Recreate')).toBeInTheDocument()
-
-    fireEvent.change(screen.getByLabelText('Search projects'), { target: { value: '' } })
-    fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by status' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Healthy' }))
-    expect(screen.getByText('Billing')).toBeInTheDocument()
-    expect(screen.queryByText('Recreate')).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by status' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Empty' }))
-    expect(screen.queryByText('Billing')).not.toBeInTheDocument()
-    expect(screen.getByText('Recreate')).toBeInTheDocument()
-  })
+  fireEvent.click(screen.getByRole('combobox', { name: 'Filter projects by status' }))
+  fireEvent.click(await screen.findByRole('option', { name: 'Empty' }))
+  expect(screen.queryByText('Billing')).not.toBeInTheDocument()
+  expect(screen.getByText('Recreate')).toBeInTheDocument()
 })

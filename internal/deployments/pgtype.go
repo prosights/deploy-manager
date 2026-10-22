@@ -1,7 +1,7 @@
 package deployments
 
 import (
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/stringutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )

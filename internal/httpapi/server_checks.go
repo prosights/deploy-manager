@@ -10,20 +10,25 @@ import (
 	"strings"
 	"time"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/dockerx"
-	"deploy-manager/internal/sshutil"
+	"paddock/internal/db"
+	"paddock/internal/sshutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type dockerEngineStatus struct {
+	Host       string `json:"host"`
+	APIVersion string `json:"api_version"`
+	OSType     string `json:"os_type"`
+}
 
 type sshHealthChecker interface {
 	Check(context.Context, db.Server) (sshutil.HealthResult, error)
 }
 
 type dockerEngineChecker interface {
-	Check(context.Context, db.Server) (dockerx.EngineStatus, error)
+	Check(context.Context, db.Server) (dockerEngineStatus, error)
 }
 
 type sshHealthCheck struct {
@@ -80,7 +85,7 @@ type serverCheckResult struct {
 	health       sshutil.HealthResult
 	status       string
 	metricsValid bool
-	docker       dockerx.EngineStatus
+	docker       dockerEngineStatus
 	sshErr       error
 	dockerErr    error
 }
@@ -92,7 +97,7 @@ func (s Server) runServerChecks(ctx context.Context, server db.Server) serverChe
 		status = "unreachable"
 	}
 
-	var dockerStatus dockerx.EngineStatus
+	var dockerStatus dockerEngineStatus
 	var dockerErr error
 	if sshErr == nil {
 		dockerStatus, dockerErr = s.dockerEngineChecker().Check(ctx, server)
@@ -145,24 +150,24 @@ func (c sshHealthCheck) Check(ctx context.Context, server db.Server) (sshutil.He
 	return sshutil.CheckWithClient(ctx, client)
 }
 
-func (c dockerEngineCheck) Check(ctx context.Context, server db.Server) (dockerx.EngineStatus, error) {
-	host := dockerx.SSHHost(server.SshUser, server.Hostname, server.SshPort)
+func (c dockerEngineCheck) Check(ctx context.Context, server db.Server) (dockerEngineStatus, error) {
+	host := sshutil.SSHHost(server.SshUser, server.Hostname, server.SshPort)
 	if server.ConnectionMode == sshutil.ConnectionModeTailscaleSSH && sshutil.IsLocalTailscaleHost(ctx, server.Hostname) {
 		host = "local:///var/run/docker.sock"
 	}
 	client, err := sshutil.ServerClient(ctx, server, c.signer)
 	if err != nil {
-		return dockerx.EngineStatus{}, err
+		return dockerEngineStatus{}, err
 	}
 	output, err := client.Run(ctx, `docker version --format '{{.Server.APIVersion}} {{.Server.Os}}'`)
 	if err != nil {
-		return dockerx.EngineStatus{}, err
+		return dockerEngineStatus{}, err
 	}
 	apiVersion, osType, err := parseDockerVersionOutput(output)
 	if err != nil {
-		return dockerx.EngineStatus{}, err
+		return dockerEngineStatus{}, err
 	}
-	return dockerx.EngineStatus{
+	return dockerEngineStatus{
 		Host:       host,
 		APIVersion: apiVersion,
 		OSType:     osType,
@@ -178,15 +183,15 @@ func parseDockerVersionOutput(output string) (string, string, error) {
 }
 
 type serverCheckResponse struct {
-	Server      db.Server             `json:"server"`
-	SSHOK       bool                  `json:"ssh_ok"`
-	DockerOK    bool                  `json:"docker_ok"`
-	Docker      *dockerx.EngineStatus `json:"docker,omitempty"`
-	Error       string                `json:"error,omitempty"`
-	DockerError string                `json:"docker_error,omitempty"`
+	Server      db.Server           `json:"server"`
+	SSHOK       bool                `json:"ssh_ok"`
+	DockerOK    bool                `json:"docker_ok"`
+	Docker      *dockerEngineStatus `json:"docker,omitempty"`
+	Error       string              `json:"error,omitempty"`
+	DockerError string              `json:"docker_error,omitempty"`
 }
 
-func newServerCheckResponse(server db.Server, docker dockerx.EngineStatus, sshErr error, dockerErr error) serverCheckResponse {
+func newServerCheckResponse(server db.Server, docker dockerEngineStatus, sshErr error, dockerErr error) serverCheckResponse {
 	response := serverCheckResponse{
 		Server:      server,
 		SSHOK:       sshErr == nil,

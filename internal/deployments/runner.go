@@ -11,13 +11,13 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"deploy-manager/internal/auditlog"
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/notifications"
-	proxypkg "deploy-manager/internal/proxy"
-	"deploy-manager/internal/sshutil"
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/auditlog"
+	"paddock/internal/db"
+	"paddock/internal/notifications"
+	proxypkg "paddock/internal/proxy"
+	"paddock/internal/runtimevars"
+	"paddock/internal/sshutil"
+	"paddock/internal/stringutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -62,7 +62,7 @@ type runnerQueries interface {
 }
 
 type RuntimeVariableSource interface {
-	RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error)
+	RuntimeVariables(context.Context, runtimevars.Scope) ([]runtimevars.Variable, error)
 }
 
 type SourceAuthenticator interface {
@@ -317,15 +317,15 @@ func (r Runner) sourceAuthorizationHeader(ctx context.Context, target db.GetDepl
 	return header, nil
 }
 
-func (r Runner) deploymentRuntimeVariables(ctx context.Context, target db.GetDeploymentTargetRow) ([]connectors.RuntimeVariable, error) {
+func (r Runner) deploymentRuntimeVariables(ctx context.Context, target db.GetDeploymentTargetRow) ([]runtimevars.Variable, error) {
 	projectVariables, err := r.queries.ListProjectRuntimeVariablesForApplication(ctx, target.ApplicationID)
 	if err != nil {
 		return nil, fmt.Errorf("load project runtime variables: %w", err)
 	}
 
-	variables := make([]connectors.RuntimeVariable, 0, len(projectVariables))
+	variables := make([]runtimevars.Variable, 0, len(projectVariables))
 	for _, variable := range projectVariables {
-		variables = append(variables, connectors.RuntimeVariable{Key: variable.Key, Value: variable.Value})
+		variables = append(variables, runtimevars.Variable{Key: variable.Key, Value: variable.Value})
 	}
 	if r.runtime == nil {
 		return variables, nil
@@ -338,7 +338,7 @@ func (r Runner) deploymentRuntimeVariables(ctx context.Context, target db.GetDep
 	return mergeRuntimeVariables(variables, dopplerVariables), nil
 }
 
-func (r Runner) deploymentServiceRuntimeVariables(ctx context.Context, target db.GetDeploymentTargetRow, shared []connectors.RuntimeVariable) (map[string][]connectors.RuntimeVariable, error) {
+func (r Runner) deploymentServiceRuntimeVariables(ctx context.Context, target db.GetDeploymentTargetRow, shared []runtimevars.Variable) (map[string][]runtimevars.Variable, error) {
 	configs, err := r.queries.ListApplicationServiceRuntimeConfigs(ctx, target.ApplicationID)
 	if err != nil {
 		return nil, fmt.Errorf("load compose service runtime configuration: %w", err)
@@ -354,7 +354,7 @@ func (r Runner) deploymentServiceRuntimeVariables(ctx context.Context, target db
 		}
 		stackVariables = mergeRuntimeVariables(shared, variables)
 		if r.runtime != nil && config.DopplerProject.Valid && config.DopplerConfig.Valid {
-			dopplerVariables, err := r.runtime.RuntimeVariables(ctx, connectors.RuntimeVariableScope{
+			dopplerVariables, err := r.runtime.RuntimeVariables(ctx, runtimevars.Scope{
 				ApplicationName: target.ApplicationName + "/stack",
 				Project:         strings.TrimSpace(config.DopplerProject.String),
 				Config:          strings.TrimSpace(config.DopplerConfig.String),
@@ -366,7 +366,7 @@ func (r Runner) deploymentServiceRuntimeVariables(ctx context.Context, target db
 		}
 	}
 
-	services := make(map[string][]connectors.RuntimeVariable, len(configs))
+	services := make(map[string][]runtimevars.Variable, len(configs))
 	for _, name := range deploymentComposeServiceNames(target.ComposeServices) {
 		services[name] = stackVariables
 	}
@@ -380,7 +380,7 @@ func (r Runner) deploymentServiceRuntimeVariables(ctx context.Context, target db
 		}
 		variables := mergeRuntimeVariables(stackVariables, direct)
 		if r.runtime != nil && config.DopplerProject.Valid && config.DopplerConfig.Valid {
-			dopplerVariables, err := r.runtime.RuntimeVariables(ctx, connectors.RuntimeVariableScope{
+			dopplerVariables, err := r.runtime.RuntimeVariables(ctx, runtimevars.Scope{
 				ApplicationName: target.ApplicationName + "/" + config.ComposeService,
 				Project:         strings.TrimSpace(config.DopplerProject.String),
 				Config:          strings.TrimSpace(config.DopplerConfig.String),
@@ -395,7 +395,7 @@ func (r Runner) deploymentServiceRuntimeVariables(ctx context.Context, target db
 	return services, nil
 }
 
-func runtimeConfigVariables(config db.ApplicationServiceRuntimeConfig) ([]connectors.RuntimeVariable, error) {
+func runtimeConfigVariables(config db.ApplicationServiceRuntimeConfig) ([]runtimevars.Variable, error) {
 	var inputs []struct {
 		Key   string `json:"key"`
 		Value string `json:"value"`
@@ -403,9 +403,9 @@ func runtimeConfigVariables(config db.ApplicationServiceRuntimeConfig) ([]connec
 	if err := json.Unmarshal(config.Variables, &inputs); err != nil {
 		return nil, err
 	}
-	variables := make([]connectors.RuntimeVariable, 0, len(inputs))
+	variables := make([]runtimevars.Variable, 0, len(inputs))
 	for _, input := range inputs {
-		variables = append(variables, connectors.RuntimeVariable{Key: input.Key, Value: input.Value})
+		variables = append(variables, runtimevars.Variable{Key: input.Key, Value: input.Value})
 	}
 	return variables, nil
 }
@@ -459,8 +459,8 @@ func singletonComposeServiceNames(raw []byte) ([]string, error) {
 	return names, nil
 }
 
-func mergeRuntimeVariables(projectVariables []connectors.RuntimeVariable, dopplerVariables []connectors.RuntimeVariable) []connectors.RuntimeVariable {
-	byKey := make(map[string]connectors.RuntimeVariable, len(projectVariables)+len(dopplerVariables))
+func mergeRuntimeVariables(projectVariables []runtimevars.Variable, dopplerVariables []runtimevars.Variable) []runtimevars.Variable {
+	byKey := make(map[string]runtimevars.Variable, len(projectVariables)+len(dopplerVariables))
 	for _, variable := range projectVariables {
 		byKey[variable.Key] = variable
 	}
@@ -474,7 +474,7 @@ func mergeRuntimeVariables(projectVariables []connectors.RuntimeVariable, dopple
 	}
 	sort.Strings(keys)
 
-	variables := make([]connectors.RuntimeVariable, 0, len(keys))
+	variables := make([]runtimevars.Variable, 0, len(keys))
 	for _, key := range keys {
 		variables = append(variables, byKey[key])
 	}
@@ -574,7 +574,7 @@ func (r Runner) rollback(ctx context.Context, deployment db.Deployment, target d
 		if err != nil {
 			return err
 		}
-		serviceVariables := make(map[string][]connectors.RuntimeVariable, len(singletonServices))
+		serviceVariables := make(map[string][]runtimevars.Variable, len(singletonServices))
 		for _, service := range singletonServices {
 			serviceVariables[service] = nil
 		}
@@ -914,8 +914,8 @@ func proxyRouteUpstream(route db.ListProxyRouteTargetsForApplicationRow, color s
 	return "", fmt.Errorf("%s_upstream_url is required", color)
 }
 
-func runtimeScope(target db.GetDeploymentTargetRow) connectors.RuntimeVariableScope {
-	return connectors.RuntimeVariableScope{
+func runtimeScope(target db.GetDeploymentTargetRow) runtimevars.Scope {
+	return runtimevars.Scope{
 		ApplicationName: target.ApplicationName,
 		Project:         strings.TrimSpace(target.DopplerProject.String),
 		Config:          strings.TrimSpace(target.DopplerConfig.String),

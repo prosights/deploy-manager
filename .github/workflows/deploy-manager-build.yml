@@ -1,4 +1,4 @@
-name: Deploy Manager image
+name: Paddock image
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy_manager_build_id:
-        description: Build ID for the Deploy Manager callback
+        description: Build ID for the Paddock callback
         required: true
       repository:
         description: owner/repo
@@ -212,7 +212,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$VERSION" "$COMMIT_SHA" -m "Deploy Manager $VERSION"
+          git tag -a "$VERSION" "$COMMIT_SHA" -m "Paddock $VERSION"
           git push origin "refs/tags/$VERSION"
 
       - name: Report success
@@ -300,4 +300,4 @@ jobs:
           curl --fail-with-body -X POST "$DEPLOY_MANAGER_API_URL/api/builds/$BUILD_ID/complete" \
             -H "Authorization: Bearer $DEPLOY_MANAGER_API_TOKEN" \
             -H "Content-Type: application/json" \
-            --data "{\"status\":\"failed\",\"external_url\":\"$RUN_URL\",\"error_message\":\"Deploy Manager image build failed\"}"
+            --data "{\"status\":\"failed\",\"external_url\":\"$RUN_URL\",\"error_message\":\"Paddock image build failed\"}"

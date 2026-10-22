@@ -7,18 +7,17 @@ import (
 	"fmt"
 	"net/http"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/deployments"
-	"deploy-manager/internal/githubconnector"
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/compose"
+	"paddock/internal/db"
+	"paddock/internal/deployments"
+	"paddock/internal/githubconnector"
+	"paddock/internal/stringutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"gopkg.in/yaml.v3"
 )
 
 type githubRepositoryResponse struct {
@@ -87,28 +86,11 @@ type githubRepositorySyncResponse struct {
 }
 
 type githubDetectedService struct {
-	Name            string                 `json:"name"`
-	Root            string                 `json:"root"`
-	ComposePath     string                 `json:"compose_path"`
-	PathFilters     []string               `json:"path_filters"`
-	ComposeServices []githubComposeService `json:"compose_services"`
-}
-
-type githubComposeService struct {
-	Name          string              `json:"name"`
-	Image         string              `json:"image,omitempty"`
-	BuildContext  string              `json:"build_context,omitempty"`
-	Dockerfile    string              `json:"dockerfile,omitempty"`
-	Ports         []githubComposePort `json:"ports"`
-	DependsOn     []string            `json:"depends_on"`
-	ExecutionMode string              `json:"execution_mode,omitempty"`
-}
-
-type githubComposePort struct {
-	ContainerPort int    `json:"container_port"`
-	PublishedPort int    `json:"published_port,omitempty"`
-	Protocol      string `json:"protocol,omitempty"`
-	Variable      string `json:"variable,omitempty"`
+	Name            string            `json:"name"`
+	Root            string            `json:"root"`
+	ComposePath     string            `json:"compose_path"`
+	PathFilters     []string          `json:"path_filters"`
+	ComposeServices []compose.Service `json:"compose_services"`
 }
 
 type githubDetectServicesResponse struct {
@@ -553,77 +535,43 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 	}
 	selected := selectedServiceNames(request.Services)
 	applications := make([]db.Application, 0, len(services))
-	if s.tx == nil {
-		writeError(w, errors.New("database transactions are unavailable"))
-		return
-	}
-	tx, err := s.tx.Begin(r.Context())
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	defer func() { _ = tx.Rollback(r.Context()) }()
-	queries := s.queries.WithTx(tx)
-	for _, service := range services {
-		if len(selected) > 0 && !selected[service.Name] {
-			continue
-		}
-		input, err := normalizeCreateApplication(db.CreateApplicationParams{
-			EnvironmentID:    environmentID,
-			ServerID:         serverID,
-			Name:             service.Name,
-			RepositoryUrl:    blankStringAsText("https://github.com/" + repository.Repository + ".git"),
-			Branch:           repository.Branch,
-			ComposePath:      service.ComposePath,
-			RemoteDirectory:  "/srv/deploy-manager/apps/" + project.Slug + "/" + environment.Slug + "/" + service.Name,
-			HealthCheckUrl:   blankStringAsText("http://127.0.0.1:{port}/?color={color}"),
-			GithubAutoDeploy: true,
-		})
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		app, err := queries.CreateApplication(r.Context(), input)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		if len(service.ComposeServices) > 0 {
-			metadata, err := json.Marshal(service.ComposeServices)
-			if err != nil {
-				writeError(w, err)
-				return
+	if err := s.withTx(r.Context(), func(queries *db.Queries) error {
+		for _, service := range services {
+			if len(selected) > 0 && !selected[service.Name] {
+				continue
 			}
-			app, err = queries.UpdateApplicationComposeServices(r.Context(), db.UpdateApplicationComposeServicesParams{
-				ID:              app.ID,
-				ComposeServices: metadata,
-			})
+			app, err := importGitHubService(r.Context(), queries, db.CreateApplicationParams{
+				EnvironmentID:    environmentID,
+				ServerID:         serverID,
+				Name:             service.Name,
+				RepositoryUrl:    blankStringAsText("https://github.com/" + repository.Repository + ".git"),
+				Branch:           repository.Branch,
+				ComposePath:      service.ComposePath,
+				RemoteDirectory:  "/srv/deploy-manager/apps/" + project.Slug + "/" + environment.Slug + "/" + service.Name,
+				HealthCheckUrl:   blankStringAsText("http://127.0.0.1:{port}/?color={color}"),
+				GithubAutoDeploy: true,
+			}, service.ComposeServices)
 			if err != nil {
-				writeError(w, err)
-				return
+				return err
 			}
+			applications = append(applications, app)
 		}
-		applications = append(applications, app)
-	}
-	if len(applications) == 0 {
-		writeError(w, validationError("no detected services selected"))
-		return
-	}
-	updated := account
-	// First import wires the project to its source repository so the project
-	// page shows one repo/branch of record.
-	if !project.RepositoryFullName.Valid {
-		if _, err := queries.UpdateProjectRepository(r.Context(), db.UpdateProjectRepositoryParams{
+		if len(applications) == 0 {
+			return validationError("no detected services selected")
+		}
+		// First import wires the project to its source repository so the project
+		// page shows one repo/branch of record.
+		if project.RepositoryFullName.Valid {
+			return nil
+		}
+		_, err := queries.UpdateProjectRepository(r.Context(), db.UpdateProjectRepositoryParams{
 			ID:                    projectID,
 			RepositoryConnectorID: account.ID,
 			RepositoryFullName:    blankStringAsText(repository.Repository),
 			RepositoryBranch:      blankStringAsText(repository.Branch),
-		}); err != nil {
-			writeError(w, err)
-			return
-		}
-	}
-	if err := tx.Commit(r.Context()); err != nil {
+		})
+		return err
+	}); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -631,7 +579,29 @@ func (s Server) importGitHubRepositoryServices(w http.ResponseWriter, r *http.Re
 		"repository": repository.Repository,
 		"services":   len(applications),
 	})
-	writeJSON(w, http.StatusCreated, githubImportServicesResponse{Applications: applications, Connector: connectorResponse(updated)})
+	writeJSON(w, http.StatusCreated, githubImportServicesResponse{Applications: applications, Connector: connectorResponse(account)})
+}
+
+func importGitHubService(ctx context.Context, queries *db.Queries, params db.CreateApplicationParams, composeServices []compose.Service) (db.Application, error) {
+	input, err := normalizeCreateApplication(params)
+	if err != nil {
+		return db.Application{}, err
+	}
+	app, err := queries.CreateApplication(ctx, input)
+	if err != nil {
+		return db.Application{}, err
+	}
+	if len(composeServices) == 0 {
+		return app, nil
+	}
+	metadata, err := json.Marshal(composeServices)
+	if err != nil {
+		return db.Application{}, err
+	}
+	return queries.UpdateApplicationComposeServices(ctx, db.UpdateApplicationComposeServicesParams{
+		ID:              app.ID,
+		ComposeServices: metadata,
+	})
 }
 
 func selectedServiceNames(values []string) map[string]bool {
@@ -727,205 +697,16 @@ func repositoryPathFilters(root string) []string {
 	return []string{root + "/**"}
 }
 
-type composeDocument struct {
-	Services map[string]composeService `yaml:"services"`
-}
-
-type composeService struct {
-	Image     string      `yaml:"image"`
-	Build     yaml.Node   `yaml:"build"`
-	Ports     []yaml.Node `yaml:"ports"`
-	Expose    []yaml.Node `yaml:"expose"`
-	DependsOn yaml.Node   `yaml:"depends_on"`
-}
-
-func (s Server) detectComposeServices(r *http.Request, repository githubconnector.Repository, composePath string) ([]githubComposeService, error) {
+func (s Server) detectComposeServices(r *http.Request, repository githubconnector.Repository, composePath string) ([]compose.Service, error) {
 	contents, err := s.github.App.GetRepositoryFile(r.Context(), repository.InstallationID, repository.Repository, composePath, repository.Branch)
 	if err != nil {
 		return nil, err
 	}
-	var document composeDocument
-	if err := yaml.Unmarshal(contents, &document); err != nil {
+	services, err := compose.Parse(contents)
+	if err != nil {
 		return nil, validationError("invalid compose file " + composePath + ": " + err.Error())
 	}
-	services := make([]githubComposeService, 0, len(document.Services))
-	for name, service := range document.Services {
-		buildContext, dockerfile := composeBuild(service.Build)
-		ports := make([]githubComposePort, 0, len(service.Ports)+len(service.Expose))
-		seenPorts := make(map[string]bool)
-		for _, port := range append(service.Ports, service.Expose...) {
-			if value, ok := composePort(port); ok {
-				key := fmt.Sprintf("%d/%s", value.ContainerPort, value.Protocol)
-				if seenPorts[key] {
-					continue
-				}
-				seenPorts[key] = true
-				ports = append(ports, value)
-			}
-		}
-		dependsOn := composeDependencies(service.DependsOn)
-		sort.Strings(dependsOn)
-		services = append(services, githubComposeService{
-			Name:         name,
-			Image:        service.Image,
-			BuildContext: buildContext,
-			Dockerfile:   dockerfile,
-			Ports:        ports,
-			DependsOn:    dependsOn,
-		})
-	}
-	sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
 	return services, nil
-}
-
-func composeBuild(node yaml.Node) (string, string) {
-	if node.Kind == yaml.ScalarNode {
-		return node.Value, ""
-	}
-	if node.Kind == yaml.MappingNode {
-		return yamlMapValue(node, "context"), yamlMapValue(node, "dockerfile")
-	}
-	return "", ""
-}
-
-func composePort(node yaml.Node) (githubComposePort, bool) {
-	if node.Kind == yaml.ScalarNode {
-		value := node.Value
-		protocol := ""
-		if slash := strings.LastIndex(value, "/"); slash >= 0 {
-			protocol = value[slash+1:]
-			value = value[:slash]
-		}
-		containerValue, publishedValue, hasPublished := splitComposePort(value)
-		containerPort, err := strconv.Atoi(containerValue)
-		if err != nil || containerPort < 1 || containerPort > 65535 {
-			return githubComposePort{}, false
-		}
-		port := githubComposePort{ContainerPort: containerPort, Protocol: protocol}
-		if hasPublished {
-			publishedPort, variable, ok := composePublishedPort(publishedValue)
-			if !ok {
-				return githubComposePort{}, false
-			}
-			port.PublishedPort = publishedPort
-			port.Variable = variable
-		}
-		return port, true
-	}
-	if node.Kind != yaml.MappingNode {
-		return githubComposePort{}, false
-	}
-	target, err := strconv.Atoi(yamlMapValue(node, "target"))
-	if err != nil || target < 1 || target > 65535 {
-		return githubComposePort{}, false
-	}
-	port := githubComposePort{ContainerPort: target, Protocol: yamlMapValue(node, "protocol")}
-	if published := yamlMapValue(node, "published"); published != "" {
-		value, variable, ok := composePublishedPort(published)
-		if !ok {
-			return githubComposePort{}, false
-		}
-		port.PublishedPort = value
-		port.Variable = variable
-	}
-	return port, true
-}
-
-func splitComposePort(value string) (container string, published string, hasPublished bool) {
-	separator := lastComposePortSeparator(value)
-	if separator < 0 {
-		return value, "", false
-	}
-	container = value[separator+1:]
-	prefix := value[:separator]
-	if separator = lastComposePortSeparator(prefix); separator >= 0 {
-		prefix = prefix[separator+1:]
-	}
-	return container, prefix, true
-}
-
-func lastComposePortSeparator(value string) int {
-	curly, square := 0, 0
-	for index := len(value) - 1; index >= 0; index-- {
-		switch value[index] {
-		case '}':
-			curly++
-		case '{':
-			curly--
-		case ']':
-			square++
-		case '[':
-			square--
-		case ':':
-			if curly == 0 && square == 0 {
-				return index
-			}
-		}
-	}
-	return -1
-}
-
-func composePublishedPort(value string) (int, string, bool) {
-	value = strings.TrimSpace(value)
-	variable := ""
-	fallback := ""
-	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
-		contents := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
-		variable, fallback, _ = strings.Cut(contents, ":-")
-	} else if strings.HasPrefix(value, "$") {
-		variable = strings.TrimPrefix(value, "$")
-	} else {
-		fallback = value
-	}
-	if variable != "" && !validComposeVariable(variable) {
-		return 0, "", false
-	}
-	if fallback == "" {
-		return 0, variable, variable != ""
-	}
-	port, err := strconv.Atoi(fallback)
-	if err != nil || port < 1 || port > 65535 {
-		return 0, "", false
-	}
-	return port, variable, true
-}
-
-func validComposeVariable(value string) bool {
-	for index, char := range value {
-		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || char == '_' || (index > 0 && char >= '0' && char <= '9') {
-			continue
-		}
-		return false
-	}
-	return value != ""
-}
-
-func composeDependencies(node yaml.Node) []string {
-	values := make([]string, 0)
-	switch node.Kind {
-	case yaml.SequenceNode:
-		for _, child := range node.Content {
-			if child.Value != "" {
-				values = append(values, child.Value)
-			}
-		}
-	case yaml.MappingNode:
-		for index := 0; index+1 < len(node.Content); index += 2 {
-			if node.Content[index].Value != "" {
-				values = append(values, node.Content[index].Value)
-			}
-		}
-	}
-	return values
-}
-
-func yamlMapValue(node yaml.Node, key string) string {
-	for index := 0; index+1 < len(node.Content); index += 2 {
-		if node.Content[index].Value == key {
-			return node.Content[index+1].Value
-		}
-	}
-	return ""
 }
 
 func repositoryServiceName(repository string) string {
@@ -1205,7 +986,7 @@ func validateGitHubBuildDispatchRequest(request githubBuildDispatchRequest) erro
 	if request.Repository == "" {
 		return validationError("repository is required")
 	}
-	if request.ApplicationID != "" && nullableApplicationID(request.ApplicationID).Valid == false {
+	if request.ApplicationID != "" && !nullableApplicationID(request.ApplicationID).Valid {
 		return validationError("application_id must be a uuid")
 	}
 	if strings.ContainsAny(request.WorkflowID, "/\\\r\n\t") {

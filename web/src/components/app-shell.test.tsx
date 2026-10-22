@@ -1,96 +1,68 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import type { ReactNode } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AppShell } from './app-shell'
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, expect, it } from 'vitest'
+import { projectPageHandlers } from '../test/fixtures'
+import { renderApp } from '../test/render'
 
-const routerState = vi.hoisted(() => ({
-  location: { pathname: '/projects/project_1', hash: '#deployments' },
-}))
+afterEach(() => {
+  cleanup()
+  localStorage.clear()
+})
 
-vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => ({
-    data: {
-      version: '1.2.3',
-      commit_sha: 'abcdef1234567890',
-      build_time: '2026-07-16T00:00:00Z',
-    },
-  }),
-  useSuspenseQueries: () => [
-    {
-      data: [
-        {
-          id: 'project_1',
-          name: 'Recreate',
-          slug: 'recreate',
-        },
-      ],
-    },
-  ],
-}))
+const handlers = {
+  ...projectPageHandlers(),
+  'GET /api/version': { version: '1.2.3', commit_sha: 'abcdef1234567890', build_time: '2026-07-16T00:00:00Z' },
+}
 
-vi.mock('../lib/queries', () => ({
-  appVersionQuery: {},
-  projectsQuery: {},
-}))
+it('renders the navigation, page title and build', async () => {
+  renderApp('/projects', handlers)
 
-vi.mock('@tanstack/react-router', () => ({
-  Link: ({ to, className, children }: { to: string, className?: string, children: ReactNode }) => (
-    <a href={to} className={className}>{children}</a>
-  ),
-  Outlet: () => <div />,
-  useLocation: () => routerState.location,
-}))
+  expect(await screen.findByRole('heading', { name: 'Projects' })).toBeInTheDocument()
+  const nav = ['Projects', 'Deployments', 'Servers', 'Notifications', 'Connectors', 'Audit']
+  for (const label of nav) {
+    expect(screen.getByRole('link', { name: label })).toHaveAttribute('href', `/${label.toLowerCase()}`)
+  }
+  expect(screen.getByRole('link', { name: 'Projects' })).toHaveAttribute('data-active', 'true')
+  expect(screen.getByRole('link', { name: 'Audit' })).toHaveAttribute('data-active', 'false')
+  expect(await screen.findByText('v1.2.3 · abcdef1')).toBeInTheDocument()
+})
 
-vi.mock('../store/ui', () => ({
-  nextTheme: () => 'dark',
-  useUiStore: (selector: (state: {
-    sidebarCollapsed: boolean
-    toggleSidebar: () => void
-    theme: 'light'
-    setTheme: () => void
-  }) => unknown) => selector({
-    sidebarCollapsed: false,
-    toggleSidebar: vi.fn(),
-    theme: 'light',
-    setTheme: vi.fn(),
-  }),
-}))
+it('navigates between pages from the sidebar', async () => {
+  const { router } = renderApp('/projects', { ...handlers, 'GET /api/audit-events': [] })
 
-describe('AppShell', () => {
-  afterEach(() => {
-    cleanup()
-    vi.clearAllMocks()
-    routerState.location = { pathname: '/projects/project_1', hash: '#deployments' }
-  })
+  fireEvent.click(await screen.findByRole('link', { name: 'Audit' }))
 
-  it('gives project pages the full content surface', () => {
-    render(<AppShell />)
+  expect(await screen.findByRole('heading', { name: 'Audit', level: 1 })).toBeInTheDocument()
+  expect(router.state.location.pathname).toBe('/audit')
+  expect(screen.getByRole('link', { name: 'Audit' })).toHaveAttribute('data-active', 'true')
+})
 
-    expect(screen.getAllByText('Deployments')).toHaveLength(1)
-    expect(screen.queryByRole('heading', { name: 'Recreate' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Back to projects' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
-    expect(screen.getByText('v1.2.3 · abcdef1')).toBeInTheDocument()
-  })
+it('collapses and expands the sidebar', async () => {
+  renderApp('/projects', handlers)
 
-  it('keeps the global deployments item outside project context', () => {
-    routerState.location = { pathname: '/deployments', hash: '' }
+  fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Expand sidebar' }))
+  expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toBeInTheDocument()
+})
 
-    render(<AppShell />)
+it('cycles the theme between light, dark and system', async () => {
+  renderApp('/projects', handlers)
 
-    expect(screen.getByRole('link', { name: 'Deployments' })).toHaveAttribute('href', '/deployments')
-    expect(screen.getByRole('heading', { name: 'Deployments' })).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'Back to projects' })).not.toBeInTheDocument()
-  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Theme: light. Click to switch.' }))
+  expect(document.documentElement).toHaveClass('dark')
+  fireEvent.click(screen.getByRole('button', { name: 'Theme: dark. Click to switch.' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Theme: system. Click to switch.' }))
+  expect(document.documentElement).toHaveClass('light')
+  expect(screen.getByRole('button', { name: 'Theme: light. Click to switch.' })).toBeInTheDocument()
+  expect(localStorage.getItem('deploy-manager:theme')).toBe('"light"')
+})
 
-  it('opens the account menu with identity and logout', () => {
-    render(<AppShell />)
+it('logs out from the account menu', async () => {
+  const { requests } = renderApp('/projects', { ...handlers, 'POST /api/logout': () => undefined })
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: / account$/ }), { button: 0, ctrlKey: false })
+  fireEvent.pointerDown(await screen.findByRole('button', { name: 'Operator account' }), { button: 0, ctrlKey: false })
+  const menu = await screen.findByRole('menu')
+  expect(within(menu).getByText('user@prosights.co')).toBeInTheDocument()
+  fireEvent.click(within(menu).getByRole('menuitem', { name: 'Log Out' }))
 
-    expect(screen.getByText('User')).toBeInTheDocument()
-    expect(screen.getByText(/\S+@\S+\.\S+/)).toBeInTheDocument()
-    expect(screen.getByText('Log Out')).toBeInTheDocument()
-    fireEvent.keyDown(document, { key: 'Escape' })
-  })
+  await waitFor(() => expect(requests.some((request) => request.method === 'POST' && request.path === '/api/logout')).toBe(true))
 })

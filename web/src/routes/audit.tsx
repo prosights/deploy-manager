@@ -1,30 +1,30 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Panel } from '../components/ui/panel'
 import { auditEventsQuery } from '../lib/queries'
+import { formatTimestamp } from '../lib/format'
 
 const pageSize = 10
 
 export function AuditRoute() {
   const { data: events } = useSuspenseQuery(auditEventsQuery)
   const [page, setPage] = useState(1)
-  const visibleRows = useMemo(() => events.map(auditEventRow), [events])
-  const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize))
+  const pageCount = Math.max(1, Math.ceil(events.length / pageSize))
   const currentPage = Math.min(page, pageCount)
-  const pageRows = visibleRows.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const pageEvents = events.slice((currentPage - 1) * pageSize, currentPage * pageSize)
   const firstRow = (currentPage - 1) * pageSize + 1
-  const lastRow = Math.min(currentPage * pageSize, visibleRows.length)
+  const lastRow = Math.min(currentPage * pageSize, events.length)
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Audit trail" description="Control-plane changes across servers, applications, deployments, connectors, proxy routes, and inventory syncs." />
+      <PageHeader title="Audit trail" description="Control-plane changes across servers, applications, deployments, connectors, and proxy routes." />
       <Panel>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="text-xs text-muted">
+            <thead className="text-xs text-prosights-muted">
               <tr>
                 <th className="px-4 py-3 font-medium">Time</th>
                 <th className="px-4 py-3 font-medium">Action</th>
@@ -34,28 +34,31 @@ export function AuditRoute() {
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((row) => (
-                <tr key={row.id} className="border-t">
-                  <td className="px-4 py-3 font-mono text-xs text-muted">{row.createdAt}</td>
-                  <td className="px-4 py-3"><Badge tone="accent">{row.action}</Badge></td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium">{row.targetName}</div>
-                    <div className="text-xs text-muted">{row.targetType} / {row.targetID}</div>
-                  </td>
-                  <td className="px-4 py-3 text-muted">{row.actor}</td>
-                  <td className="max-w-[520px] truncate px-4 py-3 font-mono text-xs text-muted" title={row.metadata}>{row.metadata}</td>
-                </tr>
-              ))}
+              {pageEvents.map((event) => {
+                const metadata = formatMetadata(event.metadata)
+                return (
+                  <tr key={event.id} className="border-t">
+                    <td className="px-4 py-3 font-mono text-xs text-prosights-muted">{formatTimestamp(event.created_at, 'n/a')}</td>
+                    <td className="px-4 py-3"><Badge tone="accent">{event.action}</Badge></td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{event.target_name}</div>
+                      <div className="text-xs text-prosights-muted">{event.target_type} / {event.target_id}</div>
+                    </td>
+                    <td className="px-4 py-3 text-prosights-muted">{event.actor}</td>
+                    <td className="max-w-[520px] truncate px-4 py-3 font-mono text-xs text-prosights-muted" title={metadata}>{metadata}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
-        {visibleRows.length === 0 && <div className="border-t px-4 py-6 text-sm text-muted">No audit events match the current search.</div>}
+        {events.length === 0 && <div className="border-t px-4 py-6 text-sm text-prosights-muted">No audit events match the current search.</div>}
         {pageCount > 1 && (
           <nav aria-label="Audit pages" className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-            <span className="text-xs tabular-nums text-muted">Showing {firstRow}–{lastRow} of {visibleRows.length}</span>
+            <span className="text-xs tabular-nums text-prosights-muted">Showing {firstRow}–{lastRow} of {events.length}</span>
             <div className="flex items-center gap-2">
               <Button type="button" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>Previous</Button>
-              <span className="min-w-16 text-center text-xs tabular-nums text-muted">{currentPage} of {pageCount}</span>
+              <span className="min-w-16 text-center text-xs tabular-nums text-prosights-muted">{currentPage} of {pageCount}</span>
               <Button type="button" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>Next</Button>
             </div>
           </nav>
@@ -65,57 +68,8 @@ export function AuditRoute() {
   )
 }
 
-type AuditEventRow = {
-  id: number
-  actor: string
-  action: string
-  targetType: string
-  targetID: string
-  targetName: string
-  metadata: string
-  createdAt: string
-  searchValues: unknown[]
-}
-
-function auditEventRow(event: {
-  id: number
-  actor: string
-  action: string
-  target_type: string
-  target_id: string
-  target_name: string
-  metadata: unknown
-  created_at: string
-}): AuditEventRow {
-  const metadata = formatMetadata(event.metadata)
-  return {
-    id: event.id,
-    actor: event.actor,
-    action: event.action,
-    targetType: event.target_type,
-    targetID: event.target_id,
-    targetName: event.target_name,
-    metadata,
-    createdAt: formatTime(event.created_at),
-    searchValues: [
-      event.actor,
-      event.action,
-      event.target_type,
-      event.target_id,
-      event.target_name,
-      metadata,
-    ],
-  }
-}
-
-function formatTime(value: string) {
-  if (!value) {
-    return 'n/a'
-  }
-  return new Date(value).toLocaleString()
-}
-
-function formatMetadata(value: unknown) {
+// The API returns metadata as an object; anything else renders as {}.
+function formatMetadata(value: unknown): string {
   if (!value || Array.isArray(value) || typeof value !== 'object') {
     return '{}'
   }
@@ -130,7 +84,7 @@ function formatMetadata(value: unknown) {
   return formatted
 }
 
-function formatMetadataValue(value: unknown) {
+function formatMetadataValue(value: unknown): string {
   if (value === null || value === undefined) {
     return 'null'
   }

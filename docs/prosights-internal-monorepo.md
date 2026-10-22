@@ -2,17 +2,17 @@
 
 `prosights/internal` is one repository with multiple deployable apps:
 
-| Deploy Manager project | Deploy Manager app | Repo path | Compose path | Images |
+| Paddock project | Paddock app | Repo path | Compose path | Images |
 | --- | --- | --- | --- | --- |
 | `internal` | `portal` | `portal/` | `portal/compose.coolify.yml` | `portal` |
 | `internal` | `finops` | `finops/` | `finops/compose.coolify.yml` | `finops-api`, `finops-web` |
 | `internal` | `alleyes` | `alleyes/` | `alleyes/compose.coolify.yml` | `alleyes-api`, `alleyes-web` |
 
-Use one Deploy Manager project named `internal`, not three separate projects.
+Use one Paddock project named `internal`, not three separate projects.
 The project owns environments such as `production`; each deployable compose
 stack is an application inside that project.
 
-## Deploy Manager Model
+## Paddock Model
 
 The GitHub connector supports multiple build targets for the same
 `repository + branch`.
@@ -71,15 +71,15 @@ Example connector targets:
 ## Push Flow
 
 1. GitHub push arrives for `prosights/internal`.
-2. Deploy Manager verifies the webhook signature.
-3. Deploy Manager inspects changed paths.
+2. Paddock verifies the webhook signature.
+3. Paddock inspects changed paths.
 4. It dispatches builds only for affected apps:
    - `portal/**` -> `portal`
    - `finops/**` -> `finops`
    - `alleyes/**` -> `alleyes`
 5. GitHub Actions builds all images required by that app and pushes immutable tags.
 6. GitHub Actions calls `POST /api/builds/{buildID}/complete`.
-7. Deploy Manager deploys only the application tied to that build id.
+7. Paddock deploys only the application tied to that build id.
 
 ## Deployment Flow
 
@@ -90,13 +90,13 @@ Each application remains a compose stack on the target VM:
 - `alleyes`: API, monitoring worker, web, Cloud SQL proxy
 
 For blue/green deployment, compose files must avoid fixed host ports and use
-Deploy Manager-provided variables such as `DEPLOY_PORT` or app-specific port
+Paddock-provided variables such as `DEPLOY_PORT` or app-specific port
 variables. Any app with multiple externally routed services needs proxy routes
 for each domain.
 
 ## Compose Contract
 
-Deploy Manager writes these artifact variables into the remote `.env` file:
+Paddock writes these artifact variables into the remote `.env` file:
 
 - `DEPLOY_IMAGE`
 - `DEPLOY_IMAGE_TAG`
@@ -110,5 +110,5 @@ x-api-image: &api-image us-east4-docker.pkg.dev/prosights-platform/internal/fino
 x-web-image: &web-image us-east4-docker.pkg.dev/prosights-platform/internal/finops-web:${FINOPS_IMAGE_TAG:-latest}
 ```
 
-Do not solve this by creating three Deploy Manager projects. Use one project
+Do not solve this by creating three Paddock projects. Use one project
 and separate applications inside it.

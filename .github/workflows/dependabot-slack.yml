@@ -6,7 +6,7 @@ on:
       message:
         description: Message to send to Slack
         required: false
-        default: Deploy Manager Dependabot Slack notification smoke test.
+        default: Paddock Dependabot Slack notification smoke test.
   pull_request_target:
     types:
       - opened
@@ -39,7 +39,7 @@ jobs:
           fi
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            text="${MANUAL_MESSAGE:-Deploy Manager Dependabot Slack notification smoke test.}"
+            text="${MANUAL_MESSAGE:-Paddock Dependabot Slack notification smoke test.}"
           else
             text="Dependabot opened PR #${PR_NUMBER} in ${REPOSITORY}: ${PR_TITLE} ${PR_URL}"
           fi

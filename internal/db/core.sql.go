@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -67,12 +68,12 @@ RETURNING id, actor, action, target_type, target_id, target_name, metadata, crea
 `
 
 type AppendAuditEventParams struct {
-	Actor      string `json:"actor"`
-	Action     string `json:"action"`
-	TargetType string `json:"target_type"`
-	TargetID   string `json:"target_id"`
-	TargetName string `json:"target_name"`
-	Metadata   []byte `json:"metadata"`
+	Actor      string          `json:"actor"`
+	Action     string          `json:"action"`
+	TargetType string          `json:"target_type"`
+	TargetID   string          `json:"target_id"`
+	TargetName string          `json:"target_name"`
+	Metadata   json.RawMessage `json:"metadata"`
 }
 
 func (q *Queries) AppendAuditEvent(ctx context.Context, arg AppendAuditEventParams) (AuditEvent, error) {
@@ -621,106 +622,6 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 	return i, err
 }
 
-const createServerWithSSHInventory = `-- name: CreateServerWithSSHInventory :one
-WITH created_server AS (
-    INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
-),
-ssh_credential AS (
-    INSERT INTO credentials (name, provider, external_ref, credential_type, status, last_seen_at)
-    SELECT created_server.name || ' SSH key', 'ssh', created_server.ssh_key_path, 'ssh_key', 'active', now()
-    FROM created_server
-    WHERE created_server.ssh_key_path IS NOT NULL
-    ON CONFLICT (provider, external_ref) DO UPDATE
-    SET name = excluded.name,
-        credential_type = excluded.credential_type,
-        status = excluded.status,
-        last_seen_at = now(),
-        updated_at = now()
-    RETURNING id
-),
-ssh_permission AS (
-    INSERT INTO credential_permissions (credential_id, resource_type, resource_name, permission, source)
-    SELECT ssh_credential.id, 'server', created_server.name, 'ssh:connect', 'server registration'
-    FROM ssh_credential
-    CROSS JOIN created_server
-    ON CONFLICT (credential_id, resource_type, resource_name, permission) DO UPDATE
-    SET source = excluded.source
-    RETURNING id
-),
-ssh_usage AS (
-    INSERT INTO credential_usages (credential_id, used_by_type, used_by_name, usage_context)
-    SELECT ssh_credential.id, 'server', created_server.name, 'remote access for deployments and health checks'
-    FROM ssh_credential
-    CROSS JOIN created_server
-    ON CONFLICT (credential_id, used_by_type, used_by_name, usage_context) DO UPDATE
-    SET usage_context = excluded.usage_context
-    RETURNING id
-)
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
-FROM created_server
-`
-
-type CreateServerWithSSHInventoryParams struct {
-	Name           string      `json:"name"`
-	Hostname       string      `json:"hostname"`
-	SshUser        string      `json:"ssh_user"`
-	SshPort        int32       `json:"ssh_port"`
-	SshKeyPath     pgtype.Text `json:"ssh_key_path"`
-	ConnectionMode string      `json:"connection_mode"`
-	ProxyType      string      `json:"proxy_type"`
-}
-
-type CreateServerWithSSHInventoryRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	Name           string             `json:"name"`
-	Hostname       string             `json:"hostname"`
-	SshUser        string             `json:"ssh_user"`
-	SshPort        int32              `json:"ssh_port"`
-	SshKeyPath     pgtype.Text        `json:"ssh_key_path"`
-	ConnectionMode string             `json:"connection_mode"`
-	ProxyType      string             `json:"proxy_type"`
-	Status         string             `json:"status"`
-	CpuUsage       pgtype.Numeric     `json:"cpu_usage"`
-	MemoryUsage    pgtype.Numeric     `json:"memory_usage"`
-	DiskUsage      pgtype.Numeric     `json:"disk_usage"`
-	LastCheckedAt  pgtype.Timestamptz `json:"last_checked_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) CreateServerWithSSHInventory(ctx context.Context, arg CreateServerWithSSHInventoryParams) (CreateServerWithSSHInventoryRow, error) {
-	row := q.db.QueryRow(ctx, createServerWithSSHInventory,
-		arg.Name,
-		arg.Hostname,
-		arg.SshUser,
-		arg.SshPort,
-		arg.SshKeyPath,
-		arg.ConnectionMode,
-		arg.ProxyType,
-	)
-	var i CreateServerWithSSHInventoryRow
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Hostname,
-		&i.SshUser,
-		&i.SshPort,
-		&i.SshKeyPath,
-		&i.ConnectionMode,
-		&i.ProxyType,
-		&i.Status,
-		&i.CpuUsage,
-		&i.MemoryUsage,
-		&i.DiskUsage,
-		&i.LastCheckedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const deleteApplication = `-- name: DeleteApplication :exec
 DELETE FROM applications
 WHERE id = $1
@@ -744,26 +645,6 @@ type DeleteApplicationServiceRuntimeConfigParams struct {
 
 func (q *Queries) DeleteApplicationServiceRuntimeConfig(ctx context.Context, arg DeleteApplicationServiceRuntimeConfigParams) error {
 	_, err := q.db.Exec(ctx, deleteApplicationServiceRuntimeConfig, arg.ApplicationID, arg.ComposeService)
-	return err
-}
-
-const deleteCredentialPermissions = `-- name: DeleteCredentialPermissions :exec
-DELETE FROM credential_permissions
-WHERE credential_id = $1
-`
-
-func (q *Queries) DeleteCredentialPermissions(ctx context.Context, credentialID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteCredentialPermissions, credentialID)
-	return err
-}
-
-const deleteCredentialUsages = `-- name: DeleteCredentialUsages :exec
-DELETE FROM credential_usages
-WHERE credential_id = $1
-`
-
-func (q *Queries) DeleteCredentialUsages(ctx context.Context, credentialID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteCredentialUsages, credentialID)
 	return err
 }
 
@@ -811,22 +692,6 @@ WHERE id = $1
 
 func (q *Queries) DeleteProxyRoute(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteProxyRoute, id)
-	return err
-}
-
-const deleteServerDevSudoUser = `-- name: DeleteServerDevSudoUser :exec
-DELETE FROM server_dev_sudo_users
-WHERE server_id = $1
-  AND username = $2
-`
-
-type DeleteServerDevSudoUserParams struct {
-	ServerID pgtype.UUID `json:"server_id"`
-	Username string      `json:"username"`
-}
-
-func (q *Queries) DeleteServerDevSudoUser(ctx context.Context, arg DeleteServerDevSudoUserParams) error {
-	_, err := q.db.Exec(ctx, deleteServerDevSudoUser, arg.ServerID, arg.Username)
 	return err
 }
 
@@ -878,7 +743,7 @@ type FailRunningDeploymentsForRecoveryRow struct {
 	SourceRepositoryUrl   pgtype.Text        `json:"source_repository_url"`
 	SourceBranch          pgtype.Text        `json:"source_branch"`
 	CommitMessage         pgtype.Text        `json:"commit_message"`
-	ConfigurationSnapshot []byte             `json:"configuration_snapshot"`
+	ConfigurationSnapshot json.RawMessage    `json:"configuration_snapshot"`
 	Actor                 pgtype.Text        `json:"actor"`
 	StartedAt             pgtype.Timestamptz `json:"started_at"`
 	FinishedAt            pgtype.Timestamptz `json:"finished_at"`
@@ -1202,7 +1067,7 @@ func (q *Queries) GetBuildRun(ctx context.Context, id pgtype.UUID) (BuildRun, er
 }
 
 const getConnectorAccount = `-- name: GetConnectorAccount :one
-SELECT id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at
+SELECT id, provider, name, enabled, config, created_at, updated_at
 FROM connector_accounts
 WHERE id = $1
 `
@@ -1216,9 +1081,6 @@ func (q *Queries) GetConnectorAccount(ctx context.Context, id pgtype.UUID) (Conn
 		&i.Name,
 		&i.Enabled,
 		&i.Config,
-		&i.LastSyncStatus,
-		&i.LastSyncMessage,
-		&i.LastSyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1245,73 +1107,6 @@ func (q *Queries) GetContainerRegistry(ctx context.Context, id pgtype.UUID) (Con
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getCredential = `-- name: GetCredential :one
-SELECT id, name, provider, external_ref, credential_type, status, last_seen_at, created_at, updated_at
-FROM credentials
-WHERE id = $1
-`
-
-func (q *Queries) GetCredential(ctx context.Context, id pgtype.UUID) (Credential, error) {
-	row := q.db.QueryRow(ctx, getCredential, id)
-	var i Credential
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Provider,
-		&i.ExternalRef,
-		&i.CredentialType,
-		&i.Status,
-		&i.LastSeenAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const getCredentialWithCounts = `-- name: GetCredentialWithCounts :one
-SELECT c.id, c.name, c.provider, c.external_ref, c.credential_type, c.status, c.last_seen_at, c.created_at, c.updated_at,
-       COALESCE(count(DISTINCT p.id), 0)::int AS permission_count,
-       COALESCE(count(DISTINCT u.id), 0)::int AS usage_count
-FROM credentials c
-LEFT JOIN credential_permissions p ON p.credential_id = c.id
-LEFT JOIN credential_usages u ON u.credential_id = c.id
-WHERE c.id = $1
-GROUP BY c.id
-`
-
-type GetCredentialWithCountsRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	Name            string             `json:"name"`
-	Provider        string             `json:"provider"`
-	ExternalRef     string             `json:"external_ref"`
-	CredentialType  string             `json:"credential_type"`
-	Status          string             `json:"status"`
-	LastSeenAt      pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	PermissionCount int32              `json:"permission_count"`
-	UsageCount      int32              `json:"usage_count"`
-}
-
-func (q *Queries) GetCredentialWithCounts(ctx context.Context, id pgtype.UUID) (GetCredentialWithCountsRow, error) {
-	row := q.db.QueryRow(ctx, getCredentialWithCounts, id)
-	var i GetCredentialWithCountsRow
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Provider,
-		&i.ExternalRef,
-		&i.CredentialType,
-		&i.Status,
-		&i.LastSeenAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.PermissionCount,
-		&i.UsageCount,
 	)
 	return i, err
 }
@@ -1384,33 +1179,33 @@ WHERE d.id = $1
 `
 
 type GetDeploymentTargetRow struct {
-	DeploymentID                 pgtype.UUID `json:"deployment_id"`
-	Strategy                     string      `json:"strategy"`
-	CommitSha                    pgtype.Text `json:"commit_sha"`
-	ImageRef                     pgtype.Text `json:"image_ref"`
-	ImageDigest                  pgtype.Text `json:"image_digest"`
-	ApplicationID                pgtype.UUID `json:"application_id"`
-	ApplicationName              string      `json:"application_name"`
-	RepositoryUrl                pgtype.Text `json:"repository_url"`
-	Branch                       string      `json:"branch"`
-	ComposePath                  string      `json:"compose_path"`
-	RemoteDirectory              string      `json:"remote_directory"`
-	Domain                       pgtype.Text `json:"domain"`
-	HealthCheckUrl               pgtype.Text `json:"health_check_url"`
-	DopplerProject               pgtype.Text `json:"doppler_project"`
-	DopplerConfig                pgtype.Text `json:"doppler_config"`
-	ComposeServices              []byte      `json:"compose_services"`
-	ConfigurationRevision        int64       `json:"configuration_revision"`
-	ProjectConfigurationRevision int64       `json:"project_configuration_revision"`
-	RepositoryConnectorID        pgtype.UUID `json:"repository_connector_id"`
-	ServerID                     pgtype.UUID `json:"server_id"`
-	ServerName                   string      `json:"server_name"`
-	Hostname                     string      `json:"hostname"`
-	SshUser                      string      `json:"ssh_user"`
-	SshPort                      int32       `json:"ssh_port"`
-	SshKeyPath                   pgtype.Text `json:"ssh_key_path"`
-	ConnectionMode               string      `json:"connection_mode"`
-	ProxyType                    string      `json:"proxy_type"`
+	DeploymentID                 pgtype.UUID     `json:"deployment_id"`
+	Strategy                     string          `json:"strategy"`
+	CommitSha                    pgtype.Text     `json:"commit_sha"`
+	ImageRef                     pgtype.Text     `json:"image_ref"`
+	ImageDigest                  pgtype.Text     `json:"image_digest"`
+	ApplicationID                pgtype.UUID     `json:"application_id"`
+	ApplicationName              string          `json:"application_name"`
+	RepositoryUrl                pgtype.Text     `json:"repository_url"`
+	Branch                       string          `json:"branch"`
+	ComposePath                  string          `json:"compose_path"`
+	RemoteDirectory              string          `json:"remote_directory"`
+	Domain                       pgtype.Text     `json:"domain"`
+	HealthCheckUrl               pgtype.Text     `json:"health_check_url"`
+	DopplerProject               pgtype.Text     `json:"doppler_project"`
+	DopplerConfig                pgtype.Text     `json:"doppler_config"`
+	ComposeServices              json.RawMessage `json:"compose_services"`
+	ConfigurationRevision        int64           `json:"configuration_revision"`
+	ProjectConfigurationRevision int64           `json:"project_configuration_revision"`
+	RepositoryConnectorID        pgtype.UUID     `json:"repository_connector_id"`
+	ServerID                     pgtype.UUID     `json:"server_id"`
+	ServerName                   string          `json:"server_name"`
+	Hostname                     string          `json:"hostname"`
+	SshUser                      string          `json:"ssh_user"`
+	SshPort                      int32           `json:"ssh_port"`
+	SshKeyPath                   pgtype.Text     `json:"ssh_key_path"`
+	ConnectionMode               string          `json:"connection_mode"`
+	ProxyType                    string          `json:"proxy_type"`
 }
 
 func (q *Queries) GetDeploymentTarget(ctx context.Context, id pgtype.UUID) (GetDeploymentTargetRow, error) {
@@ -1624,36 +1419,6 @@ func (q *Queries) GetServer(ctx context.Context, id pgtype.UUID) (Server, error)
 	return i, err
 }
 
-const getServerForUpdate = `-- name: GetServerForUpdate :one
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
-FROM servers
-WHERE id = $1
-FOR UPDATE
-`
-
-func (q *Queries) GetServerForUpdate(ctx context.Context, id pgtype.UUID) (Server, error) {
-	row := q.db.QueryRow(ctx, getServerForUpdate, id)
-	var i Server
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Hostname,
-		&i.SshUser,
-		&i.SshPort,
-		&i.SshKeyPath,
-		&i.ConnectionMode,
-		&i.ProxyType,
-		&i.Status,
-		&i.CpuUsage,
-		&i.MemoryUsage,
-		&i.DiskUsage,
-		&i.LastCheckedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getStandbyDeploymentSlot = `-- name: GetStandbyDeploymentSlot :one
 SELECT id, application_id, server_id, color, deployment_id, image_ref, image_digest, status, promoted_at, created_at, updated_at
 FROM application_deployment_slots
@@ -1805,7 +1570,7 @@ type ListApplicationsRow struct {
 	ConfigurationRevision                int64              `json:"configuration_revision"`
 	DeployedConfigurationRevision        int64              `json:"deployed_configuration_revision"`
 	DeployedProjectConfigurationRevision int64              `json:"deployed_project_configuration_revision"`
-	ComposeServices                      []byte             `json:"compose_services"`
+	ComposeServices                      json.RawMessage    `json:"compose_services"`
 	ServerName                           string             `json:"server_name"`
 	EnvironmentName                      string             `json:"environment_name"`
 	EnvironmentSlug                      string             `json:"environment_slug"`
@@ -2064,7 +1829,7 @@ func (q *Queries) ListBuildRuns(ctx context.Context, limit int32) ([]BuildRun, e
 }
 
 const listConnectorAccounts = `-- name: ListConnectorAccounts :many
-SELECT id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at
+SELECT id, provider, name, enabled, config, created_at, updated_at
 FROM connector_accounts
 ORDER BY provider, name
 `
@@ -2084,9 +1849,6 @@ func (q *Queries) ListConnectorAccounts(ctx context.Context) ([]ConnectorAccount
 			&i.Name,
 			&i.Enabled,
 			&i.Config,
-			&i.LastSyncStatus,
-			&i.LastSyncMessage,
-			&i.LastSyncedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -2126,132 +1888,6 @@ func (q *Queries) ListContainerRegistries(ctx context.Context) ([]ContainerRegis
 			&i.Enabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCredentialPermissions = `-- name: ListCredentialPermissions :many
-SELECT id, credential_id, resource_type, resource_name, permission, source, created_at
-FROM credential_permissions
-WHERE credential_id = $1
-ORDER BY resource_type, resource_name, permission
-`
-
-func (q *Queries) ListCredentialPermissions(ctx context.Context, credentialID pgtype.UUID) ([]CredentialPermission, error) {
-	rows, err := q.db.Query(ctx, listCredentialPermissions, credentialID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CredentialPermission{}
-	for rows.Next() {
-		var i CredentialPermission
-		if err := rows.Scan(
-			&i.ID,
-			&i.CredentialID,
-			&i.ResourceType,
-			&i.ResourceName,
-			&i.Permission,
-			&i.Source,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCredentialUsages = `-- name: ListCredentialUsages :many
-SELECT id, credential_id, used_by_type, used_by_name, usage_context, created_at
-FROM credential_usages
-WHERE credential_id = $1
-ORDER BY used_by_type, used_by_name
-`
-
-func (q *Queries) ListCredentialUsages(ctx context.Context, credentialID pgtype.UUID) ([]CredentialUsage, error) {
-	rows, err := q.db.Query(ctx, listCredentialUsages, credentialID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []CredentialUsage{}
-	for rows.Next() {
-		var i CredentialUsage
-		if err := rows.Scan(
-			&i.ID,
-			&i.CredentialID,
-			&i.UsedByType,
-			&i.UsedByName,
-			&i.UsageContext,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCredentials = `-- name: ListCredentials :many
-SELECT c.id, c.name, c.provider, c.external_ref, c.credential_type, c.status, c.last_seen_at, c.created_at, c.updated_at,
-       COALESCE(count(DISTINCT p.id), 0)::int AS permission_count,
-       COALESCE(count(DISTINCT u.id), 0)::int AS usage_count
-FROM credentials c
-LEFT JOIN credential_permissions p ON p.credential_id = c.id
-LEFT JOIN credential_usages u ON u.credential_id = c.id
-GROUP BY c.id
-ORDER BY c.provider, c.name
-`
-
-type ListCredentialsRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	Name            string             `json:"name"`
-	Provider        string             `json:"provider"`
-	ExternalRef     string             `json:"external_ref"`
-	CredentialType  string             `json:"credential_type"`
-	Status          string             `json:"status"`
-	LastSeenAt      pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	PermissionCount int32              `json:"permission_count"`
-	UsageCount      int32              `json:"usage_count"`
-}
-
-func (q *Queries) ListCredentials(ctx context.Context) ([]ListCredentialsRow, error) {
-	rows, err := q.db.Query(ctx, listCredentials)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ListCredentialsRow{}
-	for rows.Next() {
-		var i ListCredentialsRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Provider,
-			&i.ExternalRef,
-			&i.CredentialType,
-			&i.Status,
-			&i.LastSeenAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.PermissionCount,
-			&i.UsageCount,
 		); err != nil {
 			return nil, err
 		}
@@ -2375,7 +2011,7 @@ type ListDeploymentsRow struct {
 	SourceRepositoryUrl   pgtype.Text        `json:"source_repository_url"`
 	SourceBranch          pgtype.Text        `json:"source_branch"`
 	CommitMessage         pgtype.Text        `json:"commit_message"`
-	ConfigurationSnapshot []byte             `json:"configuration_snapshot"`
+	ConfigurationSnapshot json.RawMessage    `json:"configuration_snapshot"`
 	ApplicationName       string             `json:"application_name"`
 	ServerName            string             `json:"server_name"`
 }
@@ -2468,45 +2104,6 @@ func (q *Queries) ListEnvironments(ctx context.Context) ([]ListEnvironmentsRow, 
 			&i.UpdatedAt,
 			&i.ProjectName,
 			&i.ProjectSlug,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listEnvironmentsForProject = `-- name: ListEnvironmentsForProject :many
-SELECT id, project_id, name, slug, kind, is_ephemeral, pull_request_number, branch, expires_at, created_at, updated_at
-FROM environments
-WHERE project_id = $1
-ORDER BY CASE kind WHEN 'production' THEN 1 WHEN 'development' THEN 2 ELSE 3 END, name
-`
-
-func (q *Queries) ListEnvironmentsForProject(ctx context.Context, projectID pgtype.UUID) ([]Environment, error) {
-	rows, err := q.db.Query(ctx, listEnvironmentsForProject, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []Environment{}
-	for rows.Next() {
-		var i Environment
-		if err := rows.Scan(
-			&i.ID,
-			&i.ProjectID,
-			&i.Name,
-			&i.Slug,
-			&i.Kind,
-			&i.IsEphemeral,
-			&i.PullRequestNumber,
-			&i.Branch,
-			&i.ExpiresAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2916,49 +2513,6 @@ func (q *Queries) ListProxyRoutes(ctx context.Context) ([]ListProxyRoutesRow, er
 	return items, nil
 }
 
-const listProxyRoutesForServer = `-- name: ListProxyRoutesForServer :many
-SELECT id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url, compose_service, container_port, port_variable
-FROM proxy_routes
-WHERE server_id = $1
-ORDER BY domain
-`
-
-func (q *Queries) ListProxyRoutesForServer(ctx context.Context, serverID pgtype.UUID) ([]ProxyRoute, error) {
-	rows, err := q.db.Query(ctx, listProxyRoutesForServer, serverID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []ProxyRoute{}
-	for rows.Next() {
-		var i ProxyRoute
-		if err := rows.Scan(
-			&i.ID,
-			&i.ServerID,
-			&i.ApplicationID,
-			&i.Domain,
-			&i.UpstreamUrl,
-			&i.TlsEnabled,
-			&i.Status,
-			&i.LastAppliedAt,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.BlueUpstreamUrl,
-			&i.GreenUpstreamUrl,
-			&i.ComposeService,
-			&i.ContainerPort,
-			&i.PortVariable,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listQueuedDeploymentsForRecovery = `-- name: ListQueuedDeploymentsForRecovery :many
 SELECT id, application_id, server_id, trigger, strategy, status, commit_sha, actor, started_at, finished_at, created_at, image_ref, image_digest, source_repository_url, source_branch, commit_message, configuration_snapshot
 FROM deployments
@@ -3167,47 +2721,6 @@ func (q *Queries) MarkApplicationConfigurationDeployed(ctx context.Context, arg 
 	return i, err
 }
 
-const markConnectorSync = `-- name: MarkConnectorSync :one
-INSERT INTO connector_accounts (provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at)
-VALUES ($1, $2, true, '{}', $3, $4, now())
-ON CONFLICT (provider, name) DO UPDATE
-SET last_sync_status = excluded.last_sync_status,
-    last_sync_message = excluded.last_sync_message,
-    last_synced_at = now(),
-    updated_at = now()
-RETURNING id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at
-`
-
-type MarkConnectorSyncParams struct {
-	Provider        string      `json:"provider"`
-	Name            string      `json:"name"`
-	LastSyncStatus  pgtype.Text `json:"last_sync_status"`
-	LastSyncMessage pgtype.Text `json:"last_sync_message"`
-}
-
-func (q *Queries) MarkConnectorSync(ctx context.Context, arg MarkConnectorSyncParams) (ConnectorAccount, error) {
-	row := q.db.QueryRow(ctx, markConnectorSync,
-		arg.Provider,
-		arg.Name,
-		arg.LastSyncStatus,
-		arg.LastSyncMessage,
-	)
-	var i ConnectorAccount
-	err := row.Scan(
-		&i.ID,
-		&i.Provider,
-		&i.Name,
-		&i.Enabled,
-		&i.Config,
-		&i.LastSyncStatus,
-		&i.LastSyncMessage,
-		&i.LastSyncedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const markProxyRouteApplied = `-- name: MarkProxyRouteApplied :one
 UPDATE proxy_routes
 SET status = 'applied', last_applied_at = now(), updated_at = now()
@@ -3321,34 +2834,6 @@ func (q *Queries) PromoteProxyRoutes(ctx context.Context, arg PromoteProxyRoutes
 		return nil, err
 	}
 	return items, nil
-}
-
-const renameServerDevSudoUser = `-- name: RenameServerDevSudoUser :one
-UPDATE server_dev_sudo_users
-SET username = $3,
-    updated_at = now()
-WHERE server_id = $1
-  AND username = $2
-RETURNING id, server_id, username, created_at, updated_at
-`
-
-type RenameServerDevSudoUserParams struct {
-	ServerID   pgtype.UUID `json:"server_id"`
-	Username   string      `json:"username"`
-	Username_2 string      `json:"username_2"`
-}
-
-func (q *Queries) RenameServerDevSudoUser(ctx context.Context, arg RenameServerDevSudoUserParams) (ServerDevSudoUser, error) {
-	row := q.db.QueryRow(ctx, renameServerDevSudoUser, arg.ServerID, arg.Username, arg.Username_2)
-	var i ServerDevSudoUser
-	err := row.Scan(
-		&i.ID,
-		&i.ServerID,
-		&i.Username,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
 }
 
 const replaceServerDevSudoUsers = `-- name: ReplaceServerDevSudoUsers :exec
@@ -3489,20 +2974,20 @@ RETURNING id, environment_id, server_id, name, repository_url, branch, compose_p
 `
 
 type UpdateApplicationParams struct {
-	EnvironmentID    pgtype.UUID `json:"environment_id"`
-	ServerID         pgtype.UUID `json:"server_id"`
-	Name             string      `json:"name"`
-	RepositoryUrl    pgtype.Text `json:"repository_url"`
-	Branch           string      `json:"branch"`
-	ComposePath      string      `json:"compose_path"`
-	RemoteDirectory  string      `json:"remote_directory"`
-	Domain           pgtype.Text `json:"domain"`
-	HealthCheckUrl   pgtype.Text `json:"health_check_url"`
-	DopplerProject   pgtype.Text `json:"doppler_project"`
-	DopplerConfig    pgtype.Text `json:"doppler_config"`
-	GithubAutoDeploy bool        `json:"github_auto_deploy"`
-	ComposeServices  []byte      `json:"compose_services"`
-	ID               pgtype.UUID `json:"id"`
+	EnvironmentID    pgtype.UUID     `json:"environment_id"`
+	ServerID         pgtype.UUID     `json:"server_id"`
+	Name             string          `json:"name"`
+	RepositoryUrl    pgtype.Text     `json:"repository_url"`
+	Branch           string          `json:"branch"`
+	ComposePath      string          `json:"compose_path"`
+	RemoteDirectory  string          `json:"remote_directory"`
+	Domain           pgtype.Text     `json:"domain"`
+	HealthCheckUrl   pgtype.Text     `json:"health_check_url"`
+	DopplerProject   pgtype.Text     `json:"doppler_project"`
+	DopplerConfig    pgtype.Text     `json:"doppler_config"`
+	GithubAutoDeploy bool            `json:"github_auto_deploy"`
+	ComposeServices  json.RawMessage `json:"compose_services"`
+	ID               pgtype.UUID     `json:"id"`
 }
 
 func (q *Queries) UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (Application, error) {
@@ -3561,8 +3046,8 @@ RETURNING id, environment_id, server_id, name, repository_url, branch, compose_p
 `
 
 type UpdateApplicationComposeServicesParams struct {
-	ComposeServices []byte      `json:"compose_services"`
-	ID              pgtype.UUID `json:"id"`
+	ComposeServices json.RawMessage `json:"compose_services"`
+	ID              pgtype.UUID     `json:"id"`
 }
 
 func (q *Queries) UpdateApplicationComposeServices(ctx context.Context, arg UpdateApplicationComposeServicesParams) (Application, error) {
@@ -3801,43 +3286,6 @@ func (q *Queries) UpdateProjectRepository(ctx context.Context, arg UpdateProject
 	return i, err
 }
 
-const updateProxyRouteUpstream = `-- name: UpdateProxyRouteUpstream :one
-UPDATE proxy_routes
-SET upstream_url = $2,
-    status = 'pending',
-    updated_at = now()
-WHERE id = $1
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url, compose_service, container_port, port_variable
-`
-
-type UpdateProxyRouteUpstreamParams struct {
-	ID          pgtype.UUID `json:"id"`
-	UpstreamUrl string      `json:"upstream_url"`
-}
-
-func (q *Queries) UpdateProxyRouteUpstream(ctx context.Context, arg UpdateProxyRouteUpstreamParams) (ProxyRoute, error) {
-	row := q.db.QueryRow(ctx, updateProxyRouteUpstream, arg.ID, arg.UpstreamUrl)
-	var i ProxyRoute
-	err := row.Scan(
-		&i.ID,
-		&i.ServerID,
-		&i.ApplicationID,
-		&i.Domain,
-		&i.UpstreamUrl,
-		&i.TlsEnabled,
-		&i.Status,
-		&i.LastAppliedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.BlueUpstreamUrl,
-		&i.GreenUpstreamUrl,
-		&i.ComposeService,
-		&i.ContainerPort,
-		&i.PortVariable,
-	)
-	return i, err
-}
-
 const updateServerHealth = `-- name: UpdateServerHealth :one
 UPDATE servers
 SET status = $2,
@@ -3900,11 +3348,11 @@ RETURNING application_id, compose_service, doppler_project, doppler_config, vari
 `
 
 type UpsertApplicationServiceRuntimeConfigParams struct {
-	ApplicationID  pgtype.UUID `json:"application_id"`
-	ComposeService string      `json:"compose_service"`
-	DopplerProject pgtype.Text `json:"doppler_project"`
-	DopplerConfig  pgtype.Text `json:"doppler_config"`
-	Variables      []byte      `json:"variables"`
+	ApplicationID  pgtype.UUID     `json:"application_id"`
+	ComposeService string          `json:"compose_service"`
+	DopplerProject pgtype.Text     `json:"doppler_project"`
+	DopplerConfig  pgtype.Text     `json:"doppler_config"`
+	Variables      json.RawMessage `json:"variables"`
 }
 
 func (q *Queries) UpsertApplicationServiceRuntimeConfig(ctx context.Context, arg UpsertApplicationServiceRuntimeConfigParams) (ApplicationServiceRuntimeConfig, error) {
@@ -3934,27 +3382,15 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (provider, name) DO UPDATE
 SET enabled = excluded.enabled,
     config = excluded.config,
-    last_sync_status = CASE
-        WHEN connector_accounts.enabled IS DISTINCT FROM excluded.enabled OR connector_accounts.config IS DISTINCT FROM excluded.config THEN NULL
-        ELSE connector_accounts.last_sync_status
-    END,
-    last_sync_message = CASE
-        WHEN connector_accounts.enabled IS DISTINCT FROM excluded.enabled OR connector_accounts.config IS DISTINCT FROM excluded.config THEN NULL
-        ELSE connector_accounts.last_sync_message
-    END,
-    last_synced_at = CASE
-        WHEN connector_accounts.enabled IS DISTINCT FROM excluded.enabled OR connector_accounts.config IS DISTINCT FROM excluded.config THEN NULL
-        ELSE connector_accounts.last_synced_at
-    END,
     updated_at = now()
-RETURNING id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at
+RETURNING id, provider, name, enabled, config, created_at, updated_at
 `
 
 type UpsertConnectorAccountParams struct {
-	Provider string `json:"provider"`
-	Name     string `json:"name"`
-	Enabled  bool   `json:"enabled"`
-	Config   []byte `json:"config"`
+	Provider string          `json:"provider"`
+	Name     string          `json:"name"`
+	Enabled  bool            `json:"enabled"`
+	Config   json.RawMessage `json:"config"`
 }
 
 func (q *Queries) UpsertConnectorAccount(ctx context.Context, arg UpsertConnectorAccountParams) (ConnectorAccount, error) {
@@ -3971,9 +3407,6 @@ func (q *Queries) UpsertConnectorAccount(ctx context.Context, arg UpsertConnecto
 		&i.Name,
 		&i.Enabled,
 		&i.Config,
-		&i.LastSyncStatus,
-		&i.LastSyncMessage,
-		&i.LastSyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -4026,120 +3459,6 @@ func (q *Queries) UpsertContainerRegistry(ctx context.Context, arg UpsertContain
 		&i.Enabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertCredential = `-- name: UpsertCredential :one
-INSERT INTO credentials (name, provider, external_ref, credential_type, status, last_seen_at)
-VALUES ($1, $2, $3, $4, $5, now())
-ON CONFLICT (provider, external_ref) DO UPDATE
-SET name = excluded.name,
-    credential_type = excluded.credential_type,
-    status = excluded.status,
-    last_seen_at = now(),
-    updated_at = now()
-RETURNING id, name, provider, external_ref, credential_type, status, last_seen_at, created_at, updated_at
-`
-
-type UpsertCredentialParams struct {
-	Name           string `json:"name"`
-	Provider       string `json:"provider"`
-	ExternalRef    string `json:"external_ref"`
-	CredentialType string `json:"credential_type"`
-	Status         string `json:"status"`
-}
-
-func (q *Queries) UpsertCredential(ctx context.Context, arg UpsertCredentialParams) (Credential, error) {
-	row := q.db.QueryRow(ctx, upsertCredential,
-		arg.Name,
-		arg.Provider,
-		arg.ExternalRef,
-		arg.CredentialType,
-		arg.Status,
-	)
-	var i Credential
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Provider,
-		&i.ExternalRef,
-		&i.CredentialType,
-		&i.Status,
-		&i.LastSeenAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertCredentialPermission = `-- name: UpsertCredentialPermission :one
-INSERT INTO credential_permissions (credential_id, resource_type, resource_name, permission, source)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (credential_id, resource_type, resource_name, permission) DO UPDATE
-SET source = excluded.source
-RETURNING id, credential_id, resource_type, resource_name, permission, source, created_at
-`
-
-type UpsertCredentialPermissionParams struct {
-	CredentialID pgtype.UUID `json:"credential_id"`
-	ResourceType string      `json:"resource_type"`
-	ResourceName string      `json:"resource_name"`
-	Permission   string      `json:"permission"`
-	Source       string      `json:"source"`
-}
-
-func (q *Queries) UpsertCredentialPermission(ctx context.Context, arg UpsertCredentialPermissionParams) (CredentialPermission, error) {
-	row := q.db.QueryRow(ctx, upsertCredentialPermission,
-		arg.CredentialID,
-		arg.ResourceType,
-		arg.ResourceName,
-		arg.Permission,
-		arg.Source,
-	)
-	var i CredentialPermission
-	err := row.Scan(
-		&i.ID,
-		&i.CredentialID,
-		&i.ResourceType,
-		&i.ResourceName,
-		&i.Permission,
-		&i.Source,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const upsertCredentialUsage = `-- name: UpsertCredentialUsage :one
-INSERT INTO credential_usages (credential_id, used_by_type, used_by_name, usage_context)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (credential_id, used_by_type, used_by_name, usage_context) DO UPDATE
-SET usage_context = excluded.usage_context
-RETURNING id, credential_id, used_by_type, used_by_name, usage_context, created_at
-`
-
-type UpsertCredentialUsageParams struct {
-	CredentialID pgtype.UUID `json:"credential_id"`
-	UsedByType   string      `json:"used_by_type"`
-	UsedByName   string      `json:"used_by_name"`
-	UsageContext string      `json:"usage_context"`
-}
-
-func (q *Queries) UpsertCredentialUsage(ctx context.Context, arg UpsertCredentialUsageParams) (CredentialUsage, error) {
-	row := q.db.QueryRow(ctx, upsertCredentialUsage,
-		arg.CredentialID,
-		arg.UsedByType,
-		arg.UsedByName,
-		arg.UsageContext,
-	)
-	var i CredentialUsage
-	err := row.Scan(
-		&i.ID,
-		&i.CredentialID,
-		&i.UsedByType,
-		&i.UsedByName,
-		&i.UsageContext,
-		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -4216,32 +3535,6 @@ func (q *Queries) UpsertProjectRuntimeVariable(ctx context.Context, arg UpsertPr
 		&i.ProjectID,
 		&i.Key,
 		&i.Value,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertServerDevSudoUser = `-- name: UpsertServerDevSudoUser :one
-INSERT INTO server_dev_sudo_users (server_id, username)
-VALUES ($1, $2)
-ON CONFLICT (server_id, username) DO UPDATE
-SET updated_at = now()
-RETURNING id, server_id, username, created_at, updated_at
-`
-
-type UpsertServerDevSudoUserParams struct {
-	ServerID pgtype.UUID `json:"server_id"`
-	Username string      `json:"username"`
-}
-
-func (q *Queries) UpsertServerDevSudoUser(ctx context.Context, arg UpsertServerDevSudoUserParams) (ServerDevSudoUser, error) {
-	row := q.db.QueryRow(ctx, upsertServerDevSudoUser, arg.ServerID, arg.Username)
-	var i ServerDevSudoUser
-	err := row.Scan(
-		&i.ID,
-		&i.ServerID,
-		&i.Username,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

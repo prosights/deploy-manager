@@ -1,14 +1,14 @@
-# Deploy Manager self-deploy
+# Paddock self-deploy
 
-This directory is the bootstrap contract for running Deploy Manager on the
-`internal` VM and then letting Deploy Manager deploy itself with blue/green.
+This directory is the bootstrap contract for running Paddock on the
+`internal` VM and then letting Paddock deploy itself with blue/green.
 
 The stateful services are intentionally separate from the color-swapped app
 container:
 
 - `stateful-compose.yml` runs PostgreSQL and Redis on the stable
   `control_default` Docker network.
-- `docker-compose.yml` runs only the Deploy Manager app image. Deploy Manager
+- `docker-compose.yml` runs only the Paddock app image. Paddock
   starts it twice, once for blue and once for green, on local ports 3101/3102.
 - The stable control instance is the only deployment queue worker. The public
   blue/green instances explicitly run with `DEPLOYMENT_WORKER_ENABLED=false`.
@@ -28,10 +28,10 @@ Put private files such as the GitHub App private key under
 `/srv/deploy-manager/control/secrets`. The current `internal` VM uses
 `/srv/deploy-manager/control/.env` for the control-plane runtime. Keep that file
 host-local and locked down. When Doppler is enabled for the control plane, the
-same app compose can keep using the deployment `.env` that Deploy Manager writes
+same app compose can keep using the deployment `.env` that Paddock writes
 from Doppler.
 
-## Deploy Manager application settings
+## Paddock application settings
 
 Create one application for the control plane itself:
 
@@ -78,7 +78,7 @@ workflow:
 Use the real Artifact Registry path in `image_ref`. The workflow pushes these
 tags for every dispatched `main` build:
 
-- `main-<short-sha>`: immutable tag Deploy Manager deploys.
+- `main-<short-sha>`: immutable tag Paddock deploys.
 - `sha-<short-sha>`: immutable tag for audit/debugging.
 - `sha-<full-sha>`: immutable tag for audit and recovery.
 - `main`: moving convenience tag for humans.
@@ -86,13 +86,13 @@ tags for every dispatched `main` build:
 Pushing a Git tag such as `v1.2.3` also publishes `v1.2.3` when the GitHub repo
 variable `DEPLOY_MANAGER_IMAGE` is set to the image name without a tag, for
 example `us-east1-docker.pkg.dev/prosights-platform/deploy-manager/deploy-manager`.
-Keep GitHub auto deploy disabled on the Deploy Manager application so its
+Keep GitHub auto deploy disabled on the Paddock application so its
 generic webhook path cannot start a second build. The repository's `main` image
-workflow deploys Deploy Manager directly.
+workflow deploys Paddock directly.
 
 ## Runtime env
 
-The deployed app expects the usual Deploy Manager runtime variables, either from
+The deployed app expects the usual Paddock runtime variables, either from
 the current host-local `/srv/deploy-manager/control/.env` or from the future
 Doppler-backed deployment `.env`, including:
 
@@ -117,8 +117,8 @@ Redis service names.
 1. A push to `main` builds and publishes `main-<short-sha>`.
 2. The workflow updates only the stable control app image over IAP.
 3. After the stable API is ready, the workflow queues the public blue/green
-   deployment through Deploy Manager.
-4. Deploy Manager starts and checks the inactive public color.
-5. Deploy Manager flips Caddy only after the new color is ready.
+   deployment through Paddock.
+4. Paddock starts and checks the inactive public color.
+5. Paddock flips Caddy only after the new color is ready.
 
 Rollback only flips Caddy back to the standby color; it does not rebuild.

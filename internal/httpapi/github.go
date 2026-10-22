@@ -6,10 +6,9 @@ import (
 	"path"
 	"strings"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/deployments"
-	"deploy-manager/internal/githubconnector"
-	"deploy-manager/internal/githubhook"
+	"paddock/internal/db"
+	"paddock/internal/deployments"
+	"paddock/internal/githubconnector"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -22,7 +21,7 @@ func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	if !githubhook.VerifySignature(s.github.Secret, body, r.Header.Get("X-Hub-Signature-256")) {
+	if !githubconnector.VerifySignature(s.github.Secret, body, r.Header.Get("X-Hub-Signature-256")) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid github signature"})
 		return
 	}
@@ -46,7 +45,7 @@ func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	push, err := githubhook.ParsePush(body)
+	push, err := githubconnector.ParsePush(body)
 	if err != nil {
 		writeError(w, validationError(err.Error()))
 		return
@@ -143,7 +142,7 @@ func (s Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 // tryBuildDispatch attempts to dispatch a GitHub Actions build for the
 // application. Access-only repositories fall back to source-build-on-target;
 // configured image builds stay on GitHub Actions.
-func (s Server) tryBuildDispatch(r *http.Request, application db.ListApplicationsForGitHubPushRow, push githubhook.Push) (db.BuildRun, bool) {
+func (s Server) tryBuildDispatch(r *http.Request, application db.ListApplicationsForGitHubPushRow, push githubconnector.Push) (db.BuildRun, bool) {
 	if s.github.App == nil {
 		return db.BuildRun{}, false
 	}
@@ -303,7 +302,7 @@ func pathFilterMatches(filter string, changedPath string) bool {
 	return changedPath == filter || strings.HasPrefix(changedPath, filter+"/")
 }
 
-func githubPushBuildRequest(repo githubconnector.Repository, push githubhook.Push) githubBuildDispatchRequest {
+func githubPushBuildRequest(repo githubconnector.Repository, push githubconnector.Push) githubBuildDispatchRequest {
 	inputs := map[string]string{}
 	if strings.TrimSpace(push.CommitSHA) != "" {
 		inputs["commit_sha"] = strings.TrimSpace(push.CommitSHA)
@@ -335,14 +334,14 @@ func githubRepoFromURLs(urls []string) string {
 	return ""
 }
 
-func githubSkipEntry(application db.ListApplicationsForGitHubPushRow, err error, push githubhook.Push) map[string]any {
+func githubSkipEntry(application db.ListApplicationsForGitHubPushRow, err error, push githubconnector.Push) map[string]any {
 	return map[string]any{
 		"application_id": uuidString(application.ID),
 		"reason":         errorString(err),
 	}
 }
 
-func (s Server) auditGitHubSkip(r *http.Request, application db.ListApplicationsForGitHubPushRow, err error, push githubhook.Push) {
+func (s Server) auditGitHubSkip(r *http.Request, application db.ListApplicationsForGitHubPushRow, err error, push githubconnector.Push) {
 	s.audit(r, "github.push_skipped", "deployment", uuidString(application.ID), application.Name, map[string]any{
 		"reason":     "not_deployable",
 		"error":      errorString(err),
@@ -351,7 +350,7 @@ func (s Server) auditGitHubSkip(r *http.Request, application db.ListApplications
 	})
 }
 
-func githubIgnoredPushMetadata(push githubhook.Push, reason string) map[string]any {
+func githubIgnoredPushMetadata(push githubconnector.Push, reason string) map[string]any {
 	return map[string]any{
 		"reason":     reason,
 		"branch":     push.Branch,

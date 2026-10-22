@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"deploy-manager/internal/connectors"
+	"paddock/internal/runtimevars"
 )
 
 func TestPublicPrefixDetection(t *testing.T) {
@@ -25,7 +25,7 @@ func TestPublicPrefixDetection(t *testing.T) {
 }
 
 func TestRuntimeVariablesNoopsWithoutScope(t *testing.T) {
-	variables, err := New("", "", "").RuntimeVariables(context.Background(), connectors.RuntimeVariableScope{})
+	variables, err := New("", "", "", "doppler").RuntimeVariables(context.Background(), runtimevars.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,70 +35,16 @@ func TestRuntimeVariablesNoopsWithoutScope(t *testing.T) {
 }
 
 func TestRuntimeVariablesRequiresProjectAndConfigPair(t *testing.T) {
-	_, err := New("", "", "").RuntimeVariables(context.Background(), connectors.RuntimeVariableScope{Project: "api"})
+	_, err := New("", "", "", "doppler").RuntimeVariables(context.Background(), runtimevars.Scope{Project: "api"})
 	if err == nil {
 		t.Fatal("expected missing config to fail")
-	}
-}
-
-func TestSyncCredentialsReportsRuntimeScopeInventory(t *testing.T) {
-	inventory, err := New("", "", "").SyncCredentials(context.Background(), connectors.SyncScope{
-		Name: "production doppler",
-		Config: []byte(`{
-			"project": " billing ",
-			"config": " prd ",
-			"applications": [" api ", "worker", "api", " "]
-		}`),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(inventory) != 1 {
-		t.Fatalf("expected one credential inventory item, got %+v", inventory)
-	}
-
-	item := inventory[0]
-	if item.Provider != "doppler" || item.ExternalRef != "doppler://billing/prd" || item.Type != "runtime_scope" {
-		t.Fatalf("unexpected Doppler inventory identity: %+v", item)
-	}
-	if len(item.Permissions) != 1 || item.Permissions[0].Permission != "secrets:download" {
-		t.Fatalf("expected Doppler download permission, got %+v", item.Permissions)
-	}
-	if len(item.Usages) != 2 {
-		t.Fatalf("expected deduplicated application usages, got %+v", item.Usages)
-	}
-	if item.Usages[0].UsedByName != "api" || item.Usages[1].UsedByName != "worker" {
-		t.Fatalf("unexpected Doppler usages: %+v", item.Usages)
-	}
-}
-
-func TestSyncCredentialsUsesConfiguredDefaults(t *testing.T) {
-	inventory, err := New("billing", "prd", "").SyncCredentials(context.Background(), connectors.SyncScope{Name: "global doppler"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inventory[0].ExternalRef != "doppler://billing/prd" {
-		t.Fatalf("expected default Doppler scope, got %+v", inventory[0])
-	}
-	if len(inventory[0].Usages) != 1 || inventory[0].Usages[0].UsedByType != "connector" {
-		t.Fatalf("expected connector fallback usage, got %+v", inventory[0].Usages)
-	}
-}
-
-func TestSyncCredentialsRequiresProjectAndConfig(t *testing.T) {
-	_, err := New("", "", "").SyncCredentials(context.Background(), connectors.SyncScope{
-		Name:   "broken",
-		Config: []byte(`{"project":"billing"}`),
-	})
-	if err == nil {
-		t.Fatal("expected missing Doppler config to fail")
 	}
 }
 
 func TestRuntimeVariablesParsesDopplerOutput(t *testing.T) {
 	var gotToken string
 	var gotArgs []string
-	connector := Connector{
+	connector := Client{
 		project: "billing",
 		config:  "prd",
 		token:   "token-123",
@@ -117,7 +63,7 @@ func TestRuntimeVariablesParsesDopplerOutput(t *testing.T) {
 		},
 	}
 
-	variables, err := connector.RuntimeVariables(context.Background(), connectors.RuntimeVariableScope{})
+	variables, err := connector.RuntimeVariables(context.Background(), runtimevars.Scope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +76,7 @@ func TestRuntimeVariablesParsesDopplerOutput(t *testing.T) {
 		t.Fatalf("expected args %+v, got %+v", expectedArgs, gotArgs)
 	}
 
-	values := map[string]connectors.RuntimeVariable{}
+	values := map[string]runtimevars.Variable{}
 	for _, variable := range variables {
 		values[variable.Key] = variable
 	}
@@ -164,7 +110,7 @@ func TestRuntimeVariablesParsesDopplerOutput(t *testing.T) {
 
 func TestRuntimeVariablesUsesConfiguredCommandPath(t *testing.T) {
 	var gotArgs []string
-	connector := Connector{
+	connector := Client{
 		project: "billing",
 		config:  "prd",
 		command: "/usr/local/bin/doppler",
@@ -174,7 +120,7 @@ func TestRuntimeVariablesUsesConfiguredCommandPath(t *testing.T) {
 		},
 	}
 
-	if _, err := connector.RuntimeVariables(context.Background(), connectors.RuntimeVariableScope{}); err != nil {
+	if _, err := connector.RuntimeVariables(context.Background(), runtimevars.Scope{}); err != nil {
 		t.Fatal(err)
 	}
 	if gotArgs[0] != "/usr/local/bin/doppler" {
@@ -183,7 +129,7 @@ func TestRuntimeVariablesUsesConfiguredCommandPath(t *testing.T) {
 }
 
 func TestCatalogListsSortedProjectsAndConfigs(t *testing.T) {
-	connector := Connector{
+	connector := Client{
 		token: "token-123",
 		run: func(_ context.Context, token string, args []string) ([]byte, error) {
 			if token != "token-123" {
@@ -223,7 +169,7 @@ func TestCheckFindsConfiguredCommandPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := NewWithCommand("", "", "token-123", executable).Check(); err != nil {
+	if err := New("", "", "token-123", executable).Check(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -234,7 +180,7 @@ func TestCheckRequiresToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := NewWithCommand("", "", "", executable).Check(); err == nil {
+	if err := New("", "", "", executable).Check(); err == nil {
 		t.Fatal("expected missing token to fail")
 	}
 }

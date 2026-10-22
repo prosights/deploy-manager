@@ -5,7 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/compose"
+	"paddock/internal/db"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -19,7 +20,7 @@ func TestMergeServiceExecutionModesPreservesMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var services []githubComposeService
+	var services []compose.Service
 	if err := json.Unmarshal(metadata, &services); err != nil {
 		t.Fatal(err)
 	}

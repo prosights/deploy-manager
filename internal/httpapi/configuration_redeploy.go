@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -151,22 +151,27 @@ func (s Server) redeployProjectConfiguration(w http.ResponseWriter, r *http.Requ
 }
 
 func (s Server) createConfigurationRedeployment(ctx context.Context, applicationID pgtype.UUID, actor string) (configurationRedeployCreation, error) {
-	tx, err := s.tx.Begin(ctx)
-	if err != nil {
-		return configurationRedeployCreation{}, err
+	var creation configurationRedeployCreation
+	err := s.withTx(ctx, func(queries *db.Queries) error {
+		return createConfigurationRedeploymentTx(ctx, queries, applicationID, actor, &creation)
+	})
+	if isDeploymentInProgressError(err) {
+		creation.skippedReason = configurationRedeployInProgress
+		return creation, nil
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	return creation, err
+}
 
-	queries := s.queries.WithTx(tx)
+func createConfigurationRedeploymentTx(ctx context.Context, queries *db.Queries, applicationID pgtype.UUID, actor string, creation *configurationRedeployCreation) error {
 	application, err := queries.GetApplicationForUpdate(ctx, applicationID)
 	if err != nil {
-		return configurationRedeployCreation{}, applicationLookupError(err, "application not found")
+		return applicationLookupError(err, "application not found")
 	}
 	candidate, err := queries.GetApplicationConfigurationRedeployCandidate(ctx, applicationID)
 	if err != nil {
-		return configurationRedeployCreation{}, applicationLookupError(err, "application not found")
+		return applicationLookupError(err, "application not found")
 	}
-	creation := configurationRedeployCreation{source: configurationRedeploySource{
+	creation.source = configurationRedeploySource{
 		ApplicationID:           candidate.ApplicationID,
 		ApplicationName:         candidate.ApplicationName,
 		SourceDeploymentID:      candidate.SourceDeploymentID,
@@ -177,42 +182,34 @@ func (s Server) createConfigurationRedeployment(ctx context.Context, application
 		SourceBranch:            candidate.SourceBranch,
 		ConfiguredRepositoryURL: application.RepositoryUrl,
 		ConfiguredBranch:        application.Branch,
-	}}
+	}
 	if !candidate.RedeployRequired.Valid || !candidate.RedeployRequired.Bool {
 		creation.skippedReason = configurationRedeployCurrent
-		return creation, nil
+		return nil
 	}
 	if candidate.DeploymentInProgress {
 		creation.skippedReason = configurationRedeployInProgress
-		return creation, nil
+		return nil
 	}
 
 	input, err := configurationRedeployInput(creation.source, actor)
 	if err != nil {
-		return creation, err
+		return err
 	}
 	if input.Strategy != "blue_green" {
-		return creation, validationError("deployment strategy must be blue_green")
+		return validationError("deployment strategy must be blue_green")
 	}
 	if err := validateDeploymentSource(application, input.ImageRef); err != nil {
-		return creation, err
+		return err
 	}
 	if err := validateBlueGreenDeploymentTarget(application); err != nil {
-		return creation, err
+		return err
 	}
 	creation.deployment, err = queries.CreateDeployment(ctx, input)
 	if err != nil {
-		err = createDeploymentError(err)
-		if isDeploymentInProgressError(err) {
-			creation.skippedReason = configurationRedeployInProgress
-			return creation, nil
-		}
-		return creation, err
+		return createDeploymentError(err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return creation, err
-	}
-	return creation, nil
+	return nil
 }
 
 func configurationRedeployInput(source configurationRedeploySource, actor string) (db.CreateDeploymentParams, error) {

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/stringutil"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"

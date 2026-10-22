@@ -1,6 +1,6 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
+import { useMutation, useSuspenseQuery } from '@tanstack/react-query'
 import { Bell, CheckCircle2, Send } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { PageHeader } from '../components/page-header'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -9,6 +9,7 @@ import { Panel } from '../components/ui/panel'
 import { TextInput } from '../components/ui/text-input'
 import { upsertConnector, type ConnectorAccount, type UpsertConnectorInput } from '../lib/api'
 import { connectorsQuery } from '../lib/queries'
+import { hasControlCharacters } from '../lib/validation'
 
 type NotificationProvider = 'slack' | 'resend'
 
@@ -44,32 +45,6 @@ const notificationProviders: Array<{
 ]
 
 export function NotificationsRoute() {
-  const queryClient = useQueryClient()
-  const { data: connectors } = useSuspenseQuery(connectorsQuery)
-  const [form, setForm] = useState<DestinationForm>(() => defaultDestinationForm())
-  const [formError, setFormError] = useState<string>()
-  const visibleDestinations = useMemo(
-    () => connectors.filter((connector) => connector.provider === 'slack' || connector.provider === 'resend'),
-    [connectors],
-  )
-  const save = useMutation({
-    mutationFn: (input: UpsertConnectorInput) => upsertConnector(input),
-    onSuccess: async () => {
-      setForm((state) => defaultDestinationForm(state.provider))
-      setFormError(undefined)
-      await queryClient.invalidateQueries({ queryKey: connectorsQuery.queryKey })
-    },
-  })
-
-  function submit() {
-    setFormError(undefined)
-    try {
-      save.mutate(destinationInput(form))
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Notification destination is invalid.')
-    }
-  }
-
   return (
     <div className="space-y-5">
       <PageHeader
@@ -77,21 +52,19 @@ export function NotificationsRoute() {
         description="Route deployment events to Slack and email destinations without storing webhook URLs or API keys here."
       />
       <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
-        <NotificationDestinationList destinations={visibleDestinations} />
-        <NotificationDestinationForm
-          form={form}
-          isSaving={save.isPending}
-          errorMessage={formError ?? save.error?.message}
-          onChange={(updates) => setForm((state) => ({ ...state, ...updates }))}
-          onSubmit={submit}
-        />
+        <NotificationDestinationList />
+        <NotificationDestinationForm />
       </div>
       <NotificationRuntime />
     </div>
   )
 }
 
-function NotificationDestinationList({ destinations }: { destinations: ConnectorAccount[] }) {
+function NotificationDestinationList() {
+  const { data: destinations } = useSuspenseQuery({
+    ...connectorsQuery,
+    select: (connectors) => connectors.filter((connector) => connector.provider === 'slack' || connector.provider === 'resend'),
+  })
   return (
     <Panel title="Destinations">
       <div className="divide-y">
@@ -100,25 +73,24 @@ function NotificationDestinationList({ destinations }: { destinations: Connector
             <div className="flex min-w-0 items-start gap-3">
               <NotificationIcon provider={notificationProvider(destination.provider)} />
               <div className="min-w-0">
-                <div className="truncate font-medium text-ink">{destination.name}</div>
-                <div className="mt-1 text-sm text-muted">{providerLabel(destination.provider)}</div>
+                <div className="truncate font-medium text-prosights-text">{destination.name}</div>
+                <div className="mt-1 text-sm text-prosights-muted">{providerLabel(destination.provider)}</div>
               </div>
             </div>
-            <div className="min-w-0 text-sm text-muted">
-              <div className="truncate text-ink">{destinationSummary(destination) || 'No destination metadata yet'}</div>
+            <div className="min-w-0 text-sm text-prosights-muted">
+              <div className="truncate text-prosights-text">{destinationSummary(destination) || 'No destination metadata yet'}</div>
               <div className="mt-1 truncate">{destinationScope(destination) || 'All deploy events'}</div>
             </div>
             <div className="flex items-start justify-end gap-2">
               <Badge tone={destination.enabled ? 'success' : 'neutral'}>{destination.enabled ? 'enabled' : 'disabled'}</Badge>
-              {destination.last_sync_status && <Badge tone={destination.last_sync_status === 'ok' ? 'success' : 'danger'}>{destination.last_sync_status}</Badge>}
             </div>
           </div>
         ))}
         {destinations.length === 0 && (
-          <div className="flex items-start gap-3 px-4 py-8 text-sm text-muted">
+          <div className="flex items-start gap-3 px-4 py-8 text-sm text-prosights-muted">
             <Bell className="mt-0.5 size-4 shrink-0" />
             <div>
-              <div className="font-medium text-ink">No notification destinations yet.</div>
+              <div className="font-medium text-prosights-text">No notification destinations yet.</div>
               <div className="mt-1">Add Slack or Resend so deployments have somewhere explicit to report status.</div>
             </div>
           </div>
@@ -128,19 +100,13 @@ function NotificationDestinationList({ destinations }: { destinations: Connector
   )
 }
 
-function NotificationDestinationForm({
-  form,
-  isSaving,
-  errorMessage,
-  onChange,
-  onSubmit,
-}: {
-  form: DestinationForm
-  isSaving: boolean
-  errorMessage?: string
-  onChange: (updates: Partial<DestinationForm>) => void
-  onSubmit: () => void
-}) {
+function NotificationDestinationForm() {
+  const [form, setForm] = useState<DestinationForm>(() => defaultDestinationForm())
+  const save = useMutation({
+    mutationFn: () => upsertConnector(destinationInput(form)),
+    onSuccess: () => setForm(defaultDestinationForm(form.provider)),
+  })
+  const update = (updates: Partial<DestinationForm>) => setForm({ ...form, ...updates })
   const selectedProvider = notificationProviders.find((provider) => provider.provider === form.provider) ?? notificationProviders[0]
   return (
     <Panel title="Add destination">
@@ -148,7 +114,7 @@ function NotificationDestinationForm({
         className="space-y-4 p-4"
         onSubmit={(event) => {
           event.preventDefault()
-          onSubmit()
+          save.mutate()
         }}
       >
         <div className="grid gap-2 sm:grid-cols-2">
@@ -156,50 +122,50 @@ function NotificationDestinationForm({
             <button
               key={provider.provider}
               type="button"
-              className={`rounded-md border bg-background p-3 text-left transition-colors hover:bg-panel ${form.provider === provider.provider ? 'border-accent bg-accent/10' : ''}`}
-              onClick={() => onChange(defaultDestinationForm(provider.provider))}
+              className={`rounded-md border bg-prosights-canvas p-3 text-left transition-colors hover:bg-prosights-surface-muted ${form.provider === provider.provider ? 'border-accent bg-accent/10' : ''}`}
+              onClick={() => setForm(defaultDestinationForm(provider.provider))}
             >
               <div className="flex items-center gap-2">
                 <NotificationIcon provider={provider.provider} />
-                <div className="font-medium text-ink">{provider.title}</div>
+                <div className="font-medium text-prosights-text">{provider.title}</div>
               </div>
-              <p className="mt-2 text-sm leading-5 text-muted">{provider.description}</p>
+              <p className="mt-2 text-sm leading-5 text-prosights-muted">{provider.description}</p>
             </button>
           ))}
         </div>
-        <TextInput label="Destination name" value={form.name} onChange={(name) => onChange({ name })} placeholder={selectedProvider.title} required />
+        <TextInput label="Destination name" value={form.name} onChange={(name) => update({ name })} placeholder={selectedProvider.title} required />
         {form.provider === 'slack' ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            <TextInput label="Channel" value={form.channel} onChange={(channel) => onChange({ channel })} placeholder="#deployments" required />
-            <TextInput label="App or project scope" value={form.scope} onChange={(scope) => onChange({ scope })} placeholder="production" />
+            <TextInput label="Channel" value={form.channel} onChange={(channel) => update({ channel })} placeholder="#deployments" required />
+            <TextInput label="App or project scope" value={form.scope} onChange={(scope) => update({ scope })} placeholder="production" />
           </div>
         ) : (
           <div className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
-              <TextInput label="Domain" value={form.domain} onChange={(domain) => onChange({ domain })} placeholder="prosights.co" />
-              <TextInput label="Sender" value={form.sender} onChange={(sender) => onChange({ sender })} placeholder="deploy@prosights.co" required />
+              <TextInput label="Domain" value={form.domain} onChange={(domain) => update({ domain })} placeholder="prosights.co" />
+              <TextInput label="Sender" value={form.sender} onChange={(sender) => update({ sender })} placeholder="deploy@prosights.co" required />
             </div>
-            <TextInput label="Recipients" value={form.recipients} onChange={(recipients) => onChange({ recipients })} placeholder="eng@prosights.co, oncall@prosights.co" required />
-            <TextInput label="App or project scope" value={form.scope} onChange={(scope) => onChange({ scope })} placeholder="production" />
+            <TextInput label="Recipients" value={form.recipients} onChange={(recipients) => update({ recipients })} placeholder="eng@prosights.co, oncall@prosights.co" required />
+            <TextInput label="App or project scope" value={form.scope} onChange={(scope) => update({ scope })} placeholder="production" />
           </div>
         )}
-        <label className="flex items-center gap-2 text-sm text-ink">
+        <label className="flex items-center gap-2 text-sm text-prosights-text">
           <input
-            className="size-4 rounded border bg-background accent-[var(--color-accent)]"
+            className="size-4 rounded border bg-prosights-canvas accent-[var(--color-accent)]"
             type="checkbox"
             checked={form.enabled}
-            onChange={(event) => onChange({ enabled: event.target.checked })}
+            onChange={(event) => update({ enabled: event.target.checked })}
           />
           Enabled
         </label>
-        <div className="rounded-md border bg-background p-3 text-xs leading-5 text-muted">
-          Secret source: <span className="font-medium text-ink">{selectedProvider.secretSource}</span>
+        <div className="rounded-md border bg-prosights-canvas p-3 text-xs leading-5 text-prosights-muted">
+          Secret source: <span className="font-medium text-prosights-text">{selectedProvider.secretSource}</span>
         </div>
-        <Button variant="primary" disabled={isSaving || !form.name}>
-          {isSaving ? 'Saving...' : 'Save destination'}
+        <Button variant="primary" disabled={save.isPending || !form.name}>
+          {save.isPending ? 'Saving...' : 'Save destination'}
         </Button>
       </form>
-      {errorMessage && <div className="border-t px-4 py-3"><InlineError message={errorMessage} /></div>}
+      {save.error && <div className="border-t px-4 py-3"><InlineError message={save.error.message} /></div>}
     </Panel>
   )
 }
@@ -230,12 +196,12 @@ function NotificationRuntime() {
 
 function RuntimeStep({ icon: Icon, title, description }: { icon: typeof Bell, title: string, description: string }) {
   return (
-    <div className="rounded-md border bg-background p-4">
-      <div className="flex items-center gap-2 font-medium text-ink">
-        <Icon className="size-4 text-muted" />
+    <div className="rounded-md border bg-prosights-canvas p-4">
+      <div className="flex items-center gap-2 font-medium text-prosights-text">
+        <Icon className="size-4 text-prosights-muted" />
         {title}
       </div>
-      <p className="mt-2 text-sm leading-6 text-muted">{description}</p>
+      <p className="mt-2 text-sm leading-6 text-prosights-muted">{description}</p>
     </div>
   )
 }
@@ -324,16 +290,9 @@ function notificationProvider(provider: string): NotificationProvider {
 }
 
 function NotificationIcon({ provider }: { provider: NotificationProvider }) {
-  if (provider === 'resend') {
-    return (
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-white">
-        <img className="max-h-5 max-w-5 object-contain" src="/branding/connectors/resend.svg" alt="" />
-      </span>
-    )
-  }
   return (
     <span className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-white">
-      <img className="max-h-5 max-w-5 object-contain" src="/branding/connectors/slack.svg" alt="" />
+      <img className="max-h-5 max-w-5 object-contain" src={`/branding/connectors/${provider}.svg`} alt="" />
     </span>
   )
 }
@@ -348,8 +307,4 @@ function stringList(value: unknown): string[] {
     return []
   }
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-}
-
-function hasControlCharacters(value: string): boolean {
-  return value.includes('\n') || value.includes('\r') || value.includes('\t')
 }

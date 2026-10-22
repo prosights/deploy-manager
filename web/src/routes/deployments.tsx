@@ -1,76 +1,44 @@
 import { useQuery, useSuspenseQueries } from '@tanstack/react-query'
+import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import { ArrowRight, GitCommitHorizontal, Github, Rocket, Search } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Panel } from '../components/ui/panel'
 import { SelectInput } from '../components/ui/select-input'
 import { statusTone } from '../features/status'
-import type { Deployment, GitHubCommitMetadata, GitHubRepository } from '../lib/api'
-import { applicationsQuery, buildRunsQuery, deploymentsQuery, githubCommitQuery, githubRepositoriesQuery, projectsQuery, proxyRoutesQuery } from '../lib/queries'
-import { ApplicationDrawer } from './project-detail'
+import type { Application, Deployment, GitHubCommitMetadata, GitHubRepository } from '../lib/api'
+import { applicationsQuery, deploymentsQuery, githubCommitQuery, githubRepositoriesQuery, projectsQuery } from '../lib/queries'
+import type { DeploymentsSearch } from '../lib/route-search'
+import { ApplicationDrawer } from '../features/applications/drawer'
+import { githubRepositoryForApplication, newestFirst } from '../features/applications/helpers'
+import { deploymentTitle, formatFullTime, formatRelativeTime, shortImageRef } from '../lib/format'
 
 const PAGE_SIZE = 10
+
+const routeApi = getRouteApi('/app/deployments')
 
 export function DeploymentsRoute() {
   const [{ data: deployments }, { data: applications }, { data: projects }, { data: githubRepositories }] = useSuspenseQueries({
     queries: [deploymentsQuery, applicationsQuery, projectsQuery, githubRepositoriesQuery],
   })
-  const [scopeSearch, setScopeSearch] = useState(window.location.search)
+  const search = routeApi.useSearch()
+  const navigate = useNavigate({ from: '/deployments' })
   const [query, setQuery] = useState('')
   const [selectedServiceID, setSelectedServiceID] = useState('')
   const [page, setPage] = useState(1)
-  const selectedDeploymentID = validDeploymentID(deploymentIDFromSearch(scopeSearch), deployments)
-  const selectedDeployment = deployments.find((deployment) => deployment.id === selectedDeploymentID)
-  const selectedApplication = applications.find((application) => application.id === selectedDeployment?.application_id)
-  const selectedProjectID = validProjectID(projectIDFromSearch(scopeSearch, selectedDeploymentID), projects)
-  const applicationProjectIDs = useMemo(
-    () => new Map(applications.map((application) => [application.id, application.project_id])),
-    [applications],
-  )
-  const applicationsByID = useMemo(
-    () => new Map(applications.map((application) => [application.id, application])),
-    [applications],
-  )
-  const projectNamesByID = useMemo(
-    () => new Map(projects.map((project) => [project.id, project.name])),
-    [projects],
-  )
-  const githubRepositoriesByApplicationID = useMemo(
-    () => new Map(applications.flatMap((application) => {
-      const repository = githubRepositoryForApplication(application, githubRepositories)
-      return repository ? [[application.id, repository] as const] : []
-    })),
-    [applications, githubRepositories],
-  )
-  const deploymentsInProject = useMemo(
-    () => deployments.filter((deployment) => {
-      if (!selectedProjectID) return true
-      return deploymentProjectID(deployment, applicationProjectIDs) === selectedProjectID
-    }),
-    [applicationProjectIDs, deployments, selectedProjectID],
-  )
-  const serviceOptions = useMemo(
-    () => deploymentServiceOptions(deploymentsInProject, applications, projects),
-    [applications, deploymentsInProject, projects],
-  )
-  const visibleDeployments = useMemo(
-    () => newestFirst(deploymentsInProject.filter((deployment) => {
-      return (!selectedServiceID || deployment.application_id === selectedServiceID)
-        && matchesDeploymentSearch(deployment, query)
-    })),
-    [deploymentsInProject, query, selectedServiceID],
-  )
+  const selectedProjectID = projects.some((project) => project.id === search.project) ? search.project ?? '' : ''
+  const applicationsByID = new Map(applications.map((application) => [application.id, application]))
+  const projectNamesByID = new Map(projects.map((project) => [project.id, project.name]))
+  const deploymentsInProject = deployments.filter((deployment) => !selectedProjectID || deploymentProjectID(deployment, applicationsByID) === selectedProjectID)
+  const serviceOptions = deploymentServiceOptions(deploymentsInProject, applicationsByID, projectNamesByID)
+  const visibleDeployments = newestFirst(deploymentsInProject.filter((deployment) => (!selectedServiceID || deployment.application_id === selectedServiceID) && matchesDeploymentSearch(deployment, query)))
   const pageCount = Math.max(1, Math.ceil(visibleDeployments.length / PAGE_SIZE))
   const currentPage = Math.min(page, pageCount)
   const pageDeployments = visibleDeployments.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
-  const drawerProjectID = selectedDeployment ? deploymentProjectID(selectedDeployment, applicationProjectIDs) : undefined
-  const drawerProject = projects.find((project) => project.id === drawerProjectID)
-  const { data: buildRuns = [] } = useQuery({ ...buildRunsQuery, enabled: Boolean(selectedDeployment) })
-  const { data: proxyRoutes = [] } = useQuery({ ...proxyRoutesQuery, enabled: Boolean(selectedDeployment) })
 
-  function closeDeployment() {
-    setScopeSearch(replaceDeploymentURL())
+  function updateSearch(next: DeploymentsSearch) {
+    void navigate({ search: (previous: DeploymentsSearch) => ({ ...previous, ...next }), replace: true })
   }
 
   return (
@@ -109,7 +77,7 @@ export function DeploymentsRoute() {
           className="w-full sm:w-56"
           value={selectedProjectID}
           onChange={(projectID) => {
-            setScopeSearch(replaceProjectScopeURL(projectID))
+            updateSearch({ project: projectID || undefined, service: undefined, deployment: undefined, view: undefined })
             setSelectedServiceID('')
             setPage(1)
           }}
@@ -119,110 +87,67 @@ export function DeploymentsRoute() {
         </SelectInput>
       </div>
 
-      <DeploymentList
-        deployments={pageDeployments}
-        githubRepositoriesByApplicationID={githubRepositoriesByApplicationID}
-        applicationsByID={applicationsByID}
-        projectNamesByID={projectNamesByID}
-        emptyMessage={query || selectedServiceID ? 'No deployments match these filters.' : 'No deployments yet. Open a service inside a project to deploy it.'}
-        onOpen={(deploymentID) => setScopeSearch(replaceDeploymentURL(deploymentID))}
-      />
+      <Panel className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1180px] table-fixed text-left text-[12px]">
+            <colgroup>
+              <col className="w-[110px]" />
+              <col className="w-[320px]" />
+              <col className="w-[180px]" />
+              <col className="w-[125px]" />
+              <col className="w-[135px]" />
+              <col className="w-[145px]" />
+              <col className="w-[130px]" />
+              <col className="w-[48px]" />
+            </colgroup>
+            <thead className="text-[11px] text-prosights-muted">
+              <tr>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Commit</th>
+                <th className="px-4 py-3 font-medium">Service / Project</th>
+                <th className="px-4 py-3 font-medium">Strategy</th>
+                <th className="px-4 py-3 font-medium">Trigger</th>
+                <th className="px-4 py-3 font-medium">Deployed</th>
+                <th className="px-4 py-3 font-medium">SHA</th>
+                <th className="px-2 py-3"><span className="sr-only">Action</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageDeployments.map((deployment) => {
+                const application = applicationsByID.get(deployment.application_id)
+                const projectID = deploymentProjectID(deployment, applicationsByID)
+                return (
+                  <DeploymentRow
+                    key={deployment.id}
+                    deployment={deployment}
+                    repository={application ? githubRepositoryForApplication(application, githubRepositories) : undefined}
+                    projectName={deployment.project_name ?? (projectID ? projectNamesByID.get(projectID) : undefined) ?? '—'}
+                    serviceName={deployment.application_name ?? application?.name ?? '—'}
+                    onOpen={() => updateSearch({ service: deployment.application_id, deployment: deployment.id, view: undefined })}
+                  />
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {pageDeployments.length === 0 && (
+          <div className="border-t border-prosights-border px-4 py-8 text-center text-[12px] text-prosights-muted">
+            {query || selectedServiceID ? 'No deployments match these filters.' : 'No deployments yet. Open a service inside a project to deploy it.'}
+          </div>
+        )}
+      </Panel>
 
       {visibleDeployments.length > 0 && (
-        <Pagination
-          page={currentPage}
-          pageCount={pageCount}
-          total={visibleDeployments.length}
-          onPageChange={setPage}
-        />
+        <Pagination page={currentPage} pageCount={pageCount} total={visibleDeployments.length} onPageChange={setPage} />
       )}
 
-      {selectedDeployment && selectedApplication && drawerProjectID && (
+      {search.service && (
         <ApplicationDrawer
-          key={selectedDeployment.id}
-          application={selectedApplication}
-          deployment={selectedDeployment}
-          deployments={deployments.filter((deployment) => deployment.application_id === selectedApplication.id)}
-          buildRuns={buildRuns.filter((build) => build.application_id === selectedApplication.id)}
-          repository={githubRepositoriesByApplicationID.get(selectedApplication.id)}
-          routes={proxyRoutes.filter((route) => route.application_id === selectedApplication.id)}
-          projectConfigurationRevision={drawerProject?.configuration_revision ?? 0}
-          environments={[]}
-          servers={[]}
-          open
-          onSelectDeployment={(deploymentID) => setScopeSearch(replaceDeploymentURL(deploymentID))}
-          onBackToApplication={closeDeployment}
-          onOpenChange={(open) => {
-            if (!open) closeDeployment()
-          }}
-          projectHref={`/projects/${encodeURIComponent(drawerProjectID)}?service=${encodeURIComponent(selectedApplication.id)}`}
+          search={{ service: search.service, deployment: search.deployment, view: search.view }}
+          onNavigate={updateSearch}
         />
       )}
     </div>
-  )
-}
-
-function DeploymentList({
-  deployments,
-  githubRepositoriesByApplicationID,
-  applicationsByID,
-  projectNamesByID,
-  emptyMessage,
-  onOpen,
-}: {
-  deployments: Deployment[]
-  githubRepositoriesByApplicationID: Map<string, GitHubRepository>
-  applicationsByID: Map<string, { name: string, project_id: string }>
-  projectNamesByID: Map<string, string>
-  emptyMessage: string
-  onOpen: (deploymentID: string) => void
-}) {
-  return (
-    <Panel className="overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px] table-fixed text-left text-[12px]">
-          <colgroup>
-            <col className="w-[110px]" />
-            <col className="w-[320px]" />
-            <col className="w-[180px]" />
-            <col className="w-[125px]" />
-            <col className="w-[135px]" />
-            <col className="w-[145px]" />
-            <col className="w-[130px]" />
-            <col className="w-[48px]" />
-          </colgroup>
-          <thead className="text-[11px] text-prosights-muted">
-            <tr>
-              <th className="px-4 py-3 font-medium">Status</th>
-              <th className="px-4 py-3 font-medium">Commit</th>
-              <th className="px-4 py-3 font-medium">Service / Project</th>
-              <th className="px-4 py-3 font-medium">Strategy</th>
-              <th className="px-4 py-3 font-medium">Trigger</th>
-              <th className="px-4 py-3 font-medium">Deployed</th>
-              <th className="px-4 py-3 font-medium">SHA</th>
-              <th className="px-2 py-3"><span className="sr-only">Action</span></th>
-            </tr>
-          </thead>
-          <tbody>
-            {deployments.map((deployment) => {
-              const application = applicationsByID.get(deployment.application_id)
-              const projectID = deployment.project_id ?? application?.project_id
-              return (
-                <DeploymentRow
-                  key={deployment.id}
-                  deployment={deployment}
-                  repository={githubRepositoriesByApplicationID.get(deployment.application_id)}
-                  projectName={deployment.project_name ?? (projectID ? projectNamesByID.get(projectID) : undefined) ?? '—'}
-                  serviceName={deployment.application_name ?? application?.name ?? '—'}
-                  onOpen={() => onOpen(deployment.id)}
-                />
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-      {deployments.length === 0 && <div className="border-t border-prosights-border px-4 py-8 text-center text-[12px] text-prosights-muted">{emptyMessage}</div>}
-    </Panel>
   )
 }
 
@@ -239,7 +164,10 @@ function DeploymentRow({
   serviceName: string
   onOpen: () => void
 }) {
-  const { data: commitMetadata } = useQuery(githubCommitQuery(repository?.connector_id ?? '', repository?.repository ?? '', deployment.commit_sha ?? ''))
+  const { data: commitMetadata } = useQuery({
+    ...githubCommitQuery(repository?.connector_id ?? '', repository?.repository ?? '', deployment.commit_sha ?? ''),
+    enabled: Boolean(repository && deployment.commit_sha),
+  })
   const title = deploymentTitle(deployment, commitMetadata?.message)
   const deployedAt = deployment.finished_at ?? deployment.created_at
 
@@ -332,61 +260,15 @@ function Pagination({
   )
 }
 
-function deploymentIDFromSearch(search: string): string {
-  return new URLSearchParams(search).get('deployment') ?? ''
-}
-
-function validDeploymentID(deploymentID: string, deployments: Array<{ id: string }>): string {
-  return deployments.some((deployment) => deployment.id === deploymentID) ? deploymentID : ''
-}
-
-function projectIDFromSearch(search: string, selectedDeploymentID: string): string {
-  const params = new URLSearchParams(search)
-  return params.get('project') ?? (selectedDeploymentID ? '' : params.get('deployment')) ?? ''
-}
-
-function validProjectID(projectID: string, projects: Array<{ id: string }>): string {
-  return projects.some((project) => project.id === projectID) ? projectID : ''
-}
-
-function replaceProjectScopeURL(projectID: string): string {
-  const params = new URLSearchParams(window.location.search)
-  params.delete('deployment')
-  params.delete('service')
-  params.delete('view')
-  if (projectID) params.set('project', projectID)
-  else params.delete('project')
-  const search = params.toString()
-  window.history.replaceState(null, '', search ? `/deployments?${search}` : '/deployments')
-  return window.location.search
-}
-
-function replaceDeploymentURL(deploymentID?: string): string {
-  const params = new URLSearchParams(window.location.search)
-  params.delete('service')
-  params.delete('view')
-  if (deploymentID) params.set('deployment', deploymentID)
-  else params.delete('deployment')
-  const search = params.toString()
-  window.history.replaceState(null, '', search ? `/deployments?${search}` : '/deployments')
-  return window.location.search
-}
-
-function deploymentProjectID(deployment: Deployment, applicationProjectIDs: Map<string, string>): string | undefined {
-  return deployment.project_id ?? applicationProjectIDs.get(deployment.application_id)
-}
-
-function newestFirst(deployments: Deployment[]): Deployment[] {
-  return [...deployments].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))
+function deploymentProjectID(deployment: Deployment, applicationsByID: Map<string, Application>): string | undefined {
+  return deployment.project_id ?? applicationsByID.get(deployment.application_id)?.project_id
 }
 
 function deploymentServiceOptions(
   deployments: Deployment[],
-  applications: Array<{ id: string, name: string, project_id: string }>,
-  projects: Array<{ id: string, name: string }>,
+  applicationByID: Map<string, Application>,
+  projectByID: Map<string, string>,
 ): Array<{ id: string, label: string }> {
-  const applicationByID = new Map(applications.map((application) => [application.id, application]))
-  const projectByID = new Map(projects.map((project) => [project.id, project.name]))
   const deploymentByApplicationID = new Map(deployments.map((deployment) => [deployment.application_id, deployment]))
   const services = [...deploymentByApplicationID.entries()].map(([id, deployment]) => {
     const application = applicationByID.get(id)
@@ -426,56 +308,8 @@ function matchesDeploymentSearch(deployment: Deployment, query: string): boolean
   ].some((value) => value?.toLowerCase().includes(normalizedQuery))
 }
 
-function deploymentTitle(deployment: Deployment, fetchedMessage?: string): string {
-  const fetchedSubject = commitSubject(fetchedMessage)
-  if (fetchedSubject) return fetchedSubject
-  const commitMessage = deployment.commit_message?.trim()
-  if (commitMessage) return commitMessage
-  if (deployment.commit_sha) return `Commit ${deployment.commit_sha.slice(0, 10)}`
-  const imageRef = shortImageRef(deployment.image_ref)
-  if (imageRef) return `Deploy ${imageRef}`
-  return `Deployment ${deployment.id.slice(0, 8)}`
-}
-
-function commitSubject(message?: string): string {
-  return message?.split(/\r?\n/, 1)[0]?.trim() ?? ''
-}
-
-function githubRepositoryForApplication(
-  application: { id: string, repository_url: string | null },
-  repositories: GitHubRepository[],
-): GitHubRepository | undefined {
-  return repositories.find((repository) => repository.application_id === application.id)
-    ?? repositories.find((repository) => !repository.application_id && repository.clone_url === application.repository_url)
-}
-
-function shortImageRef(imageRef: string | null): string | undefined {
-  if (!imageRef) return undefined
-  const image = imageRef.split('/').at(-1)
-  return image && image.length > 28 ? `…${image.slice(-27)}` : image
-}
-
 function triggerLabel(trigger: Deployment['trigger']): string {
   if (trigger === 'github_push') return 'via GitHub'
   if (trigger === 'connector_sync') return 'via connector'
   return trigger.replaceAll('_', ' ')
-}
-
-function formatRelativeTime(value: string): string {
-  const timestamp = Date.parse(value)
-  if (Number.isNaN(timestamp)) return 'Recently'
-  const seconds = Math.round((timestamp - Date.now()) / 1000)
-  const absoluteSeconds = Math.abs(seconds)
-  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-  if (absoluteSeconds < 60) return 'just now'
-  if (absoluteSeconds < 3600) return formatter.format(Math.round(seconds / 60), 'minute')
-  if (absoluteSeconds < 86_400) return formatter.format(Math.round(seconds / 3600), 'hour')
-  if (absoluteSeconds < 604_800) return formatter.format(Math.round(seconds / 86_400), 'day')
-  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(timestamp)
-}
-
-function formatFullTime(value: string): string {
-  const timestamp = Date.parse(value)
-  if (Number.isNaN(timestamp)) return value
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)
 }

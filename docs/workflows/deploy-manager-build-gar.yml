@@ -1,10 +1,10 @@
-name: Deploy Manager build
+name: Paddock build
 
 on:
   workflow_dispatch:
     inputs:
       deploy_manager_build_id:
-        description: Deploy Manager build id
+        description: Paddock build id
         required: true
       repository:
         description: owner/repo

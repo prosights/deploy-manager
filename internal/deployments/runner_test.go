@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-manager/internal/auditlog"
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/db"
+	"paddock/internal/auditlog"
+	"paddock/internal/db"
+	"paddock/internal/runtimevars"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -274,7 +274,7 @@ func TestDeploymentRuntimeVariablesUseDopplerOverrides(t *testing.T) {
 		{Key: "APP_ENV", Value: "production"},
 		{Key: "DATABASE_URL", Value: "project-default"},
 	}}
-	runner := NewRunner(queries, NewLogBus(nil), nil, fakeRuntimeVariableSource{variables: []connectors.RuntimeVariable{
+	runner := NewRunner(queries, NewLogBus(nil), nil, fakeRuntimeVariableSource{variables: []runtimevars.Variable{
 		{Key: "DATABASE_URL", Value: "doppler-secret"},
 		{Key: "TOKEN", Value: "doppler-token"},
 	}})
@@ -286,7 +286,7 @@ func TestDeploymentRuntimeVariablesUseDopplerOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := []connectors.RuntimeVariable{
+	want := []runtimevars.Variable{
 		{Key: "APP_ENV", Value: "production"},
 		{Key: "DATABASE_URL", Value: "doppler-secret"},
 		{Key: "TOKEN", Value: "doppler-token"},
@@ -315,7 +315,7 @@ func TestDeploymentServiceRuntimeVariablesAreIsolatedAndCanOverrideSharedValues(
 			Variables:      []byte(`[{"key":"WORKER_CONCURRENCY","value":"4"}]`),
 		},
 	}}
-	runtime := &scopedRuntimeVariableSource{variables: map[string][]connectors.RuntimeVariable{
+	runtime := &scopedRuntimeVariableSource{variables: map[string][]runtimevars.Variable{
 		"alleyes-shared/prd": {
 			{Key: "SHARED", Value: "stack-doppler"},
 			{Key: "STACK_SECRET", Value: "shared-secret"},
@@ -331,7 +331,7 @@ func TestDeploymentServiceRuntimeVariablesAreIsolatedAndCanOverrideSharedValues(
 		ApplicationName: "alleyes",
 		ApplicationID:   pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
 		ComposeServices: []byte(`[{"name":"frontend"},{"name":"worker"},{"name":"scheduler"}]`),
-	}, []connectors.RuntimeVariable{
+	}, []runtimevars.Variable{
 		{Key: "GLOBAL", Value: "shared"},
 		{Key: "SHARED", Value: "project-default"},
 	})
@@ -339,7 +339,7 @@ func TestDeploymentServiceRuntimeVariablesAreIsolatedAndCanOverrideSharedValues(
 		t.Fatal(err)
 	}
 
-	wantFrontend := []connectors.RuntimeVariable{
+	wantFrontend := []runtimevars.Variable{
 		{Key: "API_TOKEN", Value: "doppler-secret"},
 		{Key: "GLOBAL", Value: "shared"},
 		{Key: "PUBLIC_API_URL", Value: "https://api.example.com"},
@@ -347,7 +347,7 @@ func TestDeploymentServiceRuntimeVariablesAreIsolatedAndCanOverrideSharedValues(
 		{Key: "STACK_ONLY", Value: "all-services"},
 		{Key: "STACK_SECRET", Value: "shared-secret"},
 	}
-	wantWorker := []connectors.RuntimeVariable{
+	wantWorker := []runtimevars.Variable{
 		{Key: "GLOBAL", Value: "shared"},
 		{Key: "SHARED", Value: "stack-doppler"},
 		{Key: "STACK_ONLY", Value: "all-services"},
@@ -360,7 +360,7 @@ func TestDeploymentServiceRuntimeVariablesAreIsolatedAndCanOverrideSharedValues(
 	if !reflect.DeepEqual(services["worker"], wantWorker) {
 		t.Fatalf("unexpected worker variables: %+v", services["worker"])
 	}
-	wantScheduler := []connectors.RuntimeVariable{{Key: "GLOBAL", Value: "shared"}, {Key: "SHARED", Value: "stack-doppler"}, {Key: "STACK_ONLY", Value: "all-services"}, {Key: "STACK_SECRET", Value: "shared-secret"}}
+	wantScheduler := []runtimevars.Variable{{Key: "GLOBAL", Value: "shared"}, {Key: "SHARED", Value: "stack-doppler"}, {Key: "STACK_ONLY", Value: "all-services"}, {Key: "STACK_SECRET", Value: "shared-secret"}}
 	if !reflect.DeepEqual(services["scheduler"], wantScheduler) {
 		t.Fatalf("unexpected scheduler variables: %+v", services["scheduler"])
 	}
@@ -766,13 +766,13 @@ type fakeRemoteRunner struct {
 }
 
 type fakeRuntimeVariableSource struct {
-	variables []connectors.RuntimeVariable
+	variables []runtimevars.Variable
 	err       error
 }
 
 type scopedRuntimeVariableSource struct {
-	variables map[string][]connectors.RuntimeVariable
-	scopes    []connectors.RuntimeVariableScope
+	variables map[string][]runtimevars.Variable
+	scopes    []runtimevars.Scope
 }
 
 type fakeSourceAuthenticator struct {
@@ -785,11 +785,11 @@ func (source *fakeSourceAuthenticator) AuthorizationHeader(context.Context, pgty
 	return source.header, nil
 }
 
-func (source fakeRuntimeVariableSource) RuntimeVariables(context.Context, connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
+func (source fakeRuntimeVariableSource) RuntimeVariables(context.Context, runtimevars.Scope) ([]runtimevars.Variable, error) {
 	return source.variables, source.err
 }
 
-func (source *scopedRuntimeVariableSource) RuntimeVariables(_ context.Context, scope connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
+func (source *scopedRuntimeVariableSource) RuntimeVariables(_ context.Context, scope runtimevars.Scope) ([]runtimevars.Variable, error) {
 	source.scopes = append(source.scopes, scope)
 	return source.variables[scope.Project+"/"+scope.Config], nil
 }

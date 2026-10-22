@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/stringutil"
 )
 
 type Config struct {
@@ -20,7 +20,6 @@ type Config struct {
 	StaticDir               string
 	APIToken                string
 	AuthDisabled            bool
-	SSHSignerMode           string
 	GitHubWebhookSecret     string
 	GitHubAppID             string
 	GitHubAppSlug           string
@@ -47,7 +46,6 @@ func Load() Config {
 		StaticDir:               env("STATIC_DIR", "web/dist"),
 		APIToken:                env("API_TOKEN", ""),
 		AuthDisabled:            boolEnv("AUTH_DISABLED", false),
-		SSHSignerMode:           env("SSH_SIGNER_MODE", "file"),
 		GitHubWebhookSecret:     env("GITHUB_WEBHOOK_SECRET", ""),
 		GitHubAppID:             env("GITHUB_APP_ID", ""),
 		GitHubAppSlug:           env("GITHUB_APP_SLUG", ""),
@@ -93,14 +91,6 @@ func (c Config) Validate() error {
 		return fmt.Errorf("API_TOKEN is required unless AUTH_DISABLED=true")
 	} else if token != "" && len(token) < 16 {
 		return fmt.Errorf("API_TOKEN must be at least 16 characters")
-	}
-	switch strings.TrimSpace(c.SSHSignerMode) {
-	case "", "file":
-		// file-based static key signer (default)
-	case "ca":
-		return fmt.Errorf("SSH_SIGNER_MODE=ca is not yet wired; requires a certificate authority")
-	default:
-		return fmt.Errorf("SSH_SIGNER_MODE must be 'file' or 'ca'")
 	}
 	if strings.TrimSpace(c.DopplerProject) == "" && strings.TrimSpace(c.DopplerConfig) != "" {
 		return fmt.Errorf("DOPPLER_PROJECT and DOPPLER_CONFIG must be provided together")

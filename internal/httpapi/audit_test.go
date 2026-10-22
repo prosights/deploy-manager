@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-manager/internal/auditlog"
+	"paddock/internal/auditlog"
 )
 
 func TestAuditActorIgnoresDeployActorHeader(t *testing.T) {

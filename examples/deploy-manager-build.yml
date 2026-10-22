@@ -2,22 +2,22 @@
 #
 # Drop this file in your repo at .github/workflows/deploy-manager-build.yml
 #
-# Deploy Manager dispatches this workflow on push events via workflow_dispatch.
+# Paddock dispatches this workflow on push events via workflow_dispatch.
 # It builds the Docker image, pushes to your configured registry, and calls
-# back to Deploy Manager with the image ref so a deployment is triggered
+# back to Paddock with the image ref so a deployment is triggered
 # automatically.
 #
 # Required GitHub Actions variables:
 #   REGISTRY_HOST             - Docker registry host (e.g. ghcr.io)
-#   DEPLOY_MANAGER_API_URL    - Base URL of your Deploy Manager instance (e.g. https://deploy.example.com)
+#   DEPLOY_MANAGER_API_URL    - Base URL of your Paddock instance (e.g. https://deploy.example.com)
 #
 # Required GitHub Actions secrets:
-#   DEPLOY_MANAGER_API_TOKEN  - API token for Deploy Manager
+#   DEPLOY_MANAGER_API_TOKEN  - API token for Paddock
 #
 # For GHCR, also grant the workflow `packages: write` permission and use
 # GITHUB_TOKEN for registry auth (see the login step below).
 
-name: Deploy Manager Build
+name: Paddock Build
 
 on:
   workflow_dispatch:
@@ -87,7 +87,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Callback to Deploy Manager
+      - name: Callback to Paddock
         if: always()
         env:
           DEPLOY_MANAGER_API_URL: ${{ vars.DEPLOY_MANAGER_API_URL }}

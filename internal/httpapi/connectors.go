@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/auditlog"
+	"paddock/internal/db"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -56,33 +57,27 @@ type upsertConnectorRequest struct {
 // must never be echoed back over the API. Only a boolean presence flag is
 // exposed so the UI can show whether configuration exists.
 type connectorAccountResponse struct {
-	ID              pgtype.UUID        `json:"id"`
-	Provider        string             `json:"provider"`
-	Name            string             `json:"name"`
-	Enabled         bool               `json:"enabled"`
-	HasConfig       bool               `json:"has_config"`
-	Config          map[string]any     `json:"config"`
-	LastSyncStatus  pgtype.Text        `json:"last_sync_status"`
-	LastSyncMessage pgtype.Text        `json:"last_sync_message"`
-	LastSyncedAt    pgtype.Timestamptz `json:"last_synced_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID        pgtype.UUID        `json:"id"`
+	Provider  string             `json:"provider"`
+	Name      string             `json:"name"`
+	Enabled   bool               `json:"enabled"`
+	HasConfig bool               `json:"has_config"`
+	Config    map[string]any     `json:"config"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 func connectorResponse(account db.ConnectorAccount) connectorAccountResponse {
 	config := publicConnectorConfig(account.Config)
 	return connectorAccountResponse{
-		ID:              account.ID,
-		Provider:        account.Provider,
-		Name:            account.Name,
-		Enabled:         account.Enabled,
-		HasConfig:       len(config) > 0,
-		Config:          config,
-		LastSyncStatus:  account.LastSyncStatus,
-		LastSyncMessage: account.LastSyncMessage,
-		LastSyncedAt:    account.LastSyncedAt,
-		CreatedAt:       account.CreatedAt,
-		UpdatedAt:       account.UpdatedAt,
+		ID:        account.ID,
+		Provider:  account.Provider,
+		Name:      account.Name,
+		Enabled:   account.Enabled,
+		HasConfig: len(config) > 0,
+		Config:    config,
+		CreatedAt: account.CreatedAt,
+		UpdatedAt: account.UpdatedAt,
 	}
 }
 
@@ -105,7 +100,7 @@ func publicConnectorConfig(raw []byte) map[string]any {
 func publicConnectorConfigMap(config map[string]any) map[string]any {
 	public := make(map[string]any, len(config))
 	for key, value := range config {
-		if isSecretConfigKey(key) {
+		if auditlog.IsSecretKey(key) {
 			continue
 		}
 		value, ok := publicConnectorConfigValue(value)

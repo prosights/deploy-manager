@@ -6,10 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/deployments"
-	"deploy-manager/internal/githubconnector"
+	"paddock/internal/db"
+	"paddock/internal/deployments"
+	"paddock/internal/githubconnector"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -26,7 +25,7 @@ type Server struct {
 	proxy   ProxyApplier
 	github  GitHubWebhookConfig
 	replays *replayCache
-	sources map[string]connectors.Connector
+	doppler DopplerSource
 	static  string
 
 	sshHealth      sshHealthChecker
@@ -71,8 +70,8 @@ type ReadinessCheck struct {
 	Check func(context.Context) error
 }
 
-func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs *deployments.LogBus, proxyApplier ProxyApplier, github GitHubWebhookConfig, sources map[string]connectors.Connector, staticDir string, auth AuthConfig, readiness ...ReadinessCheck) http.Handler {
-	server := Server{queries: queries, tx: tx, ready: readiness, queue: queue, logs: logs, proxy: proxyApplier, github: github, replays: newReplayCache(1024), sources: sources, static: staticDir}
+func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs *deployments.LogBus, proxyApplier ProxyApplier, github GitHubWebhookConfig, doppler DopplerSource, staticDir string, auth AuthConfig, readiness ...ReadinessCheck) http.Handler {
+	server := Server{queries: queries, tx: tx, ready: readiness, queue: queue, logs: logs, proxy: proxyApplier, github: github, replays: newReplayCache(1024), doppler: doppler, static: staticDir}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -141,13 +140,8 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 			r.Get("/deployments/{deploymentID}/events", server.streamDeploymentLogs)
 			r.Get("/builds", server.listBuildRuns)
 			r.Post("/builds/{buildID}/complete", server.completeBuildRun)
-			r.Get("/credentials", server.listCredentials)
-			r.Post("/credentials/inventory", server.upsertCredentialInventory)
-			r.Post("/object-storage/inventory", server.upsertObjectStorageInventory)
-			r.Get("/credentials/{credentialID}", server.credentialDetail)
 			r.Get("/connectors", server.listConnectors)
 			r.Post("/connectors", server.upsertConnector)
-			r.Post("/connectors/{connectorID}/sync", server.syncConnector)
 			r.Post("/connectors/{connectorID}/github/repositories/sync", server.syncGitHubConnectorRepositories)
 			r.Post("/connectors/{connectorID}/github/builds/dispatch", server.dispatchGitHubBuild)
 			r.Get("/github/status", server.githubStatus)
@@ -175,6 +169,23 @@ func New(queries *db.Queries, tx transactionStarter, queue DeploymentQueue, logs
 	return r
 }
 
+// withTx runs fn inside a database transaction. Servers built without a
+// transaction starter (unit tests) run fn directly against s.queries.
+func (s Server) withTx(ctx context.Context, fn func(*db.Queries) error) error {
+	if s.tx == nil {
+		return fn(s.queries)
+	}
+	tx, err := s.tx.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(s.queries.WithTx(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func (s Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -184,9 +195,6 @@ func (s Server) readyz(w http.ResponseWriter, r *http.Request) {
 	ready := true
 	for _, check := range s.ready {
 		name := strings.TrimSpace(check.Name)
-		if name == "" || check.Check == nil {
-			continue
-		}
 		if err := check.Check(r.Context()); err != nil {
 			checks[name] = "failed"
 			ready = false

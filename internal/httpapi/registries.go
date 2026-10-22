@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 )
 
 func (s Server) listContainerRegistries(w http.ResponseWriter, r *http.Request) {

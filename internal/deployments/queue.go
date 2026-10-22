@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 
 	"github.com/redis/go-redis/v9"
 )

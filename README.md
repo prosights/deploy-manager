@@ -1,149 +1,87 @@
-# Deploy Manager
+# Paddock
 
-Deploy Manager is a slim internal control plane for remote server management and Docker Compose deployments.
+Paddock is an internal platform for deploying Docker Compose apps to your own servers.
 
-It registers SSH-accessible servers, validates connectivity, monitors resource health, deploys application stacks, manages Caddy or Traefik proxy routes, streams deployment logs, and keeps an inventory of credentials with permission and usage visibility. It does not manage secret values directly; systems such as Doppler are integrated through connectors.
+## What It Does
 
-## Stack
+You register **servers** (any Linux VM you can SSH into), group your work into
+**projects**, and add **services** (Docker Compose apps) to a project. Deploy
+Manager builds each service, ships it to its server over SSH, puts a Caddy or
+Traefik route in front of it, and streams the logs back to the browser.
 
-- Go backend with chi, sqlc, PostgreSQL, Redis, SSH, Docker SDK, and SSE log streaming.
-- React + TypeScript frontend built with Vite, Tailwind CSS v4, TanStack Query, TanStack Router, and Zustand.
-- Docker Compose for local development.
-- Single production image with the Go server serving built frontend assets.
+It plays the same role as Coolify, and is moving toward Railway's project canvas.
 
-## Architecture
+## The Model
 
-This Mermaid diagram is intentionally kept in the README so it is easy to move, edit, and render directly in GitHub.
-
-```mermaid
-flowchart TB
-    operator["Operator"]
-    github["GitHub webhook\npush events"]
-
-    subgraph browser["Browser"]
-        spa["React SPA\nVite + TanStack Router"]
-        routes["UI routes\noverview, projects, servers, applications, deployments, credentials, connectors, proxy, audit, settings"]
-        query["TanStack Query API client"]
-        spa --> routes
-        routes --> query
-    end
-
-    subgraph app["Go server binary"]
-        static["Static asset handler\nserves web/dist and SPA fallback"]
-        api["chi HTTP API\n/api/*"]
-        health["health and readiness checks"]
-        settings["settings, audit, projects, environments"]
-        inventory["servers, applications, credentials, connectors, object storage"]
-        deploy_api["deployment endpoints\ncreate, cancel, retry, logs, SSE events"]
-        proxy_api["proxy route endpoints\ncreate and apply"]
-        github_api["GitHub webhook handler\nHMAC verification"]
-
-        api --> health
-        api --> settings
-        api --> inventory
-        api --> deploy_api
-        api --> proxy_api
-        api --> github_api
-    end
-
-    subgraph data["State and generated data"]
-        postgres["PostgreSQL\nsqlc queries + migrations"]
-        redis["Redis\ndeployment queue + log fanout"]
-        logbus["Deployment LogBus\nSSE publish/subscribe"]
-    end
-
-    subgraph connectors["Connector boundary"]
-        connector_registry["Built-in connector registry"]
-        github_connector["GitHub connector\ncredential inventory"]
-        doppler["Doppler connector\nruntime variables"]
-        slack_connector["Slack connector\ncredential inventory"]
-        resend_connector["Resend connector\ncredential inventory"]
-        storage_connectors["Object storage connectors\nS3 + GCS inventory"]
-
-        connector_registry --> github_connector
-        connector_registry --> doppler
-        connector_registry --> slack_connector
-        connector_registry --> resend_connector
-        connector_registry --> storage_connectors
-    end
-
-    subgraph worker["Deployment worker"]
-        queue["Redis-backed deployment queue\nrecovery on startup"]
-        runner["Deployment runner"]
-        remote_plan["Remote step planner\nvalidate target, render env, compose commands"]
-        ssh["SSH client\nknown_hosts enforced"]
-        proxy_manager["Proxy manager\nCaddy or Traefik commands"]
-        notifier["Notifier\nSlack + Resend"]
-
-        queue --> runner
-        runner --> remote_plan
-        runner --> ssh
-        runner --> proxy_manager
-        runner --> notifier
-    end
-
-    subgraph target["Remote deployment target"]
-        vm["SSH-accessible VM"]
-        repo["Application repository\nclone, fetch, checkout"]
-        envfile["Runtime .env\nwritten with restricted permissions"]
-        compose["Docker Compose\nconfig, pull, up"]
-        proxy["Caddy or Traefik\nroute application traffic"]
-        healthcheck["Optional health check\nblue-green promotion gate"]
-
-        vm --> repo
-        vm --> envfile
-        vm --> compose
-        vm --> proxy
-        vm --> healthcheck
-    end
-
-    operator --> spa
-    spa --> static
-    query --> api
-    github --> github_api
-
-    settings --> postgres
-    inventory --> postgres
-    deploy_api --> postgres
-    proxy_api --> postgres
-    github_api --> postgres
-
-    deploy_api --> queue
-    github_api --> queue
-    queue --> redis
-    runner --> postgres
-    runner --> logbus
-    logbus --> redis
-    deploy_api --> logbus
-    logbus -->|"SSE /api/deployments/{id}/events"| query
-
-    inventory --> connector_registry
-    deploy_api --> doppler
-    doppler --> remote_plan
-
-    ssh --> vm
-    proxy_manager --> ssh
-    notifier --> slack_connector
-    notifier --> resend_connector
-
-    postgres -. "stores projects, environments, applications, servers, deployments, logs, proxy routes, credentials, connector accounts, audit events" .- app
+```text
+projects 1 -> many environments 1 -> many applications (services) 1 -> many deployments 1 -> many deployment_logs
+servers  1 -> many applications
+applications 1 -> many proxy_routes
 ```
 
-Primary request flow:
+| Table | Plain meaning | Coolify / Railway equivalent |
+| --- | --- | --- |
+| `projects` | A group of services that ship together, with shared variables and registry. | Project |
+| `environments` | `production`, `staging`, ... inside a project. | Environment |
+| `servers` | An SSH-reachable VM that runs containers. | Server |
+| `applications` | One deployable Compose stack (the UI calls it a "service"). | Resource / Service |
+| `application_deployment_slots` | Which blue/green color is live, so we can roll back. | (added: needed for instant rollback) |
+| `deployments` | One attempt to ship an application at a commit or image. | Deployment |
+| `deployment_logs` | Log lines for a deployment. | Deployment logs |
+| `build_runs` | A GitHub Actions image build that will trigger a deployment when it finishes. | Build |
+| `proxy_routes` | A domain pointing at a service's upstream. | Domain |
+| `project_runtime_variables` | Non-secret, project-wide env vars. | Shared variables |
+| `application_service_runtime_configs` | Per-Compose-service Doppler scope and port. | Service variables |
+| `container_registries` | Where built images are pushed. | Registry |
+| `connector_accounts` | Settings for GitHub, Doppler, Slack, and Resend (never secrets). | Integrations |
+| `audit_events` | Who did what. | Activity |
+| `server_dev_sudo_users` | Linux users to provision on dev VMs. | (not in either) |
 
-1. The React SPA calls `/api/*` endpoints on the Go server.
-2. API handlers validate input, persist state through sqlc/PostgreSQL, and enqueue deployment work in Redis when needed.
-3. The deployment worker recovers queued/interrupted work on startup, pops Redis jobs, loads the target from PostgreSQL, syncs Doppler runtime variables, and executes a validated remote Docker Compose plan over SSH.
-4. Deployment output is stored in PostgreSQL, published through Redis-backed `LogBus`, and streamed to the UI over Server-Sent Events.
-5. Connectors keep credential, permission, usage, runtime variable, and object-storage inventory behind explicit provider boundaries; Deploy Manager stores references and metadata, not private secret values.
+Secret values never touch the database. They come from Doppler at deploy time.
+
+## How A Deploy Flows
+
+1. A push hits `/api/webhooks/github`, or someone clicks Deploy, or a GitHub
+   Actions build calls `/api/builds/{id}/complete` with an image.
+2. The API writes a `deployments` row and pushes its id onto the Redis queue.
+3. The worker (`internal/deployments`) picks it up, fetches runtime variables
+   from Doppler, connects to the server over SSH (known_hosts enforced), and
+   runs `docker compose` in the inactive blue/green slot.
+4. If the health check passes, `internal/proxy` flips the Caddy/Traefik route
+   to the new slot and the slot is recorded for rollback.
+5. Every log line is saved to Postgres and fanned out over Redis to the browser
+   through Server-Sent Events. Slack or Resend gets the final status.
+
+## Code Map
+
+| Path | What lives there |
+| --- | --- |
+| `cmd/server` | Wires config, Postgres, Redis, the worker, and the HTTP server. |
+| `internal/httpapi` | Every `/api/*` handler, plus serving the built SPA. |
+| `internal/deployments` | Queue, runner, remote step planner, log bus. |
+| `internal/sshutil` | SSH client, key loading, host validation, server health metrics. |
+| `internal/proxy` | Caddy/Traefik route commands, run over SSH. |
+| `internal/githubconnector` | GitHub App client (repos, branches, workflow dispatch) and push webhook parsing. |
+| `internal/compose` | Reads services, ports, and dependencies from a compose file. |
+| `internal/doppler` | Reads runtime variables from Doppler (the only secret source). |
+| `internal/runtimevars` | The env var type rendered into each deployment's `.env`. |
+| `internal/notifications` | Slack and Resend deployment notifications. |
+| `internal/db` | sqlc-generated queries (source: `db/queries/core.sql`). |
+| `internal/migrations` | Embedded SQL migrations, run on startup. |
+| `web/src/routes` | One file per page: projects, project canvas, servers, deployments, connectors, notifications, audit. |
+| `web/src/features` | Larger UI pieces shared between pages (service drawer, logs, servers). |
+
+Stack: Go (chi, pgx, sqlc, `x/crypto/ssh`), PostgreSQL, Redis, React +
+TypeScript (Vite, Tailwind v4, TanStack Query/Router, Zustand). Production is
+one Go binary that serves the built frontend.
 
 ## GitHub and Builds
 
 GitHub integration is intentionally split into three layers:
 
 1. **Repository access**: GitHub connector config stores repository metadata such as `owner/repo`, branch, and optional GitHub App installation ID. It must not store app private keys, OAuth secrets, webhook secrets, deploy keys, or tokens.
-2. **Push sync**: GitHub sends signed `push` events to `/api/webhooks/github`. Deploy Manager verifies `X-Hub-Signature-256` and matches the pushed repository and branch to applications with `github_auto_deploy=true`.
-3. **Image builds**: build execution stays behind a provider boundary. When a matching GitHub connector owns the repository, Deploy Manager dispatches a GitHub Actions workflow through the GitHub App installation token. The workflow owns Docker build/push and reports an `image_ref` back for deployment. Apps without a matching connector can still fall back to source-build-on-target from their repository and Compose path.
+2. **Push sync**: GitHub sends signed `push` events to `/api/webhooks/github`. Paddock verifies `X-Hub-Signature-256` and matches the pushed repository and branch to applications with `github_auto_deploy=true`.
+3. **Image builds**: build execution stays behind a provider boundary. When a matching GitHub connector owns the repository, Paddock dispatches a GitHub Actions workflow through the GitHub App installation token. The workflow owns Docker build/push and reports an `image_ref` back for deployment. Apps without a matching connector can still fall back to source-build-on-target from their repository and Compose path.
 
 GitHub App repository sync requires server-side GitHub App credentials only. Set the app id and private key through the runtime environment or a private key file path. The database stores the installation id and repository metadata, not GitHub tokens or private keys. Repository build dispatch defaults to the workflow file `deploy-manager-build.yml` on the connected branch.
 
@@ -161,7 +99,7 @@ Each connected repository can also carry build metadata:
 }
 ```
 
-When a build is dispatched, Deploy Manager creates a `build_runs` row, passes `deploy_manager_build_id` plus the repository build metadata into GitHub Actions, and waits for the workflow to call `POST /api/builds/{buildID}/complete` with the pushed image reference. A successful callback matches applications by `repository_url` and branch, then queues blue/green deployments with that `image_ref`. The callback is protected by the normal API auth header in production; keep `DEPLOY_MANAGER_API_TOKEN` as a GitHub Actions secret, not in Deploy Manager connector config.
+When a build is dispatched, Paddock creates a `build_runs` row, passes `deploy_manager_build_id` plus the repository build metadata into GitHub Actions, and waits for the workflow to call `POST /api/builds/{buildID}/complete` with the pushed image reference. A successful callback matches applications by `repository_url` and branch, then queues blue/green deployments with that `image_ref`. The callback is protected by the normal API auth header in production; keep `DEPLOY_MANAGER_API_TOKEN` as a GitHub Actions secret, not in Paddock connector config.
 
 To connect two repositories, add both repositories to a GitHub connector with their installation id, branch, workflow file, image ref, build context, Dockerfile, and runner. Then create or update the applications for those repos with the same branch and `github_auto_deploy=true`.
 
@@ -170,13 +108,13 @@ For Google Artifact Registry, copy `docs/workflows/deploy-manager-build-gar.yml`
 - GitHub variables: `DEPLOY_MANAGER_API_URL`, `GAR_REGISTRY_HOST`
 - GitHub secrets: `DEPLOY_MANAGER_API_TOKEN`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT`
 
-The workflow uses GitHub OIDC to obtain a short-lived Google token and push to Artifact Registry. Do not add service-account JSON, registry passwords, or GitHub tokens to Deploy Manager.
+The workflow uses GitHub OIDC to obtain a short-lived Google token and push to Artifact Registry. Do not add service-account JSON, registry passwords, or GitHub tokens to Paddock.
 
-For GHCR, copy `examples/deploy-manager-build.yml` instead. Configure GitHub variables `REGISTRY_HOST=ghcr.io` and `DEPLOY_MANAGER_API_URL`, configure GitHub secret `DEPLOY_MANAGER_API_TOKEN`, and set the connector `image_ref` to the exact GHCR image tag Deploy Manager should deploy.
+For GHCR, copy `examples/deploy-manager-build.yml` instead. Configure GitHub variables `REGISTRY_HOST=ghcr.io` and `DEPLOY_MANAGER_API_URL`, configure GitHub secret `DEPLOY_MANAGER_API_TOKEN`, and set the connector `image_ref` to the exact GHCR image tag Paddock should deploy.
 
-## Self-Deploying Deploy Manager
+## Self-Deploying Paddock
 
-Deploy Manager deploys itself through the same GitHub build and blue/green
+Paddock deploys itself through the same GitHub build and blue/green
 deployment loop as application services. The production lane is:
 
 ```text
@@ -200,13 +138,8 @@ tag pushes are for release bookkeeping and rollback reference; automatic
 production deployment stays on `main`.
 
 On the `internal` VM, keep PostgreSQL and Redis outside the color swap and run
-only the app container through Deploy Manager. The bootstrap files and exact
+only the app container through Paddock. The bootstrap files and exact
 application/proxy settings live in `ops/self-deploy/`.
-
-For the first build provider, prefer one of these two paths:
-
-- **GitHub larger runners** for the fastest first integration when repositories already live in GitHub. GitHub bills larger runners only while jobs execute, with no charge for an idle larger runner, and publishes Linux larger runner sizes from 4 to 96 cores.
-- **Google Cloud Build high-CPU** when pushing to Google Artifact Registry is the priority. Cloud Build publishes on-demand high-CPU build machines such as 8 vCPU and 32 vCPU builders with per-minute pricing.
 
 See `docs/build-provider-decision.md` for the current build-provider recommendation.
 
@@ -238,9 +171,10 @@ GOFLAGS=-mod=mod go test ./...
 GOFLAGS=-mod=mod go build ./cmd/server
 npm test
 npm run lint
+npm run typecheck
 npm run build
 docker compose config --quiet
 docker compose -f docker-compose.dev.yml config --quiet
 git diff --check
-docker build --progress=plain -t deploy-manager:verify .
+docker build --progress=plain -t paddock:verify .
 ```

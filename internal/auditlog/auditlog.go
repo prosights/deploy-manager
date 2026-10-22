@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/stringutil"
 )
 
 const (

@@ -4,16 +4,14 @@ import (
 	"encoding/json"
 	"strings"
 
-	"deploy-manager/internal/auditlog"
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/githubconnector"
+	"paddock/internal/auditlog"
+	"paddock/internal/db"
+	"paddock/internal/githubconnector"
 )
 
 var allowedConnectorProviders = map[string]struct{}{
 	"github":  {},
 	"doppler": {},
-	"s3":      {},
-	"gcs":     {},
 	"slack":   {},
 	"resend":  {},
 }
@@ -150,7 +148,7 @@ func hasSecretConfigKey(value any) bool {
 	}
 
 	for key, value := range values {
-		if isSecretConfigKey(key) {
+		if auditlog.IsSecretKey(key) {
 			return true
 		}
 		if hasSecretConfigKey(value) {
@@ -158,10 +156,6 @@ func hasSecretConfigKey(value any) bool {
 		}
 	}
 	return false
-}
-
-func isSecretConfigKey(key string) bool {
-	return auditlog.IsSecretKey(key)
 }
 
 func hasSecretConfigValue(value any) bool {

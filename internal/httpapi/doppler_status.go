@@ -14,18 +14,15 @@ type dopplerStatusResponse struct {
 	Message             string   `json:"message"`
 }
 
-type dopplerChecker interface {
+// DopplerSource is the Doppler CLI wrapper; runtime secrets only come from here.
+type DopplerSource interface {
 	Check() error
-}
-
-type dopplerCatalog interface {
 	ListProjects(context.Context) ([]string, error)
 	ListConfigs(context.Context, string) ([]string, error)
 }
 
 func (s Server) dopplerStatus(w http.ResponseWriter, r *http.Request) {
-	source, ok := s.sources["doppler"]
-	if !ok {
+	if s.doppler == nil {
 		writeJSON(w, http.StatusOK, dopplerStatusResponse{
 			Missing: []string{"Doppler runtime connector"},
 			Message: "Doppler runtime connector is not registered.",
@@ -33,17 +30,7 @@ func (s Server) dopplerStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	checker, ok := source.(dopplerChecker)
-	if !ok {
-		writeJSON(w, http.StatusOK, dopplerStatusResponse{
-			ConnectorConfigured: true,
-			Missing:             []string{"Doppler CLI check"},
-			Message:             "Doppler runtime connector does not expose a CLI check.",
-		})
-		return
-	}
-
-	if err := checker.Check(); err != nil {
+	if err := s.doppler.Check(); err != nil {
 		missing := []string{"Doppler CLI"}
 		cliAvailable := false
 		if strings.Contains(err.Error(), "DOPPLER_TOKEN") {
@@ -64,17 +51,16 @@ func (s Server) dopplerStatus(w http.ResponseWriter, r *http.Request) {
 		CLIAvailable:        true,
 		Ready:               true,
 		Missing:             []string{},
-		Message:             "Doppler CLI is available on the Deploy Manager server.",
+		Message:             "Doppler CLI is available on the Paddock server.",
 	})
 }
 
 func (s Server) dopplerProjects(w http.ResponseWriter, r *http.Request) {
-	catalog, ok := s.sources["doppler"].(dopplerCatalog)
-	if !ok {
+	if s.doppler == nil {
 		writeError(w, notFoundError("Doppler connector is not configured"))
 		return
 	}
-	projects, err := catalog.ListProjects(r.Context())
+	projects, err := s.doppler.ListProjects(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
@@ -92,12 +78,11 @@ func (s Server) dopplerConfigs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	catalog, ok := s.sources["doppler"].(dopplerCatalog)
-	if !ok {
+	if s.doppler == nil {
 		writeError(w, notFoundError("Doppler connector is not configured"))
 		return
 	}
-	configs, err := catalog.ListConfigs(r.Context(), project)
+	configs, err := s.doppler.ListConfigs(r.Context(), project)
 	if err != nil {
 		writeError(w, err)
 		return

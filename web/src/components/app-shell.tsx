@@ -1,9 +1,9 @@
 import { Link, Outlet, useLocation } from '@tanstack/react-router'
 import { Bell, Cable, Ellipsis, FileClock, FolderKanban, LogOut, Monitor, Moon, PanelLeftClose, PanelLeftOpen, Rocket, Server, Sun } from 'lucide-react'
-import { useQuery, useSuspenseQueries } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Suspense, useEffect, useState } from 'react'
-import { appVersionQuery, projectsQuery } from '../lib/queries'
-import { nextTheme, useUiStore } from '../store/ui'
+import { appVersionQuery } from '../lib/queries'
+import { useTheme } from '../lib/theme'
 import { Button } from './ui/button'
 import { logout } from '../lib/api'
 import {
@@ -44,33 +44,19 @@ const userName = import.meta.env.VITE_USER_NAME || 'Operator'
 const userEmail = import.meta.env.VITE_USER_EMAIL || 'user@prosights.co'
 
 export function AppShell() {
-  const [projectsResult] = useSuspenseQueries({
-    queries: [projectsQuery],
-  })
   const { data: appVersion } = useQuery(appVersionQuery)
-  const projects = projectsResult.data
   const location = useLocation()
-  const collapsed = useUiStore((state) => state.sidebarCollapsed)
-  const toggleSidebar = useUiStore((state) => state.toggleSidebar)
-  const theme = useUiStore((state) => state.theme)
-  const setTheme = useUiStore((state) => state.setTheme)
-  const projectID = projectIDFromPath(location.pathname)
+  const [theme, cycleTheme] = useTheme()
+  // Project pages draw their own full-bleed header.
   const isProjectPage = location.pathname.startsWith('/projects/')
-  const activeProject = projects.find((project) => project.id === projectID)
-  const title = pageTitle(location.pathname, activeProject?.name)
+  const title = nav.find((item) => item.to === location.pathname)?.label ?? 'Paddock'
 
   return (
-    <SidebarProvider
-      open={!collapsed}
-      onOpenChange={(open) => {
-        if (open === collapsed) toggleSidebar()
-      }}
-      className="text-prosights-text"
-    >
+    <SidebarProvider className="text-prosights-text">
       {/* No right border and no header border inside the sidebar: the surface
           color change divides chrome from content, so the main header's
           border-b starts at the content column and never crosses the nav. */}
-      <Sidebar collapsible="icon">
+      <Sidebar>
         <SidebarHeader className="justify-center px-3 pb-1 pt-3">
           <div className="flex h-9 items-center gap-2 rounded-prosights-md px-1.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
             <Link to="/projects" className="flex min-w-0 flex-1 items-center gap-2 text-left group-data-[collapsible=icon]:hidden">
@@ -90,27 +76,26 @@ export function AppShell() {
             </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-            {nav.map((item) => {
-              const active = item.to === '/projects'
-                ? location.pathname.startsWith('/projects')
-                : location.pathname === item.to
-              const Icon = item.icon
-              return (
-                <SidebarMenuItem key={item.to}>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={active}
-                    tooltip={item.label}
-                    className="group/sidebar-item h-8 rounded-prosights-md px-2 text-[13px] font-medium text-prosights-muted transition-colors hover:bg-sidebar-hover hover:text-prosights-text data-[active=true]:bg-sidebar-selected data-[active=true]:text-prosights-text [&>svg]:size-4"
-                  >
-                    <Link to={item.to}>
-                      <Icon className={active ? 'text-prosights-text' : 'text-prosights-muted group-hover/sidebar-item:text-prosights-text'} aria-hidden="true" />
-                      <span>{item.label}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )
-            })}
+                {nav.map((item) => {
+                  const active = item.to === '/projects'
+                    ? location.pathname.startsWith('/projects')
+                    : location.pathname === item.to
+                  const Icon = item.icon
+                  return (
+                    <SidebarMenuItem key={item.to}>
+                      <SidebarMenuButton
+                        isActive={active}
+                        tooltip={item.label}
+                        className="group/sidebar-item h-8 rounded-prosights-md px-2 text-[13px] font-medium text-prosights-muted transition-colors hover:bg-sidebar-hover hover:text-prosights-text data-[active=true]:bg-sidebar-selected data-[active=true]:text-prosights-text [&>svg]:size-4"
+                      >
+                        <Link to={item.to}>
+                          <Icon className={active ? 'text-prosights-text' : 'text-prosights-muted group-hover/sidebar-item:text-prosights-text'} aria-hidden="true" />
+                          <span>{item.label}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
@@ -143,7 +128,7 @@ export function AppShell() {
                   <Ellipsis className="ml-auto size-4 text-prosights-muted group-data-[collapsible=icon]:hidden" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
-                  className="w-[--radix-dropdown-menu-trigger-width] min-w-64 overflow-hidden rounded-prosights-xl border-prosights-border bg-prosights-surface p-0 text-prosights-text shadow-prosights-float"
+                  className="w-[--radix-dropdown-menu-trigger-width] min-w-64 overflow-hidden rounded-prosights-xl border-prosights-border bg-prosights-surface p-0 text-prosights-text"
                   side="top"
                   align="start"
                   sideOffset={4}
@@ -185,7 +170,7 @@ export function AppShell() {
                 variant="ghost"
                 size="icon"
                 className="size-8 bg-transparent text-prosights-muted hover:bg-prosights-surface-muted hover:text-prosights-text"
-                onClick={() => setTheme(nextTheme(theme))}
+                onClick={cycleTheme}
                 aria-label={`Theme: ${theme}. Click to switch.`}
               >
                 {theme === 'light'
@@ -233,16 +218,6 @@ function SidebarCollapseToggle() {
   )
 }
 
-function pageTitle(pathname: string, projectName?: string): string {
-  if (pathname.startsWith('/projects/')) return projectName || 'Project'
-  return nav.find((item) => item.to === pathname)?.label || 'Deploy Manager'
-}
-
-function projectIDFromPath(pathname: string): string {
-  const match = pathname.match(/^\/projects\/([^/]+)/)
-  return match ? decodeURIComponent(match[1]) : ''
-}
-
 // Renders nothing for 150ms so fast suspense resolves invisibly.
 function DeferredFallback() {
   const [show, setShow] = useState(false)
@@ -251,5 +226,5 @@ function DeferredFallback() {
     return () => clearTimeout(id)
   }, [])
   if (!show) return null
-  return <div className="text-sm text-muted">Loading...</div>
+  return <div className="text-sm text-prosights-muted">Loading...</div>
 }

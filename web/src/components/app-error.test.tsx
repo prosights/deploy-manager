@@ -1,26 +1,24 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { describe, expect, it, vi } from 'vitest'
-import { AppError } from './app-error'
+import { cleanup, fireEvent, screen } from '@testing-library/react'
+import { afterEach, expect, it } from 'vitest'
+import { HttpError, renderApp } from '../test/render'
 
-describe('AppError', () => {
-  it('shows operational load failures and lets the router reset', () => {
-    const queryClient = new QueryClient()
-    const resetQueries = vi.spyOn(queryClient, 'resetQueries')
-    const reset = vi.fn()
+afterEach(cleanup)
 
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AppError error={new Error('database unavailable')} reset={reset} />
-      </QueryClientProvider>,
-    )
-
-    expect(screen.getByText('Deploy Manager could not load')).toBeInTheDocument()
-    expect(screen.getByText('database unavailable')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: /retry/i }))
-
-    expect(resetQueries).toHaveBeenCalledTimes(1)
-    expect(reset).toHaveBeenCalledTimes(1)
+it('shows load failures and retries the failed request', async () => {
+  let attempts = 0
+  renderApp('/audit', {
+    'GET /api/audit-events': () => {
+      attempts += 1
+      if (attempts === 1) throw new HttpError(503, 'database unavailable')
+      return []
+    },
   })
+
+  expect(await screen.findByText('Paddock could not load')).toBeInTheDocument()
+  expect(screen.getByText('database unavailable')).toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('button', { name: /retry/i }))
+
+  expect(await screen.findByRole('heading', { name: 'Audit trail' })).toBeInTheDocument()
+  expect(attempts).toBe(2)
 })

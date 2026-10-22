@@ -3,7 +3,7 @@ package sshutil
 import (
 	"context"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 
 	"golang.org/x/crypto/ssh"
 )

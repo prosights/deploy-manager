@@ -11,9 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"deploy-manager/internal/db"
-	deploymentpkg "deploy-manager/internal/deployments"
-	proxypkg "deploy-manager/internal/proxy"
+	"paddock/internal/compose"
+	"paddock/internal/db"
+	deploymentpkg "paddock/internal/deployments"
+	proxypkg "paddock/internal/proxy"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -148,17 +149,9 @@ func (s Server) deleteApplication(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	tx, err := s.tx.Begin(r.Context())
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	defer func() { _ = tx.Rollback(r.Context()) }()
-	if err := deleteApplicationRecords(r.Context(), s.queries.WithTx(tx), plan); err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
+	if err := s.withTx(r.Context(), func(queries *db.Queries) error {
+		return deleteApplicationRecords(r.Context(), queries, plan)
+	}); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -334,7 +327,7 @@ func normalizeUpdateApplication(input db.UpdateApplicationParams) (db.UpdateAppl
 }
 
 func mergeServiceExecutionModes(metadata []byte, requested map[string]string) ([]byte, error) {
-	services := []githubComposeService{}
+	services := []compose.Service{}
 	if len(metadata) > 0 && json.Unmarshal(metadata, &services) != nil {
 		return nil, validationError("compose service metadata is invalid")
 	}

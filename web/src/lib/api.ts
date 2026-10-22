@@ -14,7 +14,7 @@ export type Server = {
   last_checked_at: string | null
 }
 
-export type TailscaleDevice = {
+type TailscaleDevice = {
   name: string
   host: string
   dns_name: string
@@ -30,7 +30,7 @@ export type TailscaleDevicesResponse = {
   devices: TailscaleDevice[]
 }
 
-export type DockerStatus = {
+type DockerStatus = {
   host: string
   api_version: string
   os_type: string
@@ -86,11 +86,11 @@ export type Application = {
   configuration_revision: number
   deployed_configuration_revision: number
   deployed_project_configuration_revision: number
-  compose_services?: ComposeService[] | string | null
+  compose_services: ComposeService[] | null
   redeploy_required: boolean
 }
 
-export type ComposeServicePort = {
+type ComposeServicePort = {
   container_port: number
   published_port?: number
   protocol?: string
@@ -121,7 +121,7 @@ export type Deployment = {
   actor: string | null
   source_repository_url?: string | null
   source_branch?: string | null
-  configuration_snapshot?: Record<string, unknown> | string | null
+  configuration_snapshot?: Record<string, unknown> | null
   application_name?: string
   server_name?: string
   environment_name?: string
@@ -375,14 +375,6 @@ export type ConnectorAccount = {
   enabled: boolean
   has_config: boolean
   config: Record<string, unknown>
-  last_sync_status: string | null
-  last_sync_message: string | null
-  last_synced_at: string | null
-}
-
-export type ConnectorSyncResponse = {
-  connector: ConnectorAccount
-  count: number
 }
 
 export type GitHubRepositorySyncResponse = {
@@ -409,11 +401,6 @@ export type GitHubBuildDispatchInput = {
 
 export type GitHubBuildDispatchResponse = {
   build: BuildRun
-}
-
-export type CompleteBuildRunResponse = {
-  build: BuildRun
-  deployments: Deployment[]
 }
 
 export type GitHubRepository = {
@@ -470,12 +457,6 @@ export type GitHubCommitMetadata = {
   html_url: string
 }
 
-export type UpdateProjectRepositoryInput = {
-  connector_id?: string
-  repository?: string
-  branch?: string
-}
-
 export type ImportGitHubServicesInput = {
   connector_id: string
   repository: string
@@ -529,14 +510,10 @@ export function logout() {
   return api<void>('/api/logout', { method: 'POST' })
 }
 
-export function getSession(init?: RequestInit) {
-  return api<{ authenticated: boolean }>('/api/session', init)
-}
-
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
+    headers: { 'Content-Type': 'application/json', ...init?.headers },
   })
   if (response.status === 401 && path !== '/api/login' && window.location.pathname !== '/login') {
     window.location.assign('/login')
@@ -593,10 +570,6 @@ export function rollbackApplication(applicationID: string) {
   })
 }
 
-export function listDeploymentSlots(applicationID: string, init?: RequestInit) {
-  return api<DeploymentSlot[]>(`/api/applications/${applicationID}/deployment-slots`, init)
-}
-
 export function upsertContainerRegistry(input: UpsertContainerRegistryInput) {
   return api<ContainerRegistry>('/api/container-registries', {
     method: 'POST',
@@ -611,26 +584,11 @@ export function updateProjectRegistry(projectID: string, defaultRegistryID?: str
   })
 }
 
-export function updateProjectRepository(projectID: string, input: UpdateProjectRepositoryInput) {
-  return api<Project>(`/api/projects/${projectID}/repository`, {
-    method: 'PATCH',
-    body: JSON.stringify(input),
-  })
-}
-
-export function listProjectRuntimeVariables(projectID: string, init?: RequestInit) {
-  return api<ProjectRuntimeVariablesResponse>(`/api/projects/${projectID}/variables`, init)
-}
-
 export function replaceProjectRuntimeVariables(projectID: string, variables: ProjectRuntimeVariable[]) {
   return api<ProjectRuntimeVariablesResponse>(`/api/projects/${projectID}/variables`, {
     method: 'PUT',
     body: JSON.stringify({ variables }),
   })
-}
-
-export function listApplicationServiceRuntimeConfigs(applicationID: string, init?: RequestInit) {
-  return api<ApplicationServiceRuntimeConfig[]>(`/api/applications/${applicationID}/service-variables`, init)
 }
 
 export function replaceApplicationServiceRuntimeConfig(applicationID: string, composeService: string, input: { doppler_project: string, doppler_config: string, variables: ProjectRuntimeVariable[] }) {
@@ -649,21 +607,6 @@ export function redeployProjectConfiguration(projectID: string) {
 export function redeployApplicationConfiguration(applicationID: string) {
   return api<ConfigurationRedeployResponse>(`/api/applications/${applicationID}/redeploy-configuration`, {
     method: 'POST',
-  })
-}
-
-export function listDeploymentLogs(deploymentID: string, init?: RequestInit) {
-  return api<DeploymentLog[]>(`/api/deployments/${deploymentID}/logs`, init)
-}
-
-export function listBuildRuns(init?: RequestInit) {
-  return api<BuildRun[]>('/api/builds?limit=100', init)
-}
-
-export function completeBuildRun(buildID: string, input: { status?: string, image_ref?: string, image_digest?: string, external_url?: string, error_message?: string }) {
-  return api<CompleteBuildRunResponse>(`/api/builds/${buildID}/complete`, {
-    method: 'POST',
-    body: JSON.stringify(input),
   })
 }
 
@@ -687,10 +630,6 @@ export function runServerCommand(serverID: string, command: string) {
   })
 }
 
-export function listServerDevUsers(serverID: string, init?: RequestInit) {
-  return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users`, init)
-}
-
 export function addServerDevUser(serverID: string, username: string) {
   return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users`, {
     method: 'POST',
@@ -708,19 +647,6 @@ export function updateServerDevUser(serverID: string, currentUsername: string, u
 export function deleteServerDevUser(serverID: string, username: string) {
   return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users/${encodeURIComponent(username)}`, {
     method: 'DELETE',
-  })
-}
-
-export function applyServerDevUsers(serverID: string) {
-  return api<ServerDevUsersResponse>(`/api/servers/${serverID}/dev-users/apply`, {
-    method: 'POST',
-  })
-}
-
-export function createApplication(input: CreateApplicationInput) {
-  return api<Application>('/api/applications', {
-    method: 'POST',
-    body: JSON.stringify(input),
   })
 }
 
@@ -770,59 +696,11 @@ export function deleteEnvironment(environmentID: string) {
   })
 }
 
-export function listGitHubRepositories(init?: RequestInit) {
-  return api<GitHubRepository[]>('/api/github/repositories', init)
-}
-
-export function listGitHubRepositoryBranches(input: { connector_id: string, repository: string }) {
-  const params = new URLSearchParams({
-    connector_id: input.connector_id,
-    repository: input.repository,
-  })
-  return api<GitHubRepositoryBranchesResponse>(`/api/github/repositories/branches?${params}`)
-}
-
-export function getGitHubRepositoryCommit(input: { connector_id: string, repository: string, sha: string }, init?: RequestInit) {
-  const params = new URLSearchParams(input)
-  return api<GitHubCommitMetadata>(`/api/github/repositories/commit?${params}`, init)
-}
-
-export function detectGitHubRepositoryServices(input: { connector_id: string, repository: string, branch?: string, root?: string }) {
-  const params = new URLSearchParams({
-    connector_id: input.connector_id,
-    repository: input.repository,
-    branch: input.branch || 'main',
-  })
-  if (input.root) params.set('root', input.root)
-  return api<GitHubDetectedServicesResponse>(`/api/github/repositories/detect?${params}`)
-}
-
-export function getGitHubRepositoryCompose(input: { connector_id: string, repository: string, branch: string, path: string }, init?: RequestInit) {
-  const params = new URLSearchParams(input)
-  return api<GitHubRepositoryCompose>(`/api/github/repositories/compose?${params}`, init)
-}
-
 export function importGitHubRepositoryServices(projectID: string, input: ImportGitHubServicesInput) {
   return api<ImportGitHubServicesResponse>(`/api/projects/${projectID}/github/import`, {
     method: 'POST',
     body: JSON.stringify(input),
   })
-}
-
-export function getGitHubStatus(init?: RequestInit) {
-  return api<GitHubIntegrationStatus>('/api/github/status', init)
-}
-
-export function getDopplerStatus(init?: RequestInit) {
-  return api<DopplerIntegrationStatus>('/api/doppler/status', init)
-}
-
-export function listDopplerProjects(init?: RequestInit) {
-  return api<string[]>('/api/doppler/projects', init)
-}
-
-export function listDopplerConfigs(project: string, init?: RequestInit) {
-  return api<string[]>(`/api/doppler/configs?project=${encodeURIComponent(project)}`, init)
 }
 
 export function createProxyRoute(input: CreateProxyRouteInput) {
@@ -848,12 +726,6 @@ export function upsertConnector(input: UpsertConnectorInput) {
   return api<ConnectorAccount>('/api/connectors', {
     method: 'POST',
     body: JSON.stringify(input),
-  })
-}
-
-export function syncConnector(connectorID: string) {
-  return api<ConnectorSyncResponse>(`/api/connectors/${connectorID}/sync`, {
-    method: 'POST',
   })
 }
 

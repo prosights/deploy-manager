@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"deploy-manager/internal/db"
-	proxypkg "deploy-manager/internal/proxy"
+	"paddock/internal/db"
+	proxypkg "paddock/internal/proxy"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"

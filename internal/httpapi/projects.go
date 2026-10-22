@@ -6,9 +6,9 @@ import (
 	"regexp"
 	"strings"
 
-	"deploy-manager/internal/db"
-	deploymentpkg "deploy-manager/internal/deployments"
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/db"
+	deploymentpkg "paddock/internal/deployments"
+	"paddock/internal/stringutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -278,7 +278,7 @@ func normalizeCreateProject(input db.CreateProjectWithDefaultEnvironmentsParams)
 	if input.Name == "" || input.Slug == "" {
 		return input, validationError("name and slug are required")
 	}
-	if hasProjectControlCharacters(input.Name, input.Description) {
+	if hasControlCharacters(input.Name, input.Description) {
 		return input, validationError("project text fields cannot contain control characters")
 	}
 	if !slugPattern.MatchString(input.Slug) {
@@ -294,7 +294,7 @@ func normalizeUpdateProject(input db.UpdateProjectParams) (db.UpdateProjectParam
 	if input.Name == "" || input.Slug == "" {
 		return input, validationError("name and slug are required")
 	}
-	if hasProjectControlCharacters(input.Name, input.Description) {
+	if hasControlCharacters(input.Name, input.Description) {
 		return input, validationError("project text fields cannot contain control characters")
 	}
 	if !slugPattern.MatchString(input.Slug) {
@@ -314,7 +314,7 @@ func normalizeCreateEnvironment(input db.CreateEnvironmentParams) (db.CreateEnvi
 	if !input.ProjectID.Valid || input.Name == "" || input.Slug == "" {
 		return input, validationError("project_id, name, and slug are required")
 	}
-	if hasProjectControlCharacters(input.Name, input.Branch.String) {
+	if hasControlCharacters(input.Name, input.Branch.String) {
 		return input, validationError("environment fields cannot contain control characters")
 	}
 	if !slugPattern.MatchString(input.Slug) {
@@ -339,13 +339,4 @@ func normalizeCreateEnvironment(input db.CreateEnvironmentParams) (db.CreateEnvi
 
 func normalizeSlug(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
-}
-
-func hasProjectControlCharacters(values ...string) bool {
-	for _, value := range values {
-		if strings.ContainsAny(value, "\r\n\t") {
-			return true
-		}
-	}
-	return false
 }

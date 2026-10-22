@@ -1,182 +1,110 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { syncGitHubConnectorRepositories } from '../lib/api'
-import { ConnectorsRoute } from './connectors'
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, expect, it } from 'vitest'
+import type { ConnectorAccount } from '../lib/api'
+import { githubRepository, githubStatus, registry } from '../test/fixtures'
+import { HttpError, renderApp } from '../test/render'
 
-let mockConnectors = [
-  {
-    id: 'connector_github',
-    provider: 'github',
-    name: 'GitHub',
-    enabled: true,
-    has_config: true,
-    config: { installation_id: '123456', repositories: [{ repository: 'prosights/recreate' }] },
-    last_sync_status: null,
-    last_sync_message: null,
-    last_synced_at: null,
-  },
-]
+afterEach(cleanup)
 
-vi.mock('../lib/api', () => ({
-  dispatchGitHubBuild: vi.fn(async () => ({
-    build: { id: 'build_1', provider: 'github_actions', status: 'dispatched', repository: 'acme/app', branch: 'main' },
-  })),
-  syncGitHubConnectorRepositories: vi.fn(async () => ({ connector: { id: 'c1' }, repositories: [] })),
-  upsertContainerRegistry: vi.fn(async (input) => ({ id: 'reg_1', ...input, created_at: '', updated_at: '' })),
-}))
+const githubConnector: ConnectorAccount = {
+  id: 'connector_github',
+  provider: 'github',
+  name: 'GitHub',
+  enabled: true,
+  has_config: true,
+  config: { installation_id: '123456', repositories: [{ repository: 'prosights/recreate' }] },
+}
 
-vi.mock('../lib/queries', () => ({
-  githubStatusQuery: {
-    queryKey: ['github-status'],
-    queryFn: async () => ({
-      webhook_configured: true,
-      app_configured: true,
-      repository_sync_enabled: true,
-      build_dispatch_enabled: true,
-      install_url: 'https://github.com/apps/deploy-manager/installations/new',
-      missing: [],
-    }),
-  },
-  dopplerStatusQuery: {
-    queryKey: ['doppler-status'],
-    queryFn: async () => ({
-      connector_configured: true,
-      cli_available: true,
-      ready: true,
-      missing: [],
-      message: 'Doppler is ready',
-    }),
-  },
-  dopplerProjectsQuery: {
-    queryKey: ['doppler-projects'],
-    queryFn: async () => ['alleyes', 'evals'],
-  },
-  githubRepositoriesQuery: {
-    queryKey: ['github-repositories'],
-    queryFn: async () => [
-      {
-        connector_id: 'connector_github',
-        connector_name: 'GitHub',
-        installation_id: '123456',
-        repository: 'prosights/recreate',
-        branch: 'main',
-        clone_url: 'https://github.com/prosights/recreate.git',
-        web_url: 'https://github.com/prosights/recreate',
-      },
-    ],
-  },
-  buildRunsQuery: {
-    queryKey: ['build-runs'],
-    queryFn: async () => [
-      {
-        id: 'build_existing',
-        provider: 'github_actions',
-        connector_id: 'connector_github',
-        repository: 'prosights/recreate',
-        branch: 'main',
-        workflow_id: 'deploy-manager-build.yml',
-        status: 'succeeded',
-        commit_sha: null,
-        image_ref: 'us-docker.pkg.dev/prosights/recreate/app:main',
-        image_digest: null,
-        external_url: null,
-        error_message: null,
-        started_at: '2026-07-03T17:00:00Z',
-        completed_at: '2026-07-03T17:01:00Z',
-        created_at: '2026-07-03T17:00:00Z',
-        updated_at: '2026-07-03T17:01:00Z',
-      },
-    ],
-  },
-  containerRegistriesQuery: {
-    queryKey: ['container-registries'],
-    queryFn: async () => [],
-  },
-  connectorsQuery: {
-    queryKey: ['connectors'],
-    queryFn: async () => mockConnectors,
-  },
-}))
+function renderConnectors(handlers: Record<string, unknown> = {}) {
+  return renderApp('/connectors', {
+    'GET /api/github/status': githubStatus({ install_url: 'https://github.com/apps/deploy-manager/installations/new' }),
+    'GET /api/doppler/status': { connector_configured: true, cli_available: true, ready: true, missing: [], message: 'Doppler is ready' },
+    'GET /api/doppler/projects': ['alleyes', 'evals'],
+    'GET /api/github/repositories': [githubRepository({ repository: 'prosights/recreate', web_url: 'https://github.com/prosights/recreate' })],
+    'GET /api/container-registries': [],
+    'GET /api/connectors': [githubConnector],
+    ...handlers,
+  })
+}
 
-vi.mock('../lib/search', () => ({
-  matchesSearch: () => true,
-}))
+it('renders integration cards with their status', async () => {
+  const { requests } = renderConnectors({ 'GET /api/container-registries': [registry()] })
 
-vi.mock('../store/ui', () => ({
-  useUiStore: () => '',
-}))
+  const github = await screen.findByRole('button', { name: 'Open GitHub integration' })
+  expect(within(github).getByText('Ready')).toBeInTheDocument()
+  expect(within(screen.getByRole('button', { name: 'Open Doppler integration' })).getByText('Ready on this server')).toBeInTheDocument()
+  expect(within(screen.getByRole('button', { name: 'Open Docker Registry integration' })).getByText('1 configured')).toBeInTheDocument()
+  expect(within(screen.getByRole('button', { name: 'Open Slack integration' })).getByText('Not configured')).toBeInTheDocument()
+  expect(requests.some((request) => request.method === 'POST')).toBe(false)
+})
 
-describe('ConnectorsRoute', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockConnectors = [{
-      id: 'connector_github',
-      provider: 'github',
-      name: 'GitHub',
-      enabled: true,
-      has_config: true,
-      config: { installation_id: '123456', repositories: [{ repository: 'prosights/recreate' }] },
-      last_sync_status: null,
-      last_sync_message: null,
-      last_synced_at: null,
-    }]
+it('shows the install action when the app is configured without an installation', async () => {
+  renderConnectors({ 'GET /api/connectors': [] })
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub integration' }))
+  const dialog = await screen.findByRole('dialog', { name: 'GitHub' })
+  expect(within(dialog).getByText('Install required')).toBeInTheDocument()
+  expect(within(dialog).getByRole('link', { name: /install github app/i })).toHaveAttribute('href', 'https://github.com/apps/deploy-manager/installations/new')
+})
+
+it('opens Doppler status and lists the visible projects', async () => {
+  renderConnectors()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Open Doppler integration' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Doppler' })
+  expect(within(dialog).getByText('Connected Doppler account')).toBeInTheDocument()
+  expect(within(dialog).getByText(/Each Compose service chooses its own Doppler project and config/)).toBeInTheDocument()
+  expect(await within(dialog).findByText('alleyes')).toBeInTheDocument()
+  expect(within(dialog).getByText('2 projects visible to this connector.')).toBeInTheDocument()
+})
+
+it('shows the installation and syncs GitHub repositories', async () => {
+  const { requests } = renderConnectors({
+    'POST /api/connectors/connector_github/github/repositories/sync': { connector: githubConnector, repositories: [] },
   })
 
-  afterEach(() => {
-    cleanup()
+  fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub integration' }))
+  const dialog = await screen.findByRole('dialog', { name: 'GitHub' })
+  expect(within(dialog).getByText('GitHub App installation 123456')).toBeInTheDocument()
+  expect(within(dialog).getByText('1 repository available to Paddock.')).toBeInTheDocument()
+  fireEvent.click(within(dialog).getByText('Available repositories'))
+  expect(within(dialog).getByRole('link', { name: /prosights\/recreate/ })).toHaveAttribute('href', 'https://github.com/prosights/recreate')
+
+  fireEvent.click(within(dialog).getByRole('button', { name: /refresh repository list/i }))
+
+  await waitFor(() => {
+    expect(requests.some((request) => request.method === 'POST' && request.path === '/api/connectors/connector_github/github/repositories/sync')).toBe(true)
+  })
+  // Every successful write refetches the page's queries.
+  await waitFor(() => expect(requests.filter((request) => request.path === '/api/github/repositories')).toHaveLength(2))
+})
+
+it('shows a failed repository sync inside the dialog', async () => {
+  renderConnectors({
+    'POST /api/connectors/connector_github/github/repositories/sync': () => { throw new HttpError(502, 'GitHub is unavailable') },
   })
 
-  function renderRoute() {
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
-    return render(
-      <QueryClientProvider client={queryClient}>
-        <ConnectorsRoute />
-      </QueryClientProvider>,
-    )
-  }
+  fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub integration' }))
+  const dialog = await screen.findByRole('dialog', { name: 'GitHub' })
+  fireEvent.click(within(dialog).getByRole('button', { name: /refresh repository list/i }))
+  expect(await within(dialog).findByText('GitHub is unavailable')).toBeInTheDocument()
+})
 
-  it('renders integration cards with status', async () => {
-    renderRoute()
-    expect((await screen.findAllByText('GitHub')).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Doppler').length).toBeGreaterThan(0)
-    expect(screen.getByText('Docker Registry')).toBeTruthy()
-    expect(screen.queryByRole('link', { name: /connect/i })).not.toBeInTheDocument()
-    expect(syncGitHubConnectorRepositories).not.toHaveBeenCalled()
+it('adds a container registry', async () => {
+  const { requests } = renderConnectors({
+    'POST /api/container-registries': registry({ name: 'Production GHCR' }),
   })
 
-  it('shows install action when app credentials exist without an installation', async () => {
-    mockConnectors = []
-    renderRoute()
+  fireEvent.click(await screen.findByRole('button', { name: 'Open Docker Registry integration' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Docker Registry' })
+  fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: ' Production GHCR ' } })
+  fireEvent.change(within(dialog).getByLabelText('Namespace'), { target: { value: 'prosights' } })
+  fireEvent.change(within(dialog).getByLabelText('Repository'), { target: { value: 'api' } })
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Add registry' }))
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub integration' }))
-    const install = await screen.findByRole('link', { name: /install github app/i })
-    expect(install).toHaveAttribute('href', 'https://github.com/apps/deploy-manager/installations/new')
-  })
-
-  it('opens Doppler status and explains service-level configuration', async () => {
-    renderRoute()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Doppler integration' }))
-
-    expect(await screen.findByRole('dialog', { name: 'Doppler' })).toBeTruthy()
-    expect(screen.getByText('Connected Doppler account')).toBeTruthy()
-    expect(screen.getByText(/Each Compose service chooses its own Doppler project and config/)).toBeTruthy()
-    expect(await screen.findByText('alleyes')).toBeTruthy()
-  })
-
-  it('syncs GitHub repositories from the connector dialog', async () => {
-    renderRoute()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open GitHub integration' }))
-    const dialog = await screen.findByRole('dialog', { name: 'GitHub' })
-    expect(within(dialog).getByText('Webhook')).toBeTruthy()
-    fireEvent.click(within(dialog).getByText('Available repositories'))
-    expect(await within(dialog).findByText('prosights/recreate')).toBeTruthy()
-    fireEvent.click(await screen.findByRole('button', { name: /refresh repository list/i }))
-
-    await waitFor(() => {
-      expect(syncGitHubConnectorRepositories).toHaveBeenCalledWith('connector_github')
-    })
+  await waitFor(() => expect(within(dialog).getByLabelText('Name')).toHaveValue(''))
+  expect(requests.find((request) => request.method === 'POST')).toMatchObject({
+    path: '/api/container-registries',
+    body: { name: 'Production GHCR', provider: 'ghcr', registry_host: 'ghcr.io', namespace: 'prosights', repository: 'api', enabled: true },
   })
 })

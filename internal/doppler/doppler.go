@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/runtimevars"
+	"paddock/internal/stringutil"
 )
 
-type Connector struct {
+type Client struct {
 	project string
 	config  string
 	token   string
@@ -22,64 +22,11 @@ type Connector struct {
 
 type commandRunner func(context.Context, string, []string) ([]byte, error)
 
-type syncConfig struct {
-	Project      string   `json:"project"`
-	Config       string   `json:"config"`
-	Applications []string `json:"applications"`
+func New(project string, config string, token string, command string) Client {
+	return Client{project: project, config: config, token: token, command: strings.TrimSpace(command), run: runDopplerCLI}
 }
 
-func New(project string, config string, token string) Connector {
-	return NewWithCommand(project, config, token, "doppler")
-}
-
-func NewWithCommand(project string, config string, token string, command string) Connector {
-	return Connector{project: project, config: config, token: token, command: strings.TrimSpace(command), run: runDopplerCLI}
-}
-
-func (c Connector) Provider() string {
-	return "doppler"
-}
-
-func (c Connector) SyncCredentials(_ context.Context, scope connectors.SyncScope) ([]connectors.CredentialInventory, error) {
-	config, err := c.syncConfig(scope)
-	if err != nil {
-		return nil, err
-	}
-
-	resourceName := config.Project + "/" + config.Config
-	usages := make([]connectors.CredentialUsage, 0, len(config.Applications))
-	for _, application := range config.Applications {
-		usages = append(usages, connectors.CredentialUsage{
-			UsedByType:   "application",
-			UsedByName:   application,
-			UsageContext: "sync runtime variables from Doppler " + resourceName,
-		})
-	}
-	if len(usages) == 0 {
-		usages = append(usages, connectors.CredentialUsage{
-			UsedByType:   "connector",
-			UsedByName:   strings.TrimSpace(scope.Name),
-			UsageContext: "runtime variables available from Doppler " + resourceName,
-		})
-	}
-
-	return []connectors.CredentialInventory{{
-		Name:        "Doppler " + resourceName + " runtime scope",
-		Provider:    "doppler",
-		ExternalRef: "doppler://" + resourceName,
-		Type:        "runtime_scope",
-		Status:      "active",
-		Permissions: []connectors.CredentialPermission{{
-			ResourceType: "doppler_config",
-			ResourceName: resourceName,
-			Permission:   "secrets:download",
-			Source:       "doppler",
-		}},
-		Usages: usages,
-	}}, nil
-}
-
-func (c Connector) RuntimeVariables(ctx context.Context, scope connectors.RuntimeVariableScope) ([]connectors.RuntimeVariable, error) {
+func (c Client) RuntimeVariables(ctx context.Context, scope runtimevars.Scope) ([]runtimevars.Variable, error) {
 	project := strings.TrimSpace(scope.Project)
 	if project == "" {
 		project = c.project
@@ -106,13 +53,13 @@ func (c Connector) RuntimeVariables(ctx context.Context, scope connectors.Runtim
 		return nil, err
 	}
 
-	var variables []connectors.RuntimeVariable
+	var variables []runtimevars.Variable
 	for key, raw := range values {
 		value, ok := scalarString(raw)
-		if !ok || isMetadataKey(key) || !connectors.ValidRuntimeVariableKey(key) {
+		if !ok || isMetadataKey(key) || !runtimevars.ValidKey(key) {
 			continue
 		}
-		variables = append(variables, connectors.RuntimeVariable{
+		variables = append(variables, runtimevars.Variable{
 			Key:      key,
 			Value:    value,
 			IsPublic: hasPublicPrefix(key),
@@ -124,7 +71,7 @@ func (c Connector) RuntimeVariables(ctx context.Context, scope connectors.Runtim
 	return variables, nil
 }
 
-func (c Connector) ListProjects(ctx context.Context) ([]string, error) {
+func (c Client) ListProjects(ctx context.Context) ([]string, error) {
 	output, err := c.commandRunner()(ctx, c.token, []string{c.commandPath(), "projects", "--json", "--no-check-version"})
 	if err != nil {
 		return nil, fmt.Errorf("list Doppler projects: %w", err)
@@ -144,10 +91,10 @@ func (c Connector) ListProjects(ctx context.Context) ([]string, error) {
 	return projects, nil
 }
 
-func (c Connector) ListConfigs(ctx context.Context, project string) ([]string, error) {
+func (c Client) ListConfigs(ctx context.Context, project string) ([]string, error) {
 	project = strings.TrimSpace(project)
 	if project == "" {
-		return nil, fmt.Errorf("Doppler project is required")
+		return nil, fmt.Errorf("doppler project is required")
 	}
 	output, err := c.commandRunner()(ctx, c.token, []string{c.commandPath(), "configs", "--json", "--no-check-version", "--project", project})
 	if err != nil {
@@ -168,14 +115,14 @@ func (c Connector) ListConfigs(ctx context.Context, project string) ([]string, e
 	return configs, nil
 }
 
-func (c Connector) commandRunner() commandRunner {
+func (c Client) commandRunner() commandRunner {
 	if c.run == nil {
 		return runDopplerCLI
 	}
 	return c.run
 }
 
-func (c Connector) Check() error {
+func (c Client) Check() error {
 	_, err := exec.LookPath(c.commandPath())
 	if err != nil {
 		return fmt.Errorf("find doppler CLI %q: %w", c.commandPath(), err)
@@ -186,29 +133,12 @@ func (c Connector) Check() error {
 	return nil
 }
 
-func (c Connector) commandPath() string {
+func (c Client) commandPath() string {
 	command := strings.TrimSpace(c.command)
 	if command == "" {
 		return "doppler"
 	}
 	return command
-}
-
-func (c Connector) syncConfig(scope connectors.SyncScope) (syncConfig, error) {
-	var config syncConfig
-	if len(strings.TrimSpace(string(scope.Config))) > 0 {
-		if err := json.Unmarshal(scope.Config, &config); err != nil {
-			return syncConfig{}, fmt.Errorf("parse doppler connector config: %w", err)
-		}
-	}
-
-	config.Project = stringutil.FirstNonBlank(config.Project, c.project)
-	config.Config = stringutil.FirstNonBlank(config.Config, c.config)
-	if config.Project == "" || config.Config == "" {
-		return syncConfig{}, fmt.Errorf("doppler connector config requires project and config")
-	}
-	config.Applications = stringutil.UniqueTrimmed(config.Applications)
-	return config, nil
 }
 
 func runDopplerCLI(ctx context.Context, token string, args []string) ([]byte, error) {

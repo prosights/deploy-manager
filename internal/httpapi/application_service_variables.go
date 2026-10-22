@@ -7,7 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/compose"
+	"paddock/internal/db"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -117,16 +118,22 @@ func normalizeApplicationServiceRuntimeConfig(request applicationServiceRuntimeC
 }
 
 func (s Server) storeApplicationServiceRuntimeConfig(ctx context.Context, applicationID pgtype.UUID, composeService string, request applicationServiceRuntimeConfigRequest) (applicationServiceRuntimeConfigResponse, bool, error) {
-	if s.tx == nil {
-		return applicationServiceRuntimeConfigResponse{}, false, errors.New("database transactions are not configured")
-	}
-	tx, err := s.tx.Begin(ctx)
+	var (
+		response applicationServiceRuntimeConfigResponse
+		changed  bool
+	)
+	err := s.withTx(ctx, func(queries *db.Queries) error {
+		var err error
+		response, changed, err = storeApplicationServiceRuntimeConfigTx(ctx, queries, applicationID, composeService, request)
+		return err
+	})
 	if err != nil {
 		return applicationServiceRuntimeConfigResponse{}, false, err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	return response, changed, nil
+}
 
-	queries := s.queries.WithTx(tx)
+func storeApplicationServiceRuntimeConfigTx(ctx context.Context, queries *db.Queries, applicationID pgtype.UUID, composeService string, request applicationServiceRuntimeConfigRequest) (applicationServiceRuntimeConfigResponse, bool, error) {
 	application, err := queries.GetApplicationForUpdate(ctx, applicationID)
 	if err != nil {
 		return applicationServiceRuntimeConfigResponse{}, false, applicationLookupError(err, "service not found")
@@ -140,18 +147,12 @@ func (s Server) storeApplicationServiceRuntimeConfig(ctx context.Context, applic
 		return applicationServiceRuntimeConfigResponse{}, false, err
 	}
 	if err == nil && serviceRuntimeConfigMatches(existing, request) {
-		if err := tx.Commit(ctx); err != nil {
-			return applicationServiceRuntimeConfigResponse{}, false, err
-		}
 		response, err := serviceRuntimeConfigResponse(existing, application.ConfigurationRevision, false)
 		return response, false, err
 	}
 
 	empty := request.DopplerProject == "" && len(request.Variables) == 0
 	if errors.Is(err, pgx.ErrNoRows) && empty {
-		if err := tx.Commit(ctx); err != nil {
-			return applicationServiceRuntimeConfigResponse{}, false, err
-		}
 		return applicationServiceRuntimeConfigResponse{ComposeService: composeService, Variables: []projectRuntimeVariableInput{}, ConfigurationRevision: application.ConfigurationRevision}, false, nil
 	}
 
@@ -180,9 +181,6 @@ func (s Server) storeApplicationServiceRuntimeConfig(ctx context.Context, applic
 		return applicationServiceRuntimeConfigResponse{}, false, err
 	}
 	application.ConfigurationRevision++
-	if err := tx.Commit(ctx); err != nil {
-		return applicationServiceRuntimeConfigResponse{}, false, err
-	}
 	if empty {
 		return applicationServiceRuntimeConfigResponse{ComposeService: composeService, Variables: []projectRuntimeVariableInput{}, ConfigurationRevision: application.ConfigurationRevision}, true, nil
 	}
@@ -229,7 +227,7 @@ func applicationHasComposeService(application db.Application, composeService str
 	if composeService == "" {
 		return false
 	}
-	var services []githubComposeService
+	var services []compose.Service
 	if json.Unmarshal(application.ComposeServices, &services) != nil {
 		return false
 	}

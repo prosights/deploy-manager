@@ -26,7 +26,7 @@ type SignerSource interface {
 }
 
 // FileSigner reads a static private key from the filesystem path recorded for
-// the server. This reproduces the original behavior: Deploy Manager stores only
+// the server. This reproduces the original behavior: Paddock stores only
 // the path (a reference), never the key bytes, and the key file is expected to
 // be provisioned out-of-band (e.g. mounted by a secret system).
 type FileSigner struct{}

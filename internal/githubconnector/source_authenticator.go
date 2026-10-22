@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -17,7 +17,7 @@ type connectorAccountSource interface {
 }
 
 // SourceAuthenticator resolves short-lived GitHub App credentials for source
-// repositories without storing the token in Deploy Manager or on the target.
+// repositories without storing the token in Paddock or on the target.
 type SourceAuthenticator struct {
 	accounts connectorAccountSource
 	app      *AppClient

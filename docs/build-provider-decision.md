@@ -1,12 +1,12 @@
 # Build Provider Decision
 
-Deploy Manager should treat Docker image builds as a provider boundary:
+Paddock should treat Docker image builds as a provider boundary:
 
 1. GitHub push arrives.
-2. Deploy Manager dispatches a build provider.
+2. Paddock dispatches a build provider.
 3. The provider builds and pushes an image.
 4. The provider calls `POST /api/builds/{buildID}/complete`.
-5. Deploy Manager deploys the returned `image_ref` with blue/green.
+5. Paddock deploys the returned `image_ref` with blue/green.
 
 ## Default Path
 
@@ -17,7 +17,7 @@ Why:
 - Repositories already live in GitHub.
 - `workflow_dispatch` is already wired through the GitHub App.
 - Runners are ephemeral by default.
-- No long-lived build VM needs to be managed by Deploy Manager.
+- No long-lived build VM needs to be managed by Paddock.
 - The current workflow template supports larger runner labels through the `runner` input.
 
 Recommended initial runner:

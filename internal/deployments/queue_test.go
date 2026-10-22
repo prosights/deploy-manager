@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/sshutil"
+	"paddock/internal/db"
+	"paddock/internal/runtimevars"
+	"paddock/internal/sshutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -234,7 +234,7 @@ func TestAuthenticatedSourceSyncReadsCredentialFromProtectedInput(t *testing.T) 
 	runGit(t, "init", "--bare", origin)
 	runGit(t, "init", seed)
 	runGit(t, "-C", seed, "config", "user.email", "test@example.com")
-	runGit(t, "-C", seed, "config", "user.name", "Deploy Manager Test")
+	runGit(t, "-C", seed, "config", "user.name", "Paddock Test")
 	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +799,7 @@ func TestRemoteStepsWriteRuntimeEnvironment(t *testing.T) {
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, []connectors.RuntimeVariable{
+	}, []runtimevars.Variable{
 		{Key: "DATABASE_URL", Value: "postgres://user:pass@db/app"},
 		{Key: "IGNORED-KEY", Value: "bad"},
 	})
@@ -823,7 +823,7 @@ func TestRemoteStepsWriteRuntimeEnvironmentBesideNestedComposeFile(t *testing.T)
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "evals/docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, []connectors.RuntimeVariable{{Key: "API_URL", Value: "https://api.example.com"}})
+	}, []runtimevars.Variable{{Key: "API_URL", Value: "https://api.example.com"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -856,7 +856,7 @@ func TestRemoteStepsWriteAnIsolatedEnvironmentForEachConfiguredComposeService(t 
 	steps, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "alleyes-v2/compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, nil, remoteStepOptions{serviceVariables: map[string][]connectors.RuntimeVariable{
+	}, nil, remoteStepOptions{serviceVariables: map[string][]runtimevars.Variable{
 		"frontend": {
 			{Key: "PUBLIC_API_URL", Value: "https://api.example.com"},
 		},
@@ -963,7 +963,7 @@ func TestRemoteStepsRejectRuntimeVariableNullBytes(t *testing.T) {
 	_, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, []connectors.RuntimeVariable{
+	}, []runtimevars.Variable{
 		{Key: "DATABASE_URL", Value: "postgres://db\x00/app"},
 	})
 	if err == nil {
@@ -978,7 +978,7 @@ func TestRemoteStepsRejectOversizedRuntimeVariableValues(t *testing.T) {
 	_, err := remoteSteps(db.GetDeploymentTargetRow{
 		ComposePath:     "docker-compose.yml",
 		RemoteDirectory: "/srv/app",
-	}, []connectors.RuntimeVariable{
+	}, []runtimevars.Variable{
 		{Key: "DATABASE_URL", Value: strings.Repeat("x", maxRuntimeVariableValueLength+1)},
 	})
 	if err == nil {
@@ -990,9 +990,9 @@ func TestRemoteStepsRejectOversizedRuntimeVariableValues(t *testing.T) {
 }
 
 func TestRenderRuntimeEnvFileRejectsOversizedEnvFiles(t *testing.T) {
-	variables := make([]connectors.RuntimeVariable, 0, 10)
+	variables := make([]runtimevars.Variable, 0, 10)
 	for index := 0; index < 10; index++ {
-		variables = append(variables, connectors.RuntimeVariable{
+		variables = append(variables, runtimevars.Variable{
 			Key:   fmt.Sprintf("VALUE_%d", index),
 			Value: strings.Repeat("x", maxRuntimeVariableValueLength),
 		})
@@ -1017,7 +1017,7 @@ func TestRuntimeScopeUsesApplicationDopplerScope(t *testing.T) {
 }
 
 func TestRenderEnvFileQuotesValues(t *testing.T) {
-	got := renderEnvFile([]connectors.RuntimeVariable{{Key: "SECRET", Value: "hello \"world\"\nnext"}})
+	got := renderEnvFile([]runtimevars.Variable{{Key: "SECRET", Value: "hello \"world\"\nnext"}})
 	want := "SECRET=\"hello \\\"world\\\"\\nnext\"\n"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
@@ -1025,7 +1025,7 @@ func TestRenderEnvFileQuotesValues(t *testing.T) {
 }
 
 func TestRenderEnvFileSortsValidKeys(t *testing.T) {
-	got := renderEnvFile([]connectors.RuntimeVariable{
+	got := renderEnvFile([]runtimevars.Variable{
 		{Key: "Z_LAST", Value: "z"},
 		{Key: "IGNORED-KEY", Value: "bad"},
 		{Key: "A_FIRST", Value: "a"},
@@ -1037,7 +1037,7 @@ func TestRenderEnvFileSortsValidKeys(t *testing.T) {
 }
 
 func TestValidRuntimeVariableCountMatchesRenderedEnvKeys(t *testing.T) {
-	variables := []connectors.RuntimeVariable{
+	variables := []runtimevars.Variable{
 		{Key: "DATABASE_URL", Value: "postgres://db"},
 		{Key: "BAD-KEY", Value: "ignored"},
 		{Key: "PUBLIC_URL", Value: "https://example.com"},

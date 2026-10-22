@@ -7,9 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/githubconnector"
-	"deploy-manager/internal/githubhook"
+	"paddock/internal/db"
+	"paddock/internal/githubconnector"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -49,7 +48,7 @@ func TestGitHubStatusReportsMissingRuntimeConfig(t *testing.T) {
 }
 
 func TestGitHubIgnoredPushMetadataIncludesDecisionEvidence(t *testing.T) {
-	metadata := githubIgnoredPushMetadata(githubhook.Push{
+	metadata := githubIgnoredPushMetadata(githubconnector.Push{
 		Branch:    "main",
 		CommitSHA: "0000000000000000000000000000000000000000",
 		Actor:     "ali",
@@ -110,7 +109,7 @@ func TestGitHubPushBuildRequestUsesRepositoryBuildMetadata(t *testing.T) {
 		Dockerfile:   "apps/web/Dockerfile",
 		ImageRef:     "us-docker.pkg.dev/prosights/recreate/web:main",
 		Runner:       "linux_32_core",
-	}, githubhook.Push{CommitSHA: "0123456789abcdef0123456789abcdef01234567"})
+	}, githubconnector.Push{CommitSHA: "0123456789abcdef0123456789abcdef01234567"})
 
 	if request.WorkflowID != "deploy-manager-build.yml" {
 		t.Fatalf("expected workflow id from repository metadata, got %+v", request)

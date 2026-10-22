@@ -5,25 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 )
-
-func TestParseDevUsersFileNormalizesAndSorts(t *testing.T) {
-	users, err := parseDevUsersFile(`
-# comment
-narasaka
-rootsec1 # inline comment
-narasaka
-pramitbhatia
-`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"narasaka", "pramitbhatia", "rootsec1"}
-	if !reflect.DeepEqual(users, want) {
-		t.Fatalf("users = %+v, want %+v", users, want)
-	}
-}
 
 func TestNormalizeDevUsernameRejectsInvalidLinuxNames(t *testing.T) {
 	for _, username := range []string{"", "Root", "bad name", "1first", "bad/slash", strings.Repeat("a", devUsersMaxUsernameLength+1)} {

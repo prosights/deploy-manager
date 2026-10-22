@@ -6,15 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/doppler"
+	"paddock/internal/doppler"
 )
 
 func TestDopplerReadyStatusReturnsEmptyMissingList(t *testing.T) {
-	runtime := doppler.NewWithCommand("", "", "token-123", "true")
-	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, map[string]connectors.Connector{
-		"doppler": runtime,
-	}, "", AuthConfig{Disabled: true})
+	runtime := doppler.New("", "", "token-123", "true")
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, runtime, "", AuthConfig{Disabled: true})
 	request := httptest.NewRequest(http.MethodGet, "/api/doppler/status", nil)
 	response := httptest.NewRecorder()
 
@@ -29,10 +26,8 @@ func TestDopplerReadyStatusReturnsEmptyMissingList(t *testing.T) {
 }
 
 func TestDopplerStatusRequiresToken(t *testing.T) {
-	runtime := doppler.NewWithCommand("", "", "", "true")
-	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, map[string]connectors.Connector{
-		"doppler": runtime,
-	}, "", AuthConfig{Disabled: true})
+	runtime := doppler.New("", "", "", "true")
+	handler := New(nil, nil, nil, nil, nil, GitHubWebhookConfig{}, runtime, "", AuthConfig{Disabled: true})
 	request := httptest.NewRequest(http.MethodGet, "/api/doppler/status", nil)
 	response := httptest.NewRecorder()
 

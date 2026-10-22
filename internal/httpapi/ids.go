@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/stringutil"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"

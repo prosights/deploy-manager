@@ -5,10 +5,11 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"unicode"
 
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/db"
+	"paddock/internal/auditlog"
+	"paddock/internal/db"
+	"paddock/internal/runtimevars"
+	"paddock/internal/stringutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -93,48 +94,41 @@ func (s Server) replaceProjectRuntimeVariables(w http.ResponseWriter, r *http.Re
 }
 
 func (s Server) storeProjectRuntimeVariables(ctx context.Context, projectID pgtype.UUID, variables []projectRuntimeVariableInput) (db.Project, bool, error) {
-	tx, err := s.tx.Begin(ctx)
-	if err != nil {
-		return db.Project{}, false, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	queries := s.queries.WithTx(tx)
-	project, err := queries.GetProjectForUpdate(ctx, projectID)
-	if err != nil {
-		return db.Project{}, false, applicationLookupError(err, "project not found")
-	}
-	existing, err := queries.ListProjectRuntimeVariables(ctx, projectID)
-	if err != nil {
-		return db.Project{}, false, err
-	}
-	if projectRuntimeVariablesEqual(existing, variables) {
-		if err := tx.Commit(ctx); err != nil {
-			return db.Project{}, false, err
+	var project db.Project
+	changed := false
+	err := s.withTx(ctx, func(queries *db.Queries) error {
+		var err error
+		project, err = queries.GetProjectForUpdate(ctx, projectID)
+		if err != nil {
+			return applicationLookupError(err, "project not found")
 		}
-		return project, false, nil
-	}
-
-	if err := queries.DeleteProjectRuntimeVariables(ctx, projectID); err != nil {
-		return db.Project{}, false, err
-	}
-	for _, variable := range variables {
-		if _, err := queries.UpsertProjectRuntimeVariable(ctx, db.UpsertProjectRuntimeVariableParams{
-			ProjectID: projectID,
-			Key:       variable.Key,
-			Value:     variable.Value,
-		}); err != nil {
-			return db.Project{}, false, err
+		existing, err := queries.ListProjectRuntimeVariables(ctx, projectID)
+		if err != nil {
+			return err
 		}
-	}
-	project.ConfigurationRevision, err = queries.IncrementProjectConfigurationRevision(ctx, projectID)
+		if projectRuntimeVariablesEqual(existing, variables) {
+			return nil
+		}
+		if err := queries.DeleteProjectRuntimeVariables(ctx, projectID); err != nil {
+			return err
+		}
+		for _, variable := range variables {
+			if _, err := queries.UpsertProjectRuntimeVariable(ctx, db.UpsertProjectRuntimeVariableParams{
+				ProjectID: projectID,
+				Key:       variable.Key,
+				Value:     variable.Value,
+			}); err != nil {
+				return err
+			}
+		}
+		project.ConfigurationRevision, err = queries.IncrementProjectConfigurationRevision(ctx, projectID)
+		changed = err == nil
+		return err
+	})
 	if err != nil {
 		return db.Project{}, false, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.Project{}, false, err
-	}
-	return project, true, nil
+	return project, changed, nil
 }
 
 func normalizeProjectRuntimeVariables(variables []projectRuntimeVariableInput) ([]projectRuntimeVariableInput, error) {
@@ -149,13 +143,13 @@ func normalizeProjectRuntimeVariables(variables []projectRuntimeVariableInput) (
 		if variable.Key == "" {
 			return nil, validationError("project runtime variable key is required")
 		}
-		if len(variable.Key) > maxProjectRuntimeVariableKey || !connectors.ValidRuntimeVariableKey(variable.Key) {
+		if len(variable.Key) > maxProjectRuntimeVariableKey || !runtimevars.ValidKey(variable.Key) {
 			return nil, validationError("project runtime variable keys must start with a letter or underscore and contain only letters, numbers, and underscores")
 		}
 		if _, duplicate := seen[variable.Key]; duplicate {
 			return nil, validationError("project runtime variable keys must be unique")
 		}
-		if isSecretConfigKey(variable.Key) {
+		if auditlog.IsSecretKey(variable.Key) {
 			return nil, validationError("project runtime variables cannot contain secret-like keys; store secrets in Doppler")
 		}
 		if reservedProjectRuntimeVariable(variable.Key) {
@@ -164,7 +158,7 @@ func normalizeProjectRuntimeVariables(variables []projectRuntimeVariableInput) (
 		if len(variable.Value) > maxProjectRuntimeVariableValue {
 			return nil, validationError("project runtime variable values cannot exceed 8192 bytes")
 		}
-		if containsControlCharacter(variable.Value) {
+		if stringutil.HasControlCharacter(variable.Value) {
 			return nil, validationError("project runtime variable values cannot contain control characters")
 		}
 		if looksLikeSecretMaterial(variable.Value) {
@@ -206,15 +200,6 @@ func reservedProjectRuntimeVariable(key string) bool {
 		key == "BLUE_DEPLOY_PORT" ||
 		key == "GREEN_DEPLOY_PORT" ||
 		strings.HasSuffix(key, "_IMAGE_TAG")
-}
-
-func containsControlCharacter(value string) bool {
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return true
-		}
-	}
-	return false
 }
 
 func renderedRuntimeVariableSize(variable projectRuntimeVariableInput) int {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )

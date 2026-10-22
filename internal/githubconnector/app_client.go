@@ -355,10 +355,6 @@ func (c *AppClient) jwt(now time.Time) (string, error) {
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-func (c *AppClient) postJSON(ctx context.Context, path string, bearer string, out any) error {
-	return c.postJSONBody(ctx, path, bearer, nil, out)
-}
-
 func (c *AppClient) postJSONBody(ctx context.Context, path string, bearer string, body any, out any) error {
 	var reader io.Reader
 	if body != nil {

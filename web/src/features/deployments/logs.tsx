@@ -1,26 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, ChevronDown, Clipboard, Search } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
-import { Panel } from '../../components/ui/panel'
+import { AlertTriangle, Clipboard, Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { cn } from '../../lib/cn'
-import type { DeploymentLog } from '../../lib/api'
+import type { Deployment, DeploymentLog } from '../../lib/api'
 import { deploymentLogsQuery } from '../../lib/queries'
-
-type DeploymentSummary = {
-  id: string
-  application_name?: string
-  server_name?: string
-  status?: string
-  trigger?: string
-  strategy?: string
-  actor?: string | null
-  commit_sha?: string | null
-  image_ref?: string | null
-  image_digest?: string | null
-  created_at?: string
-  started_at?: string | null
-  finished_at?: string | null
-}
 
 export function useDeploymentLogs(deploymentID: string | undefined) {
   const [stream, setStream] = useState<{ deploymentID: string; logs: DeploymentLog[] }>({ deploymentID: '', logs: [] })
@@ -61,48 +44,26 @@ export function useDeploymentLogs(deploymentID: string | undefined) {
     }
   }, [deploymentID])
 
-  const logs = useMemo(() => {
-    const streamedLogs = stream.deploymentID === deploymentID ? stream.logs : []
-    return mergeLogs(history.data ?? [], streamedLogs)
-  }, [deploymentID, history.data, stream])
-  return { logs, live: liveDeploymentID === deploymentID }
+  const streamedLogs = stream.deploymentID === deploymentID ? stream.logs : []
+  return { logs: mergeLogs(history.data ?? [], streamedLogs), live: liveDeploymentID === deploymentID }
 }
 
 const maxLogLines = 500
-
-export function DeploymentLogsPanel({
-  deployment,
-  logs,
-  live = false,
-}: {
-  deployment: DeploymentSummary | undefined
-  logs: DeploymentLog[]
-  live?: boolean
-}) {
-  return (
-    <Panel title="Deployment logs">
-      {!deployment && <div className="p-4 text-sm text-muted">Select a deployment to inspect logs.</div>}
-      {deployment && <DeploymentLogStream deployment={deployment} logs={logs} live={live} />}
-    </Panel>
-  )
-}
 
 export function DeploymentLogStream({
   deployment,
   logs,
   live = false,
   className = '',
-  showDetails = true,
 }: {
-  deployment: DeploymentSummary
+  deployment: Deployment
   logs: DeploymentLog[]
   live?: boolean
   className?: string
-  showDetails?: boolean
 }) {
   const [query, setQuery] = useState('')
-  const displayLogs = useMemo(() => expandLogLines(logs), [logs])
-  const filteredLogs = useMemo(() => filterLogs(displayLogs, query), [displayLogs, query])
+  const displayLogs = expandLogLines(logs)
+  const filteredLogs = filterLogs(displayLogs, query)
   const warningCount = displayLogs.filter(isWarningLog).length
   const logText = displayLogs.map((entry) => `${formatLogTime(entry.created_at)} ${entry.message}`).join('\n')
 
@@ -151,22 +112,6 @@ export function DeploymentLogStream({
           <LogLine key={`${entry.id ?? 'live'}-${index}`} entry={entry} />
         ))}
       </div>
-      {showDetails && (
-        <details className="group shrink-0 border-t border-prosights-border bg-prosights-surface text-prosights-muted">
-          <summary className="flex h-10 cursor-pointer list-none items-center gap-2 px-4 text-xs font-medium hover:text-prosights-text">
-            <ChevronDown className="size-3.5 -rotate-90 transition-transform group-open:rotate-0" />
-            Deployment details
-          </summary>
-          <div className="grid gap-3 border-t border-prosights-border px-4 py-3 text-xs md:grid-cols-3">
-            <SummaryItem label="Target" value={`${deployment.application_name ?? 'deployment'} / ${deployment.server_name ?? 'server'}`} />
-            <SummaryItem label="Strategy" value={deployment.strategy ?? 'n/a'} />
-            <SummaryItem label="Trigger" value={deployment.trigger ?? 'n/a'} />
-            <SummaryItem label="Actor" value={deployment.actor ?? 'system'} />
-            <SummaryItem label="Commit" value={deployment.commit_sha?.slice(0, 12) ?? 'not pinned'} />
-            <SummaryItem label="Image" value={deployment.image_digest?.slice(0, 19) ?? deployment.image_ref ?? 'not pinned'} />
-          </div>
-        </details>
-      )}
     </div>
   )
 }
@@ -185,15 +130,6 @@ function LogLine({ entry }: { entry: DeploymentLog }) {
     >
       <span className="select-none whitespace-nowrap text-[11px] text-prosights-subtle">{formatLogTime(entry.created_at)}</span>
       <span className="min-w-0 whitespace-pre-wrap break-words text-[11.5px]">{entry.message}</span>
-    </div>
-  )
-}
-
-function SummaryItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-prosights-subtle">{label}</div>
-      <div className="mt-1 truncate font-mono text-prosights-text">{value}</div>
     </div>
   )
 }
@@ -271,7 +207,7 @@ function pad(value: number, length: number): string {
   return String(value).padStart(length, '0')
 }
 
-function deploymentDuration(deployment: DeploymentSummary): string {
+function deploymentDuration(deployment: Deployment): string {
   const start = deployment.started_at ?? deployment.created_at
   if (!start) {
     return '0s'

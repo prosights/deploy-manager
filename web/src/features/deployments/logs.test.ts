@@ -1,8 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { createElement } from 'react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import type { DeploymentLog } from '../../lib/api'
-import { DeploymentLogStream, expandLogLines } from './logs'
+import { renderApp } from '../../test/render'
+import { deployment, projectPageHandlers } from '../../test/fixtures'
+import { expandLogLines } from './logs'
 
 describe('expandLogLines', () => {
   it('renders command output as individual terminal lines', () => {
@@ -37,18 +38,23 @@ describe('expandLogLines', () => {
 })
 
 describe('DeploymentLogStream', () => {
-  it('renders a searchable time and data log table', () => {
-    const logs: DeploymentLog[] = [
-      { id: 1, deployment_id: 'deployment_1', stream: 'stdout', message: 'Container started', created_at: '2026-07-16T12:00:00Z' },
-      { id: 2, deployment_id: 'deployment_1', stream: 'stderr', message: 'Health check failed', created_at: '2026-07-16T12:00:01Z' },
-    ]
-    render(createElement(DeploymentLogStream, { deployment: { id: 'deployment_1' }, logs }))
+  it('shows a deployment\'s stored logs with times and filters them', async () => {
+    renderApp('/deployments?service=app_1&deployment=deployment_1&view=deploy-logs', {
+      ...projectPageHandlers({ deployments: [deployment()] }),
+      'GET /api/applications/app_1/deployment-slots': [],
+      'GET /api/deployments/deployment_1/logs': [
+        { id: 1, deployment_id: 'deployment_1', stream: 'stdout', message: 'Container started', created_at: '2026-07-16T12:00:00Z' },
+        { id: 2, deployment_id: 'deployment_1', stream: 'stderr', message: 'Health check failed', created_at: '2026-07-16T12:00:01Z' },
+      ],
+    })
 
-    expect(screen.getByText('Time')).toBeInTheDocument()
-    expect(screen.getByText('Data')).toBeInTheDocument()
-    expect(screen.getAllByText(/\d{2}:\d{2}:\d{2}\.\d{3}/)).toHaveLength(2)
-    fireEvent.change(screen.getByRole('textbox', { name: 'Filter logs' }), { target: { value: 'health' } })
-    expect(screen.queryByText('Container started')).not.toBeInTheDocument()
-    expect(screen.getByText('Health check failed')).toBeInTheDocument()
+    const drawer = await screen.findByRole('dialog', {}, { timeout: 3000 })
+    expect(await within(drawer).findByText('Container started')).toBeInTheDocument()
+    expect(within(drawer).getByText('Time')).toBeInTheDocument()
+    expect(within(drawer).getAllByText(/\d{2}:\d{2}:\d{2}\.\d{3}/)).toHaveLength(2)
+
+    fireEvent.change(within(drawer).getByRole('textbox', { name: 'Filter logs' }), { target: { value: 'health' } })
+    expect(within(drawer).queryByText('Container started')).not.toBeInTheDocument()
+    expect(within(drawer).getByText('Health check failed')).toBeInTheDocument()
   })
 })

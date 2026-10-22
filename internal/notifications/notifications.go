@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/stringutil"
 )
 
 const (

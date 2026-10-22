@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/deployments"
+	"paddock/internal/db"
+	"paddock/internal/deployments"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

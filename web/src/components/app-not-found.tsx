@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { ArrowLeft, MapPinned } from 'lucide-react'
 import { Panel } from './ui/panel'
 
@@ -11,19 +12,19 @@ export function AppNotFound() {
               <MapPinned className="size-5" />
             </div>
             <div className="min-w-0 space-y-1">
-              <h1 className="text-base font-semibold text-ink">Route not found</h1>
-              <p className="text-sm text-muted">
+              <h1 className="text-base font-semibold text-prosights-text">Route not found</h1>
+              <p className="text-sm text-prosights-muted">
                 This page is not part of the deployment manager.
               </p>
             </div>
           </div>
-          <a
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border bg-panel px-3 text-sm font-medium text-ink transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-            href="/projects"
+          <Link
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border bg-prosights-surface-muted px-3 text-sm font-medium text-prosights-text transition-colors hover:bg-prosights-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            to="/projects"
           >
             <ArrowLeft className="size-4" />
             Projects
-          </a>
+          </Link>
         </div>
       </Panel>
     </div>

@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/db"
+	"paddock/internal/runtimevars"
+	"paddock/internal/stringutil"
 )
 
 type remoteStep struct {
@@ -26,7 +26,7 @@ type remoteStepOptions struct {
 	bluePort                  string
 	greenPort                 string
 	portVariables             []composePortVariable
-	serviceVariables          map[string][]connectors.RuntimeVariable
+	serviceVariables          map[string][]runtimevars.Variable
 	sourceAuthorizationHeader string
 	singletonServices         []string
 }
@@ -45,7 +45,7 @@ const (
 	maxComposeProjectSlugLength   = 48
 )
 
-func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.RuntimeVariable, options ...remoteStepOptions) ([]remoteStep, error) {
+func remoteSteps(target db.GetDeploymentTargetRow, variables []runtimevars.Variable, options ...remoteStepOptions) ([]remoteStep, error) {
 	if err := validateRemoteTarget(target); err != nil {
 		return nil, err
 	}
@@ -135,7 +135,7 @@ func remoteSteps(target db.GetDeploymentTargetRow, variables []connectors.Runtim
 	return steps, nil
 }
 
-func serviceRuntimeSteps(target db.GetDeploymentTargetRow, services map[string][]connectors.RuntimeVariable, ports []composePortVariable) ([]remoteStep, error) {
+func serviceRuntimeSteps(target db.GetDeploymentTargetRow, services map[string][]runtimevars.Variable, ports []composePortVariable) ([]remoteStep, error) {
 	managedPorts := make(map[string][]composePortVariable)
 	for _, port := range ports {
 		if port.serviceName != "" {
@@ -206,7 +206,7 @@ func runtimeComposePath(composePath string) string {
 	return path.Join(path.Dir(composePath), ".deploy-manager.runtime.yml")
 }
 
-func composeFileArguments(composePath string, services map[string][]connectors.RuntimeVariable, ports []composePortVariable) string {
+func composeFileArguments(composePath string, services map[string][]runtimevars.Variable, ports []composePortVariable) string {
 	arguments := "-f " + stringutil.ShellQuote(composePath)
 	if len(services) > 0 || hasManagedComposePorts(ports) {
 		arguments += " -f " + stringutil.ShellQuote(runtimeComposePath(composePath))
@@ -278,18 +278,18 @@ func resolveRemoteStepOptions(target db.GetDeploymentTargetRow, options []remote
 	return remoteStepOptions{imageRef: deploymentImageRef(target)}
 }
 
-func appendArtifactVariables(variables []connectors.RuntimeVariable, target db.GetDeploymentTargetRow, options remoteStepOptions) []connectors.RuntimeVariable {
-	next := make([]connectors.RuntimeVariable, 0, len(variables)+4)
+func appendArtifactVariables(variables []runtimevars.Variable, target db.GetDeploymentTargetRow, options remoteStepOptions) []runtimevars.Variable {
+	next := make([]runtimevars.Variable, 0, len(variables)+4)
 	next = append(next, variables...)
-	next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_IMAGE", Value: options.imageRef})
+	next = append(next, runtimevars.Variable{Key: "DEPLOY_IMAGE", Value: options.imageRef})
 	if tag := imageTag(options.imageRef); tag != "" {
-		next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_IMAGE_TAG", Value: tag})
+		next = append(next, runtimevars.Variable{Key: "DEPLOY_IMAGE_TAG", Value: tag})
 		if key := applicationImageTagKey(target.ApplicationName); key != "" {
-			next = append(next, connectors.RuntimeVariable{Key: key, Value: tag})
+			next = append(next, runtimevars.Variable{Key: key, Value: tag})
 		}
 	}
 	if options.targetColor != "" {
-		next = append(next, connectors.RuntimeVariable{Key: "DEPLOY_COLOR", Value: options.targetColor})
+		next = append(next, runtimevars.Variable{Key: "DEPLOY_COLOR", Value: options.targetColor})
 	}
 	return next
 }
@@ -524,7 +524,7 @@ func fixedColorComposeServiceCommand(target db.GetDeploymentTargetRow, options r
 func composePortVariableAssignments(variables []composePortVariable) string {
 	assignments := make([]string, 0, len(variables))
 	for _, variable := range variables {
-		if variable.name == "DEPLOY_PORT" || !connectors.ValidRuntimeVariableKey(variable.name) {
+		if variable.name == "DEPLOY_PORT" || !runtimevars.ValidKey(variable.name) {
 			continue
 		}
 		assignments = append(assignments, fmt.Sprintf(" %s=$(%s)", variable.name, fixedColorPortCommand(variable.bluePort, variable.greenPort)))
@@ -616,7 +616,7 @@ func BuildComposeDownCommand(application db.Application, routes []db.ListProxyRo
 func composePortVariableValues(variables []composePortVariable, color string) string {
 	assignments := make([]string, 0, len(variables))
 	for _, variable := range variables {
-		if variable.name == "DEPLOY_PORT" || !connectors.ValidRuntimeVariableKey(variable.name) {
+		if variable.name == "DEPLOY_PORT" || !runtimevars.ValidKey(variable.name) {
 			continue
 		}
 		port := variable.bluePort
@@ -645,7 +645,7 @@ func routePorts(routes []db.ListProxyRouteTargetsForApplicationRow) (blueGreenPo
 		}
 
 		name := strings.TrimSpace(route.PortVariable.String)
-		if route.PortVariable.Valid && !connectors.ValidRuntimeVariableKey(name) {
+		if route.PortVariable.Valid && !runtimevars.ValidKey(name) {
 			return blueGreenPorts{}, fmt.Errorf("proxy route port variable %q is invalid", name)
 		}
 		if ports.blue == "" || name == "DEPLOY_PORT" {
@@ -722,7 +722,7 @@ func hashProjectName(value string) uint32 {
 	return hash.Sum32()
 }
 
-func renderEnvFile(variables []connectors.RuntimeVariable) string {
+func renderEnvFile(variables []runtimevars.Variable) string {
 	var lines []string
 	for _, variable := range variables {
 		if !isValidRuntimeVariable(variable) {
@@ -737,7 +737,7 @@ func renderEnvFile(variables []connectors.RuntimeVariable) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-func renderRuntimeEnvFile(variables []connectors.RuntimeVariable) (string, error) {
+func renderRuntimeEnvFile(variables []runtimevars.Variable) (string, error) {
 	for _, variable := range variables {
 		if err := validateRuntimeVariable(variable); err != nil {
 			return "", err
@@ -750,8 +750,8 @@ func renderRuntimeEnvFile(variables []connectors.RuntimeVariable) (string, error
 	return envFile, nil
 }
 
-func validateRuntimeVariable(variable connectors.RuntimeVariable) error {
-	if !connectors.ValidRuntimeVariableKey(variable.Key) {
+func validateRuntimeVariable(variable runtimevars.Variable) error {
+	if !runtimevars.ValidKey(variable.Key) {
 		return nil
 	}
 	if strings.ContainsRune(variable.Value, '\x00') {
@@ -763,7 +763,7 @@ func validateRuntimeVariable(variable connectors.RuntimeVariable) error {
 	return nil
 }
 
-func validRuntimeVariableCount(variables []connectors.RuntimeVariable) int {
+func validRuntimeVariableCount(variables []runtimevars.Variable) int {
 	count := 0
 	for _, variable := range variables {
 		if isValidRuntimeVariable(variable) {
@@ -773,8 +773,8 @@ func validRuntimeVariableCount(variables []connectors.RuntimeVariable) int {
 	return count
 }
 
-func isValidRuntimeVariable(variable connectors.RuntimeVariable) bool {
-	return connectors.ValidRuntimeVariableKey(variable.Key)
+func isValidRuntimeVariable(variable runtimevars.Variable) bool {
+	return runtimevars.ValidKey(variable.Key)
 }
 
 func gitCommitCheckout(remoteDir string, commit string) (string, error) {

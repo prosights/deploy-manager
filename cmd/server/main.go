@@ -11,18 +11,15 @@ import (
 	"syscall"
 	"time"
 
-	"deploy-manager/internal/config"
-	"deploy-manager/internal/connectors"
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/deployments"
-	"deploy-manager/internal/doppler"
-	"deploy-manager/internal/githubconnector"
-	"deploy-manager/internal/httpapi"
-	"deploy-manager/internal/migrations"
-	"deploy-manager/internal/notificationconnector"
-	"deploy-manager/internal/notifications"
-	"deploy-manager/internal/objectstorage"
-	"deploy-manager/internal/proxy"
+	"paddock/internal/config"
+	"paddock/internal/db"
+	"paddock/internal/deployments"
+	"paddock/internal/doppler"
+	"paddock/internal/githubconnector"
+	"paddock/internal/httpapi"
+	"paddock/internal/migrations"
+	"paddock/internal/notifications"
+	"paddock/internal/proxy"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -90,26 +87,13 @@ func newApplication(ctx context.Context, cfg config.Config) (*application, error
 	queries := db.New(pool)
 	logBus := deployments.NewLogBus(redisClient)
 	notifier := newNotifier(cfg)
-	runtime := doppler.NewWithCommand(cfg.DopplerProject, cfg.DopplerConfig, cfg.DopplerToken, cfg.DopplerCLIPath)
-	// Contract: runtime secret values are sourced exclusively from Doppler.
-	// This guards against a future wiring change silently swapping in another
-	// provider. See AGENTS.md: Deploy Manager is not a secrets manager.
-	if err := requireDopplerRuntimeSource(runtime); err != nil {
-		pool.Close()
-		_ = redisClient.Close()
-		return nil, err
-	}
-	github := githubconnector.New()
+	runtime := doppler.New(cfg.DopplerProject, cfg.DopplerConfig, cfg.DopplerToken, cfg.DopplerCLIPath)
 	githubApp, err := newGitHubAppClient(cfg)
 	if err != nil {
 		pool.Close()
 		_ = redisClient.Close()
 		return nil, err
 	}
-	slack := notificationconnector.New("slack")
-	resend := notificationconnector.New("resend")
-	s3 := objectstorage.NewConnector("s3")
-	gcs := objectstorage.NewConnector("gcs")
 	var sourceAuthenticator deployments.SourceAuthenticator
 	if githubApp != nil {
 		sourceAuthenticator = githubconnector.NewSourceAuthenticator(queries, githubApp)
@@ -156,14 +140,7 @@ func newApplication(ctx context.Context, cfg config.Config) (*application, error
 		githubWebhook.App = githubApp
 	}
 
-	handler := httpapi.New(queries, pool, queue, logBus, proxyManager, githubWebhook, map[string]connectors.Connector{
-		github.Provider():  github,
-		runtime.Provider(): runtime,
-		slack.Provider():   slack,
-		resend.Provider():  resend,
-		s3.Provider():      s3,
-		gcs.Provider():     gcs,
-	}, cfg.StaticDir, httpapi.AuthConfig{Token: cfg.APIToken, Disabled: cfg.AuthDisabled}, readiness...)
+	handler := httpapi.New(queries, pool, queue, logBus, proxyManager, githubWebhook, runtime, cfg.StaticDir, httpapi.AuthConfig{Token: cfg.APIToken, Disabled: cfg.AuthDisabled}, readiness...)
 
 	if cfg.AuthDisabled {
 		slog.Warn("AUTH_DISABLED=true; protected API routes are unauthenticated")
@@ -222,20 +199,6 @@ func newNotifier(cfg config.Config) notifications.Notifier {
 			To:     cfg.ResendToEmail,
 		},
 	}
-}
-
-// requireDopplerRuntimeSource enforces the contract that runtime secret values
-// are sourced exclusively from Doppler. Deploy Manager stores references and
-// metadata, never secret values, and delegates secret material to Doppler.
-func requireDopplerRuntimeSource(runtime any) error {
-	provider, ok := runtime.(interface{ Provider() string })
-	if !ok {
-		return fmt.Errorf("runtime variable source must expose a Provider()")
-	}
-	if got := provider.Provider(); got != "doppler" {
-		return fmt.Errorf("runtime variable source must be doppler, got %q", got)
-	}
-	return nil
 }
 
 func serve(ctx context.Context, stop context.CancelFunc, server *http.Server, addr string) {

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/sshutil"
-	"deploy-manager/internal/stringutil"
+	"paddock/internal/db"
+	"paddock/internal/sshutil"
+	"paddock/internal/stringutil"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -275,28 +275,6 @@ func localHostDevUsersApplyCommand(server db.Server, users []string) string {
 	}, "\n")
 }
 
-func parseDevUsersFile(content string) ([]string, error) {
-	seen := map[string]bool{}
-	users := []string{}
-	for _, line := range strings.Split(content, "\n") {
-		value := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
-		if value == "" {
-			continue
-		}
-		username, err := normalizeDevUsername(value)
-		if err != nil {
-			return nil, err
-		}
-		if seen[username] {
-			continue
-		}
-		seen[username] = true
-		users = append(users, username)
-	}
-	sort.Strings(users)
-	return users, nil
-}
-
 func normalizeDevUsername(username string) (string, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
@@ -358,7 +336,7 @@ func renderDevUsersFile(users []string) string {
 	}
 	var builder strings.Builder
 	builder.WriteString("# One Linux username per line.\n")
-	builder.WriteString("# Deploy Manager provisions these users with sudo, docker, deployers,\n")
+	builder.WriteString("# Paddock provisions these users with sudo, docker, deployers,\n")
 	builder.WriteString("# and passwordless sudo access on this server.\n")
 	for _, user := range normalized {
 		builder.WriteString(user)

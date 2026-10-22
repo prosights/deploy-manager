@@ -24,16 +24,6 @@ func ShellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func FirstNonBlank(values ...string) string {
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func UniqueTrimmed(values []string) []string {
 	seen := map[string]struct{}{}
 	result := make([]string, 0, len(values))

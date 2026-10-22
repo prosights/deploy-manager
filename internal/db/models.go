@@ -5,6 +5,8 @@
 package db
 
 import (
+	"encoding/json"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -30,7 +32,7 @@ type Application struct {
 	ConfigurationRevision                int64              `json:"configuration_revision"`
 	DeployedConfigurationRevision        int64              `json:"deployed_configuration_revision"`
 	DeployedProjectConfigurationRevision int64              `json:"deployed_project_configuration_revision"`
-	ComposeServices                      []byte             `json:"compose_services"`
+	ComposeServices                      json.RawMessage    `json:"compose_services"`
 }
 
 type ApplicationDeploymentSlot struct {
@@ -52,7 +54,7 @@ type ApplicationServiceRuntimeConfig struct {
 	ComposeService string             `json:"compose_service"`
 	DopplerProject pgtype.Text        `json:"doppler_project"`
 	DopplerConfig  pgtype.Text        `json:"doppler_config"`
-	Variables      []byte             `json:"variables"`
+	Variables      json.RawMessage    `json:"variables"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
@@ -64,7 +66,7 @@ type AuditEvent struct {
 	TargetType string             `json:"target_type"`
 	TargetID   string             `json:"target_id"`
 	TargetName string             `json:"target_name"`
-	Metadata   []byte             `json:"metadata"`
+	Metadata   json.RawMessage    `json:"metadata"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -89,16 +91,13 @@ type BuildRun struct {
 }
 
 type ConnectorAccount struct {
-	ID              pgtype.UUID        `json:"id"`
-	Provider        string             `json:"provider"`
-	Name            string             `json:"name"`
-	Enabled         bool               `json:"enabled"`
-	Config          []byte             `json:"config"`
-	LastSyncStatus  pgtype.Text        `json:"last_sync_status"`
-	LastSyncMessage pgtype.Text        `json:"last_sync_message"`
-	LastSyncedAt    pgtype.Timestamptz `json:"last_synced_at"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	ID        pgtype.UUID        `json:"id"`
+	Provider  string             `json:"provider"`
+	Name      string             `json:"name"`
+	Enabled   bool               `json:"enabled"`
+	Config    json.RawMessage    `json:"config"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ContainerRegistry struct {
@@ -112,37 +111,6 @@ type ContainerRegistry struct {
 	Enabled      bool               `json:"enabled"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-}
-
-type Credential struct {
-	ID             pgtype.UUID        `json:"id"`
-	Name           string             `json:"name"`
-	Provider       string             `json:"provider"`
-	ExternalRef    string             `json:"external_ref"`
-	CredentialType string             `json:"credential_type"`
-	Status         string             `json:"status"`
-	LastSeenAt     pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-}
-
-type CredentialPermission struct {
-	ID           pgtype.UUID        `json:"id"`
-	CredentialID pgtype.UUID        `json:"credential_id"`
-	ResourceType string             `json:"resource_type"`
-	ResourceName string             `json:"resource_name"`
-	Permission   string             `json:"permission"`
-	Source       string             `json:"source"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-}
-
-type CredentialUsage struct {
-	ID           pgtype.UUID        `json:"id"`
-	CredentialID pgtype.UUID        `json:"credential_id"`
-	UsedByType   string             `json:"used_by_type"`
-	UsedByName   string             `json:"used_by_name"`
-	UsageContext string             `json:"usage_context"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type Deployment struct {
@@ -162,7 +130,7 @@ type Deployment struct {
 	SourceRepositoryUrl   pgtype.Text        `json:"source_repository_url"`
 	SourceBranch          pgtype.Text        `json:"source_branch"`
 	CommitMessage         pgtype.Text        `json:"commit_message"`
-	ConfigurationSnapshot []byte             `json:"configuration_snapshot"`
+	ConfigurationSnapshot json.RawMessage    `json:"configuration_snapshot"`
 }
 
 type DeploymentLog struct {
@@ -185,19 +153,6 @@ type Environment struct {
 	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-}
-
-type InstanceSetting struct {
-	ID              pgtype.UUID        `json:"id"`
-	Name            string             `json:"name"`
-	ShortName       string             `json:"short_name"`
-	MetaDescription string             `json:"meta_description"`
-	LogoUrl         string             `json:"logo_url"`
-	FaviconUrl      string             `json:"favicon_url"`
-	PrimaryColor    string             `json:"primary_color"`
-	DocsUrl         string             `json:"docs_url"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Project struct {

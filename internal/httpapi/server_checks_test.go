@@ -6,9 +6,8 @@ import (
 	"math"
 	"testing"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/dockerx"
-	"deploy-manager/internal/sshutil"
+	"paddock/internal/db"
+	"paddock/internal/sshutil"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -17,7 +16,7 @@ import (
 func TestNewServerCheckResponseSeparatesSSHAndDockerStatus(t *testing.T) {
 	response := newServerCheckResponse(
 		db.Server{Name: "prod"},
-		dockerx.EngineStatus{APIVersion: "1.45"},
+		dockerEngineStatus{APIVersion: "1.45"},
 		nil,
 		errors.New("docker unavailable"),
 	)
@@ -39,7 +38,7 @@ func TestNewServerCheckResponseSeparatesSSHAndDockerStatus(t *testing.T) {
 func TestNewServerCheckResponseIncludesDockerStatusOnSuccess(t *testing.T) {
 	response := newServerCheckResponse(
 		db.Server{Name: "prod"},
-		dockerx.EngineStatus{APIVersion: "1.45"},
+		dockerEngineStatus{APIVersion: "1.45"},
 		nil,
 		nil,
 	)
@@ -218,21 +217,21 @@ func (checker fakeSSHHealthChecker) Check(context.Context, db.Server) (sshutil.H
 }
 
 type fakeDockerEngineChecker struct {
-	result dockerx.EngineStatus
+	result dockerEngineStatus
 	err    error
 }
 
-func (checker fakeDockerEngineChecker) Check(context.Context, db.Server) (dockerx.EngineStatus, error) {
+func (checker fakeDockerEngineChecker) Check(context.Context, db.Server) (dockerEngineStatus, error) {
 	return checker.result, checker.err
 }
 
 type countingDockerEngineChecker struct {
-	result dockerx.EngineStatus
+	result dockerEngineStatus
 	err    error
 	calls  int
 }
 
-func (checker *countingDockerEngineChecker) Check(context.Context, db.Server) (dockerx.EngineStatus, error) {
+func (checker *countingDockerEngineChecker) Check(context.Context, db.Server) (dockerEngineStatus, error) {
 	checker.calls++
 	return checker.result, checker.err
 }

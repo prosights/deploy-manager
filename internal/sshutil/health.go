@@ -6,8 +6,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-
-	"golang.org/x/crypto/ssh"
 )
 
 type HealthResult struct {
@@ -15,11 +13,6 @@ type HealthResult struct {
 	CPUUsage    float64
 	MemoryUsage float64
 	DiskUsage   float64
-}
-
-func Check(ctx context.Context, host string, port int32, user string, signer ssh.Signer) (HealthResult, error) {
-	client := NewClient(host, port, user, signer)
-	return CheckWithClient(ctx, client)
 }
 
 func CheckWithClient(ctx context.Context, client Client) (HealthResult, error) {

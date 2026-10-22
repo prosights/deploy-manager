@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 )
 
 func TestNormalizeConnectorAccountAllowsMetadataOnlyConfig(t *testing.T) {
@@ -84,7 +84,7 @@ func TestNormalizeConnectorAccountAcceptsDopplerProjectAndConfig(t *testing.T) {
 
 func TestUpsertConnectorRequestAcceptsObjectConfig(t *testing.T) {
 	var request upsertConnectorRequest
-	if err := json.Unmarshal([]byte(`{"provider":"s3","name":"production","enabled":true,"config":{"region":"us-east-1"}}`), &request); err != nil {
+	if err := json.Unmarshal([]byte(`{"provider":"slack","name":"production","enabled":true,"config":{"region":"us-east-1"}}`), &request); err != nil {
 		t.Fatal(err)
 	}
 
@@ -122,7 +122,7 @@ func TestNormalizeConnectorAccountDefaultsBlankConfig(t *testing.T) {
 
 func TestNormalizeConnectorAccountPrunesBlankMetadata(t *testing.T) {
 	normalized, err := normalizeConnectorAccount(db.UpsertConnectorAccountParams{
-		Provider: "s3",
+		Provider: "slack",
 		Name:     "production",
 		Config:   []byte(`{"region":" us-east-1 ","empty":"","unused":null,"buckets":[{"bucket":" assets ","prefix":" "},null," "]}`),
 	})

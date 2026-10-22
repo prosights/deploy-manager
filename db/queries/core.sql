@@ -8,56 +8,10 @@ INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, connectio
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at;
 
--- name: CreateServerWithSSHInventory :one
-WITH created_server AS (
-    INSERT INTO servers (name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
-),
-ssh_credential AS (
-    INSERT INTO credentials (name, provider, external_ref, credential_type, status, last_seen_at)
-    SELECT created_server.name || ' SSH key', 'ssh', created_server.ssh_key_path, 'ssh_key', 'active', now()
-    FROM created_server
-    WHERE created_server.ssh_key_path IS NOT NULL
-    ON CONFLICT (provider, external_ref) DO UPDATE
-    SET name = excluded.name,
-        credential_type = excluded.credential_type,
-        status = excluded.status,
-        last_seen_at = now(),
-        updated_at = now()
-    RETURNING id
-),
-ssh_permission AS (
-    INSERT INTO credential_permissions (credential_id, resource_type, resource_name, permission, source)
-    SELECT ssh_credential.id, 'server', created_server.name, 'ssh:connect', 'server registration'
-    FROM ssh_credential
-    CROSS JOIN created_server
-    ON CONFLICT (credential_id, resource_type, resource_name, permission) DO UPDATE
-    SET source = excluded.source
-    RETURNING id
-),
-ssh_usage AS (
-    INSERT INTO credential_usages (credential_id, used_by_type, used_by_name, usage_context)
-    SELECT ssh_credential.id, 'server', created_server.name, 'remote access for deployments and health checks'
-    FROM ssh_credential
-    CROSS JOIN created_server
-    ON CONFLICT (credential_id, used_by_type, used_by_name, usage_context) DO UPDATE
-    SET usage_context = excluded.usage_context
-    RETURNING id
-)
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
-FROM created_server;
-
 -- name: GetServer :one
 SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
 FROM servers
 WHERE id = $1;
-
--- name: GetServerForUpdate :one
-SELECT id, name, hostname, ssh_user, ssh_port, ssh_key_path, connection_mode, proxy_type, status, cpu_usage, memory_usage, disk_usage, last_checked_at, created_at, updated_at
-FROM servers
-WHERE id = $1
-FOR UPDATE;
 
 -- name: UpdateServerHealth :one
 UPDATE servers
@@ -76,26 +30,6 @@ SELECT id, server_id, username, created_at, updated_at
 FROM server_dev_sudo_users
 WHERE server_id = $1
 ORDER BY username;
-
--- name: UpsertServerDevSudoUser :one
-INSERT INTO server_dev_sudo_users (server_id, username)
-VALUES ($1, $2)
-ON CONFLICT (server_id, username) DO UPDATE
-SET updated_at = now()
-RETURNING id, server_id, username, created_at, updated_at;
-
--- name: RenameServerDevSudoUser :one
-UPDATE server_dev_sudo_users
-SET username = $3,
-    updated_at = now()
-WHERE server_id = $1
-  AND username = $2
-RETURNING id, server_id, username, created_at, updated_at;
-
--- name: DeleteServerDevSudoUser :exec
-DELETE FROM server_dev_sudo_users
-WHERE server_id = $1
-  AND username = $2;
 
 -- name: ReplaceServerDevSudoUsers :exec
 WITH desired(username) AS (
@@ -214,12 +148,6 @@ SELECT e.id, e.project_id, e.name, e.slug, e.kind, e.is_ephemeral, e.pull_reques
 FROM environments e
 JOIN projects p ON p.id = e.project_id
 ORDER BY p.name, CASE e.kind WHEN 'production' THEN 1 WHEN 'development' THEN 2 ELSE 3 END, e.name;
-
--- name: ListEnvironmentsForProject :many
-SELECT id, project_id, name, slug, kind, is_ephemeral, pull_request_number, branch, expires_at, created_at, updated_at
-FROM environments
-WHERE project_id = $1
-ORDER BY CASE kind WHEN 'production' THEN 1 WHEN 'development' THEN 2 ELSE 3 END, name;
 
 -- name: GetEnvironment :one
 SELECT id, project_id, name, slug, kind, is_ephemeral, pull_request_number, branch, expires_at, created_at, updated_at
@@ -793,12 +721,6 @@ SET application_id = excluded.application_id,
     updated_at = now()
 RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url, compose_service, container_port, port_variable;
 
--- name: ListProxyRoutesForServer :many
-SELECT id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url, compose_service, container_port, port_variable
-FROM proxy_routes
-WHERE server_id = $1
-ORDER BY domain;
-
 -- name: GetProxyRouteTarget :one
 SELECT pr.id,
        pr.server_id,
@@ -870,14 +792,6 @@ FROM (
 WHERE route.id = desired.id
 RETURNING route.id, route.server_id, route.application_id, route.domain, route.upstream_url, route.tls_enabled, route.status, route.last_applied_at, route.created_at, route.updated_at, route.blue_upstream_url, route.green_upstream_url, route.compose_service, route.container_port, route.port_variable;
 
--- name: UpdateProxyRouteUpstream :one
-UPDATE proxy_routes
-SET upstream_url = $2,
-    status = 'pending',
-    updated_at = now()
-WHERE id = $1
-RETURNING id, server_id, application_id, domain, upstream_url, tls_enabled, status, last_applied_at, created_at, updated_at, blue_upstream_url, green_upstream_url, compose_service, container_port, port_variable;
-
 -- name: MarkProxyRouteFailed :one
 UPDATE proxy_routes
 SET status = 'failed', updated_at = now()
@@ -907,83 +821,13 @@ WHERE deployment_id = sqlc.arg(deployment_id) AND id > sqlc.arg(last_log_id)
 ORDER BY id
 LIMIT sqlc.arg(limit_count);
 
--- name: ListCredentials :many
-SELECT c.id, c.name, c.provider, c.external_ref, c.credential_type, c.status, c.last_seen_at, c.created_at, c.updated_at,
-       COALESCE(count(DISTINCT p.id), 0)::int AS permission_count,
-       COALESCE(count(DISTINCT u.id), 0)::int AS usage_count
-FROM credentials c
-LEFT JOIN credential_permissions p ON p.credential_id = c.id
-LEFT JOIN credential_usages u ON u.credential_id = c.id
-GROUP BY c.id
-ORDER BY c.provider, c.name;
-
--- name: GetCredential :one
-SELECT id, name, provider, external_ref, credential_type, status, last_seen_at, created_at, updated_at
-FROM credentials
-WHERE id = $1;
-
--- name: GetCredentialWithCounts :one
-SELECT c.id, c.name, c.provider, c.external_ref, c.credential_type, c.status, c.last_seen_at, c.created_at, c.updated_at,
-       COALESCE(count(DISTINCT p.id), 0)::int AS permission_count,
-       COALESCE(count(DISTINCT u.id), 0)::int AS usage_count
-FROM credentials c
-LEFT JOIN credential_permissions p ON p.credential_id = c.id
-LEFT JOIN credential_usages u ON u.credential_id = c.id
-WHERE c.id = $1
-GROUP BY c.id;
-
--- name: UpsertCredential :one
-INSERT INTO credentials (name, provider, external_ref, credential_type, status, last_seen_at)
-VALUES ($1, $2, $3, $4, $5, now())
-ON CONFLICT (provider, external_ref) DO UPDATE
-SET name = excluded.name,
-    credential_type = excluded.credential_type,
-    status = excluded.status,
-    last_seen_at = now(),
-    updated_at = now()
-RETURNING id, name, provider, external_ref, credential_type, status, last_seen_at, created_at, updated_at;
-
--- name: ListCredentialPermissions :many
-SELECT id, credential_id, resource_type, resource_name, permission, source, created_at
-FROM credential_permissions
-WHERE credential_id = $1
-ORDER BY resource_type, resource_name, permission;
-
--- name: UpsertCredentialPermission :one
-INSERT INTO credential_permissions (credential_id, resource_type, resource_name, permission, source)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (credential_id, resource_type, resource_name, permission) DO UPDATE
-SET source = excluded.source
-RETURNING id, credential_id, resource_type, resource_name, permission, source, created_at;
-
--- name: DeleteCredentialPermissions :exec
-DELETE FROM credential_permissions
-WHERE credential_id = $1;
-
--- name: ListCredentialUsages :many
-SELECT id, credential_id, used_by_type, used_by_name, usage_context, created_at
-FROM credential_usages
-WHERE credential_id = $1
-ORDER BY used_by_type, used_by_name;
-
--- name: UpsertCredentialUsage :one
-INSERT INTO credential_usages (credential_id, used_by_type, used_by_name, usage_context)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (credential_id, used_by_type, used_by_name, usage_context) DO UPDATE
-SET usage_context = excluded.usage_context
-RETURNING id, credential_id, used_by_type, used_by_name, usage_context, created_at;
-
--- name: DeleteCredentialUsages :exec
-DELETE FROM credential_usages
-WHERE credential_id = $1;
-
 -- name: ListConnectorAccounts :many
-SELECT id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at
+SELECT id, provider, name, enabled, config, created_at, updated_at
 FROM connector_accounts
 ORDER BY provider, name;
 
 -- name: GetConnectorAccount :one
-SELECT id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at
+SELECT id, provider, name, enabled, config, created_at, updated_at
 FROM connector_accounts
 WHERE id = $1;
 
@@ -993,30 +837,8 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (provider, name) DO UPDATE
 SET enabled = excluded.enabled,
     config = excluded.config,
-    last_sync_status = CASE
-        WHEN connector_accounts.enabled IS DISTINCT FROM excluded.enabled OR connector_accounts.config IS DISTINCT FROM excluded.config THEN NULL
-        ELSE connector_accounts.last_sync_status
-    END,
-    last_sync_message = CASE
-        WHEN connector_accounts.enabled IS DISTINCT FROM excluded.enabled OR connector_accounts.config IS DISTINCT FROM excluded.config THEN NULL
-        ELSE connector_accounts.last_sync_message
-    END,
-    last_synced_at = CASE
-        WHEN connector_accounts.enabled IS DISTINCT FROM excluded.enabled OR connector_accounts.config IS DISTINCT FROM excluded.config THEN NULL
-        ELSE connector_accounts.last_synced_at
-    END,
     updated_at = now()
-RETURNING id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at;
-
--- name: MarkConnectorSync :one
-INSERT INTO connector_accounts (provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at)
-VALUES ($1, $2, true, '{}', $3, $4, now())
-ON CONFLICT (provider, name) DO UPDATE
-SET last_sync_status = excluded.last_sync_status,
-    last_sync_message = excluded.last_sync_message,
-    last_synced_at = now(),
-    updated_at = now()
-RETURNING id, provider, name, enabled, config, last_sync_status, last_sync_message, last_synced_at, created_at, updated_at;
+RETURNING id, provider, name, enabled, config, created_at, updated_at;
 
 -- name: ListBuildRuns :many
 SELECT id, provider, connector_id, application_id, repository, branch, workflow_id, status, commit_sha, image_ref, image_digest, external_url, error_message, started_at, completed_at, created_at, updated_at

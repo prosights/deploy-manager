@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/sshutil"
+	"paddock/internal/db"
+	"paddock/internal/sshutil"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )

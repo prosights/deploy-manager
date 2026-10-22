@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"deploy-manager/internal/db"
-	"deploy-manager/internal/githubconnector"
+	"paddock/internal/db"
+	"paddock/internal/githubconnector"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )

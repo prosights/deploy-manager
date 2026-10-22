@@ -3,7 +3,7 @@ package httpapi
 import (
 	"testing"
 
-	"deploy-manager/internal/db"
+	"paddock/internal/db"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -169,13 +169,13 @@ func TestNormalizeCreateServerRejectsUnsafeSSHKeyPaths(t *testing.T) {
 	}
 }
 
-func TestServerCreateAuditMetadataShowsSSHInventoryTracking(t *testing.T) {
+func TestServerCreateAuditMetadataShowsSSHKeyConfigured(t *testing.T) {
 	metadata := serverCreateAuditMetadata("10.0.0.10", "tailscale_ssh", "caddy", pgtype.Text{String: "~/.ssh/id_ed25519", Valid: true})
 
 	if metadata["hostname"] != "10.0.0.10" || metadata["connection_mode"] != "tailscale_ssh" || metadata["proxy_type"] != "caddy" {
 		t.Fatalf("unexpected server metadata: %+v", metadata)
 	}
-	if metadata["ssh_inventory_tracked"] != true {
-		t.Fatalf("expected SSH inventory tracking marker, got %+v", metadata)
+	if metadata["ssh_key_configured"] != true {
+		t.Fatalf("expected SSH key configured marker, got %+v", metadata)
 	}
 }
